@@ -9,6 +9,8 @@ import dparse.lexer;
 import std.string;
 import std.algorithm;
 
+import std.conv;
+
 const(char)[] htmlEncode(const(char)[] s) {
 	return s.
 		replace("&", "&amp;").
@@ -624,8 +626,7 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 }
 
 struct DocCommentTerminationCondition {
-	string terminationString;
-	string altTerminationString;
+	string[] terminationStrings;
 	bool mustBeAtStartOfLine;
 	string remaining;
 	string terminatedOn;
@@ -663,25 +664,21 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 	bool atStartOfLine = true;
 	bool earlyTermination;
 
+	main_loop:
 	for(size_t idx = 0; idx < comment.length; idx++) {
 		auto ch = comment[idx];
 		auto remaining = comment[idx .. $];
 
 		if(termination !is null) {
 			if((termination.mustBeAtStartOfLine && atStartOfLine) || !termination.mustBeAtStartOfLine) {
-				if(remaining.startsWith(termination.terminationString)) {
-					termination.remaining = remaining[termination.terminationString.length .. $];
-					earlyTermination = true;
-					termination.terminatedOn = termination.terminationString;
-					break;
+				foreach(ts; termination.terminationStrings) {
+					if(remaining.startsWith(ts)) {
+						termination.remaining = remaining[ts.length .. $];
+						earlyTermination = true;
+						termination.terminatedOn = ts;
+						break main_loop;
+					}
 				}
-				if(termination.altTerminationString.length && remaining.startsWith(termination.altTerminationString)) {
-					termination.remaining = remaining[termination.altTerminationString.length .. $];
-					earlyTermination = true;
-					termination.terminatedOn = termination.altTerminationString;
-					break;
-				}
-
 			}
 		}
 
@@ -1084,6 +1081,7 @@ static this() {
 		"LIST": 1,
 		"NUMBERED_LIST": 1,
 		"SMALL_TABLE" : 1,
+		"TABLE_ROWS" : 1,
 
 		"TIP":1,
 		"NOTE":1,
@@ -1302,6 +1300,28 @@ string formatDocumentationComment(string comment, Decl decl) {
 // This is kinda deliberately not recursive right now. I might change that later but I want to keep it
 // simple to get decent results while keeping the door open to dropping ddoc macros.
 Element expandDdocMacros(string txt, Decl decl) {
+	auto e = expandDdocMacros2(txt, decl);
+
+	foreach(cmd; e.querySelectorAll("magic-command")) {
+		auto subject = cmd.parentNode;
+		if(subject is null)
+			continue;
+		if(subject.tagName == "caption")
+			subject = subject.parentNode;
+		if(subject is null)
+			continue;
+		if(cmd.className.length) {
+			subject.addClass(cmd.className);
+		}
+		if(cmd.id.length)
+			subject.id = cmd.id;
+		cmd.removeFromTree();
+	}
+
+	return e;
+}
+
+Element expandDdocMacros2(string txt, Decl decl) {
 	auto macros = ddocMacros;
 	auto numberOfArguments = ddocMacroInfo;
 
@@ -1332,8 +1352,16 @@ Element expandDdocMacros(string txt, Decl decl) {
 			return holder;
 		}
 
+		if(name == "ID")
+			return Element.make("magic-command").setAttribute("id", stuff);
+		if(name == "CLASS")
+			return Element.make("magic-command").setAttribute("class", stuff);
+
 		if(name == "SMALL_TABLE") {
 			return translateSmallTable(stuff, decl);
+		}
+		if(name == "TABLE_ROWS") {
+			return translateListTable(stuff, decl);
 		}
 		if(name == "LIST") {
 			return translateList(stuff, decl, "ul");
@@ -1411,12 +1439,12 @@ Element expandDdocMacros(string txt, Decl decl) {
 						if(ch == ')')
 							parens--;
 						if(parens == 0 && ch == ',') {
-							blargh = cidx;
+							blargh = cast(int) cidx;
 							break;
 						}
 					}
 					if(blargh == -1)
-						blargh = stuff.length;
+						blargh = cast(int) stuff.length;
 						//break; // insufficient args
 					//blargh = stuff.length - 1; // trims off the closing paren
 
@@ -1467,7 +1495,7 @@ Element expandDdocMacros(string txt, Decl decl) {
 
 			return element;
 		} else {
-			idx = idx + info.terminatingOffset;
+			idx = idx + cast(int) info.terminatingOffset;
 			auto textContent = txt[0 .. info.terminatingOffset];
 			return new TextNode(textContent);
 		}
@@ -2257,7 +2285,7 @@ Element translateSmallTable(string text, Decl decl) {
 
 		if(firstLine && row.length == 1 && row[0].length) {
 			firstLine = false;
-			holder.addChild("caption", row[0]); // FIXME: look for ID and CLASS macros
+			holder.addChild("caption", row[0]);
 			continue;
 		}
 
@@ -2303,12 +2331,46 @@ Element translateSmallTable(string text, Decl decl) {
 
 	return holder;
 }
+
+Element translateListTable(string text, Decl decl) {
+	auto holder = Element.make("table");
+	holder.addClass("user-table");
+
+	DocCommentTerminationCondition termination;
+	termination.terminationStrings = ["*", "-", "+"];
+	termination.mustBeAtStartOfLine = true;
+
+	string nextTag;
+
+	Element row;
+
+	do {
+		auto fmt = formatDocumentationComment2(text, decl, null, &termination);
+		if(fmt.toString.strip.length) {
+			if(row is null)
+				holder.addChild("caption", fmt);
+			else
+				row.addChild(nextTag, fmt);
+		}
+		text = termination.remaining;
+		if(termination.terminatedOn == "*")
+			row = holder.addChild("tr");
+		else if(termination.terminatedOn == "+")
+			nextTag = "th";
+		else if(termination.terminatedOn == "-")
+			nextTag = "td";
+		else {}
+	} while(text.length);
+
+	return holder;
+}
+
 Element translateList(string text, Decl decl, string tagName) {
 	auto holder = Element.make(tagName);
 	holder.addClass("user-list");
 
 	DocCommentTerminationCondition termination;
-	termination.terminationString = "*";
+	termination.terminationStrings = ["*"];
 	termination.mustBeAtStartOfLine = true;
 
 	auto opening = formatDocumentationComment2(text, decl, null, &termination);

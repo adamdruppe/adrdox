@@ -7,5 +7,5 @@ DSYMBOL_COMPONENTS=Dscanner/dsymbol/src/dsymbol/scope_.d Dscanner/dsymbol/src/ds
 
 all:
 	#dmd diff.d terminal.d $(LIBDPARSE)
-	dmd doc2.d comment.d stemmer.d dom.d -J. $(LIBDPARSE) -g # -debug=verbose
+	dmd -m64 doc2.d comment.d stemmer.d dom.d -J. $(LIBDPARSE) -g # -debug=verbose
 	#dmd -of/var/www/dpldocs.info/locate locate.d  dom stemmer.d  cgi -J. -version=fastcgi -m64 -debug

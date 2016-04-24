@@ -493,7 +493,13 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		MyOutputRange or = MyOutputRange(&sp);
 		child.getSimplifiedPrototype(or);
 
-		auto newDt = Element.make("dt", Element.make("a", child.name, child.link));
+		auto printableName = child.name;
+		if(child.isModule && child.parent && child.parent.isModule) {
+			if(printableName.startsWith(child.parent.name))
+				printableName = printableName[child.parent.name.length + 1 .. $];
+		}
+
+		auto newDt = Element.make("dt", Element.make("a", printableName, child.link));
 		auto st = newDt.addChild("div", Html(sp)).addClass("simplified-prototype");
 		st.style.maxWidth = to!string(st.innerText.length * 11 / 10) ~ "ch";
 
@@ -1358,12 +1364,12 @@ mixin template CtorFrom(T) {
 	override const(T) getAstNode() { return astNode; }
 	override int lineNumber() {
 		static if(__traits(compiles, astNode.name.line))
-			return astNode.name.line;
+			return cast(int) astNode.name.line;
 		else static if(__traits(compiles, astNode.line))
-			return astNode.line;
+			return cast(int) astNode.line;
 		else static if(__traits(compiles, astNode.declarators[0].name.line)) {
 			if(astNode.declarators.length)
-				return astNode.declarators[0].name.line;
+				return cast(int) astNode.declarators[0].name.line;
 		}
 		return 0;
 	}
