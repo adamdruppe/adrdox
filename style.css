@@ -135,7 +135,7 @@ a:link:hover {
 
 pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border: solid 1px #ccc; }
 .d_code .kwrd { color: #b58900; font-weight: bold;  }
-.d_code .com  { color: #93a1a1; font-style: italic; }
+.d_code .com  { color: #666; font-style: italic; }
 .d_code .num  { color: #dc322f; font-weight: normal;  }
 .d_code .str  { color: #2aa198; font-style: italic; }
 .d_code .op   { color: #586e75; font-weight: bold;  }
@@ -143,7 +143,7 @@ pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border
 .d_code .cons { color: #859900; font-weight: bold;  }
 
 .highlighted .kwrd { color: #b58900; font-weight: bold;  }
-.highlighted .com  { color: #93a1a1; font-style: italic; }
+.highlighted .com  { color: #666; font-style: italic; } /* #93a1a1; */
 .highlighted .num  { color: #dc322f; font-weight: normal;  }
 .highlighted .str  { color: #2aa198; font-style: italic; }
 .highlighted .op   { color: #586e75; font-weight: bold;  }
@@ -744,6 +744,12 @@ table.std_math.special-values caption {
 	border: ridge 2px #ccc;
 }
 
+.annotated-prototype .overloads li.active-overload-option .overload-signature {
+	white-space: nowrap;
+	border-bottom: dotted 1px #999;
+	display: block;
+}
+
 .annotated-prototype .overloads li.overload-option {
 	border: solid 1px #ccc;
 	background-color: #eee;
@@ -752,6 +758,7 @@ table.std_math.special-values caption {
 	text-overflow: ellipsis;
 }
 
+.annotated-prototype .overloads li.active-overload-option .overload-signature::before,
 .annotated-prototype .overloads li.overload-option::before {
 	content: "Overload: ";
 	display: inline;
@@ -950,4 +957,41 @@ blockquote {
 
 #source-navigation a {
 	display: inline;
+}
+
+.postcondition {
+	color: blue;
+	font-family: monospace;
+	font-size: small;
+}
+.postcondition::before {
+	content: "Post: ";
+	font-style: italic;
+	color: black;
+}
+
+.user-table {
+	border-top: solid 2px black;
+	border-collapse: collapse;
+}
+
+.user-table th {
+	border-bottom: solid 1px black;
+	text-align: left;
+}
+
+.user-table td {
+	border-bottom: solid 1px #ccc;
+	vertical-align: top;
+	padding: 4px;
+}
+
+.allocator-table td:first-child tt {
+	background-color: transparent;
+	white-space: nowrap;
+	font-weight: bold;
+}
+
+.header-anchor {
+	color: inherit;
 }
