@@ -212,7 +212,7 @@ struct DocComment {
 		}
 
 		if(examples.length || utInfo.length) {
-			output.putTag("<h2 id=\"examples\">Examples</h2>");
+			output.putTag("<h2 id=\"examples\"><a href=\"#examples\" class=\"header-anchor\">Examples</a></h2>");
 			output.putTag(formatDocumentationComment(examples, decl));
 
 			foreach(example; utInfo) {
@@ -316,7 +316,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 	DocComment c;
 
 	if(decl.lineNumber)
-		c.otherSections["source"] = "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", Annotated source)$(BR)";
+		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", Annotated source)$(BR)";
 
 	c.decl = decl;
 
@@ -571,6 +571,9 @@ bool isIdentifierOrUrl(string text) {
 
 	if(l != -1)
 		return true; // is url
+
+	if(text.length && text[0] == '#')
+		return true; // is local url link
 
 	import std.uni;
 	foreach(idx, dchar ch; text) {
@@ -1114,6 +1117,7 @@ static this() {
 		"DL" : 1,
 		"DT" : 1,
 		"DD" : 1,
+		"POST" : 1,
 
 		"DIVC" : 1,
 
@@ -1147,12 +1151,12 @@ static this() {
 		"CONSOLE" : "<pre class=\"console\">$0</pre>",
 
 		// headers have meaning to the table of contents generator
-		"H1" : "<h1>$0</h1>",
-		"H2" : "<h2>$0</h2>",
-		"H3" : "<h3>$0</h3>",
-		"H4" : "<h4>$0</h4>",
-		"H5" : "<h5>$0</h5>",
-		"H6" : "<h6>$0</h6>",
+		"H1" : "<h1 class=\"user-header\">$0</h1>",
+		"H2" : "<h2 class=\"user-header\">$0</h2>",
+		"H3" : "<h3 class=\"user-header\">$0</h3>",
+		"H4" : "<h4 class=\"user-header\">$0</h4>",
+		"H5" : "<h5 class=\"user-header\">$0</h5>",
+		"H6" : "<h6 class=\"user-header\">$0</h6>",
 
 		"HR" : "<hr />",
 
@@ -1214,6 +1218,10 @@ static this() {
 		"MREF" : `MAGIC`,
 		"WEB" : `<a href="http://$1">$2</a>`,
 		"XREF_PACK_NAMED" : `<a href="std.$1.$2.$3.html">$4</a>`,
+
+		"RES": `<i>result</i>`,
+		"POST": `<div class="postcondition">$0</div>`,
+		"COMMENT" : ``,
 
 		"DIVC" : `<div class="$1">$+</div>`,
 

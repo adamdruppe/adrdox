@@ -20,6 +20,8 @@ import dparse.ast;
 import arsd.dom;
 import arsd.docgen.comment;
 
+import std.algorithm :sort;
+
 import std.string;
 import std.conv : to;
 
@@ -311,20 +313,23 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 				output.putTag("<li class=\""~cn~"\">");
 
-				if(item is decl) {
-					writeFunctionPrototype();
-				} else {
-					const(char)[] linkHtml;
+				//if(item is decl)
+					//writeFunctionPrototype();
+				//} else {
+				{
 					if(item !is decl)
-						linkHtml ~= `<a href="`~item.link~`">`;
+						output.putTag(`<a href="`~item.link~`">`);
 
-					output.putTag(linkHtml);
 					output.putTag("<span class=\"overload-signature\">");
 					item.getSimplifiedPrototype(output);
 					output.putTag("</span>");
 					if(item !is decl)
 						output.putTag(`</a>`);
 				}
+
+				if(item is decl)
+					writeFunctionPrototype();
+
 				output.putTag("</li>");
 			}
 			output.putTag("</ol>");
@@ -550,7 +555,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 	if(submodules.length) {
 		content.addChild("h2", "Modules").id = "modules";
 		auto dl = content.addChild("dl").addClass("member-list native");
-		foreach(child; submodules.sort) {
+		foreach(child; submodules.sort!((a,b) => a.name < b.name)) {
 			handleChildDecl(dl, child);
 
 			writeHtml(child);
@@ -630,12 +635,27 @@ Document writeHtml(Decl decl, bool forReal = true) {
 					}
 				}
 			}
-		}/* else {
-		// this used to make the module listing but no longer does, the parent stuff handles it
-			if(auto md = cast(ModuleDecl) decl)
-			foreach(mod; packages[md.packageName])
-				navArray ~= mod;
-		}*/
+		} else {
+			// this is for building the module nav when doing an incremental
+			// rebuild. It loads the index.xml made with the special option below.
+			static bool attemptedXmlLoad;
+			static ModuleDecl[] indexedModules;
+			if(!attemptedXmlLoad) {
+				import std.file;
+				if(std.file.exists("index.xml")) {
+					auto idx = new XmlDocument(readText("index.xml"));
+					foreach(d; idx.querySelectorAll("listing > decl"))
+						indexedModules ~= new ModuleDecl(d.requireSelector("name").innerText);
+				}
+				attemptedXmlLoad = true;
+			}
+
+			auto tm = cast(ModuleDecl) decl;
+			if(tm !is null)
+			foreach(im; indexedModules)
+				if(im.packageName == tm.packageName)
+					navArray ~= im;
+		}
 
 		{
 			auto p = decl.parent;
@@ -677,6 +697,8 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		if(justDocs) {
 			if(auto d = document.querySelector("#details"))
 				d.removeFromTree;
+		} {
+			if(document.querySelectorAll(".user-header").length > 2)
 			if(auto d = document.querySelector("#more-link")) {
 				auto toc = Element.make("div");
 				toc.id = "table-of-contents";
@@ -711,6 +733,11 @@ Document writeHtml(Decl decl, bool forReal = true) {
 					} else if(level < lastLevel) {
 						while(current && !current.hasClass("heading-level-" ~ to!string(level)))
 							current = current.parentNode;
+						if(current is null) {
+							import std.stdio;
+							writeln("WARNING: TOC broken on " ~ decl.name);
+							goto skip_toc;
+						}
 						assert(current !is null);
 					}
 
@@ -721,11 +748,17 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 					if(!header.hasAttribute("id"))
 						header.attrs.id = toId(header.innerText);
+					if(header.querySelector(" > *") is null) {
+						auto selfLink = Element.make("a", header.innerText, "#" ~ header.attrs.id);
+						selfLink.addClass("header-anchor");
+						header.innerHTML = selfLink.toString();
+					}
 
 					addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
 				}
 				d.replaceWith(toc);
 			}
+			skip_toc: {}
 		}
 
 		if(auto a = document.querySelector(".parameters-list"))
@@ -820,8 +853,8 @@ abstract class Decl {
 		// we want them to show up. So I'm gonna hack it.
 
 		auto mod = this.parentModule.name;
-		if(mod.startsWith("core.sys") || mod.startsWith("core.stdc"))
-			return true;
+		//if(mod.startsWith("core.sys") || mod.startsWith("core.stdc"))
+		//	return true;
 		return false;
 	}
 
@@ -1128,8 +1161,11 @@ class AliasDecl : Decl {
 			if(link) {
 				auto t = toText(astNode.type);
 				auto decl = lookupName(t);
+				if(decl is null)
+					goto nulldecl;
 				output.putTag(getReferenceLink(t, decl).toString);
 			} else {
+			nulldecl:
 				output.putTag(toHtml(astNode.type).source);
 			}
 		}
@@ -1361,6 +1397,16 @@ mixin template CtorFrom(T) {
 		this.attributes = attributes;
 	}
 
+	static if(is(T == Module)) {
+		// this is so I can load this from the index... kinda a hack
+		// it should only be used in limited circumstances
+		private string _name;
+		private this(string name) {
+			this._name = name;
+			this.astNode = null;
+		}
+	}
+
 	override const(T) getAstNode() { return astNode; }
 	override int lineNumber() {
 		static if(__traits(compiles, astNode.name.line))
@@ -1378,7 +1424,7 @@ mixin template CtorFrom(T) {
 		static if(is(T == Constructor))
 			return "this";
 		else static if(is(T == Module))
-			return .format(astNode.moduleDeclaration.moduleName);
+			return _name is null ? .format(astNode.moduleDeclaration.moduleName) : _name;
 		else static if(is(T == AnonymousEnumDeclaration))
 			{ assert(0); } // overridden above
 		else static if(is(T == AliasDeclaration))
@@ -1878,6 +1924,19 @@ void generateSearchIndex(Decl decl, ref int id) {
 	if(decl.name != "this") {
 		// exact match on specific name is worth something too
 		searchTerms[decl.name] ~= SearchResult(tid, 25);
+
+		if(decl.isModule) {
+			// module names like std.stdio should match stdio strongly,
+			// and std is ok too. I will break them by dot and give diminsihing
+			// returns.
+			int score = 25;
+			foreach_reverse(part; decl.name.split(".")) {
+				searchTerms[part] ~= SearchResult(tid, score);
+				score -= 10;
+				if(score <= 0)
+					break;
+			}
+		}
 
 		// and so is fuzzy match
 		if(decl.name != decl.name.toLower)

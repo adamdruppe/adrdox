@@ -95,6 +95,8 @@ void searcher(Cgi cgi) {
 		while(i) {
 			if(n) n = "." ~ n;
 			n = i.requireSelector("> name").innerText ~ n;
+			if(i.attrs.type == "module")
+				break;
 			i = i.parentNode;
 			if(i.tagName != "decl")
 				break;
