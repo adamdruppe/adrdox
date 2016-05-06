@@ -27,6 +27,17 @@ import std.conv : to;
 
 enum skip_undocumented = true;
 
+static bool sorter(Decl a, Decl b) {
+	if(a.declarationType == b.declarationType)
+		return a.name < b.name;
+	else if(a.declarationType == "module" || b.declarationType == "module") // always put modules up top
+		return 
+			(a.declarationType == "module" ? "aaaaaa" : a.declarationType)
+			< (b.declarationType == "module" ? "aaaaaa" : b.declarationType);
+	else
+		return a.declarationType < b.declarationType;
+}
+
 void annotatedPrototype(T)(T decl, MyOutputRange output) {
 	auto classDec = decl.astNode;
 
@@ -565,8 +576,15 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 	if(members.length) {
 		content.addChild("h2", "Members").id = "members";
-		auto dl = content.addChild("dl").addClass("member-list native");
-		foreach(child; members) {
+		Element dl;
+		string lastType;
+		foreach(child; members.sort!sorter) {
+			if(child.declarationType != lastType) {
+				content.addChild("h3", pluralize(child.declarationType).capitalize);
+				dl = content.addChild("dl").addClass("member-list native");
+				lastType = child.declarationType;
+			}
+
 			handleChildDecl(dl, child);
 
 			writeHtml(child);
@@ -668,16 +686,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		}
 
 		import std.algorithm;
-		static bool sorter(Decl a, Decl b) {
-			if(a.declarationType == b.declarationType)
-				return a.name < b.name;
-			else if(a.declarationType == "module" || b.declarationType == "module") // always put modules up top
-				return 
-					(a.declarationType == "module" ? "aaaaaa" : a.declarationType)
-					< (b.declarationType == "module" ? "aaaaaa" : b.declarationType);
-			else
-				return a.declarationType < b.declarationType;
-		}
+
 		sort!sorter(navArray);
 
 		Element list;

@@ -93,6 +93,7 @@ struct DocComment {
 	string examples;
 	string diagnostics;
 	string throws;
+	string bugs;
 	string see_alsos;
 
 	string[string] otherSections;
@@ -157,8 +158,9 @@ struct DocComment {
 				}
 
 
+				output.putTag("<div class=\"documentation-comment\">");
 				output.putTag(formatDocumentationComment(param[split + 1 .. $], decl));
-				output.putTag("</dd>");
+				output.putTag("</div></dd>");
 			}
 			output.putTag("</dl>");
 		}
@@ -211,6 +213,14 @@ struct DocComment {
 			output.putTag("</div>");
 		}
 
+		if(bugs.strip.length) {
+			output.putTag("<h2 id=\"bugs\">Bugs</h2>");
+			output.putTag("<div class=\"documentation-comment bugs-description\">");
+				output.putTag(formatDocumentationComment(throws, decl));
+			output.putTag("</div>");
+		}
+
+
 		if(examples.length || utInfo.length) {
 			output.putTag("<h2 id=\"examples\"><a href=\"#examples\" class=\"header-anchor\">Examples</a></h2>");
 			output.putTag(formatDocumentationComment(examples, decl));
@@ -235,7 +245,7 @@ struct DocComment {
 		}
 
 		foreach(section, content; otherSections) {
-			output.putTag("<div class=\"" ~ section ~ "-section other-section\">");
+			output.putTag("<div class=\"documentation-comment " ~ section ~ "-section other-section\">");
 			output.putTag("<h3>");
 				output.put(section.capitalize);
 			output.putTag("</h3>");
@@ -510,6 +520,9 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				break;
 				case "throws":
 					c.throws ~= line ~ "\n";
+				break;
+				case "bugs":
+					c.bugs ~= line ~ "\n";
 				break;
 				case "authors":
 				case "license":
@@ -1378,20 +1391,13 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			return translateList(stuff, decl, "ol");
 		}
 
-		/+
 		if(name == "MATH") {
-			/*
-				a^(n+b)
-				log_2(4)
-				y = mx+b
-				(4+3)/4
-			*/
-			auto holder = Element.make("div", "", "user-math");
-			// FIXME do some ascii string to html thing
-
-			return holder;
+			import adrdox.latex;
+			auto got = mathToImgHtml(stuff);
+			if(got is null)
+				return Element.make("span", stuff, "user-math-render-failed");
+			return got;
 		}
-		+/
 
 		if(name == "ADRDOX_SAMPLE") {
 			// show the original source as code
