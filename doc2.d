@@ -948,9 +948,18 @@ abstract class Decl {
 	InheritanceResult[] inheritsFrom() { return null; }
 
 	Decl lookupName(string name, bool lookUp = true) {
-		// FIXME: handle leading dots
-
+		if(name.length == 0)
+			return null;
+		string originalFullName = name;
 		auto subject = this;
+		if(name[0] == '.') {
+			// global scope operator
+			while(subject && !subject.isModule)
+				subject = subject.parent;
+			name = name[1 .. $];
+			originalFullName = originalFullName[1 .. $];
+
+		}
 
 		auto firstDotIdx = name.indexOf(".");
 		if(firstDotIdx != -1) {
@@ -958,16 +967,52 @@ abstract class Decl {
 			name = name[firstDotIdx + 1 .. $];
 		}
 
+		if(subject)
 		while(subject) {
 			foreach(child; subject.children)
 				if(child.name == name)
 					return child;
+
+			if(lookUp)
+			foreach(mod; subject.importedModules) {
+				auto lookupInsideModule = originalFullName;
+				if(auto modDeclPtr = mod in modulesByName) {
+					auto modDecl = *modDeclPtr;
+					auto located = modDecl.lookupName(lookupInsideModule, false);
+					if(located !is null)
+						return located;
+				}
+			}
 
 			if(!lookUp || subject.isModule)
 				subject = null;
 			else
 				subject = subject.parent;
 		}
+		else {
+					// fully qualified name from this module
+			subject = this;
+			while(subject !is null) {
+				foreach(mod; subject.importedModules) {
+					if(originalFullName.startsWith(mod ~ ".")) {
+						// fully qualified name from this module
+						auto lookupInsideModule = originalFullName[mod.length + 1 .. $];
+						if(auto modDeclPtr = mod in modulesByName) {
+							auto modDecl = *modDeclPtr;
+							auto located = modDecl.lookupName(lookupInsideModule, false);
+							if(located !is null)
+								return located;
+						}
+					}
+				}
+
+				if(lookUp && subject.isModule)
+					subject = null;
+				else
+					subject = subject.parent;
+			}
+		}
+
 		return null;
 	}
 
@@ -1018,6 +1063,11 @@ abstract class Decl {
 	void addChild(Decl decl) {
 		decl.parent = this;
 		children ~= decl;
+	}
+
+	string[] importedModules;
+	void addImport(string moduleName) {
+		importedModules ~= moduleName;
 	}
 
 	struct Unittest {
@@ -1165,6 +1215,10 @@ class AliasDecl : Decl {
 		output.putTag("</span>");
 
 		output.put(" = ");
+
+		if(initializer) {
+			output.putTag(toHtml(initializer.type).source);
+		}
 
 		if(astNode.type) {
 			if(link) {
@@ -1621,8 +1675,8 @@ class Looker : ASTVisitor {
 					oldName ~= ".";
 				oldName ~= ident.text;
 			}
-			import std.stdio;
-			writeln("import ", oldName);
+			stack[$-1].addImport(oldName);
+			// FIXME: handle the rest
 		}
 
 	}

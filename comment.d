@@ -1198,7 +1198,7 @@ static this() {
 		"TR" : "<tr>$0</tr>",
 		"TH" : "<th>$0</th>",
 		"TD" : "<td>$0</td>",
-		"TDNW" : "<td>$0</td>",
+		"TDNW" : "<td style=\"white-space: nowrap;\">$0</td>",
 
 		"UL" : "<ul>$0</ul>",
 		"OL" : "<ol>$0</ol>",
@@ -1215,12 +1215,13 @@ static this() {
 		"DD" : "<dd>$0</dd>",
 		"LINK2" : "<a href=\"$1\">$2</a>",
 
+		"BLUE" : "<span style=\"color: blue;\">$0</span>",
+		"RED" : "<span style=\"color: red;\">$0</span>",
+
 		"SCRIPT" : "",
 
 		// Useless crap that should just be replaced
-		"D_PARAM" : "$(D $0)",
 		"SUBMODULE" : `<a href="$(FULLY_QUALIFIED_NAME).$0.html">$0</a>`,
-		"SUBREF" : `<a href="$(FULLY_QUALIFIED_NAME).$1.$2.html">$2</a>`,
 		"SHORTXREF" : `<a href="std.$1.$2.html">$2</a>`,
 		"SHORTXREF_PACK" : `<a href="std.$1.$2.$3.html">$3</a>`,
 		"XREF" : `<a href="std.$1.$2.html">std.$1.$2</a>`,
@@ -1273,7 +1274,6 @@ static this() {
 		"WEB" : 2,
 		"XREF_PACK_NAMED" : 4,
 		"DIVC" : 1,
-		"SUBREF" : 2,
 		"LINK2" : 2,
 		"XREF" : 2,
 		"CXREF" : 2,
@@ -1413,7 +1413,7 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			return holder;
 		}
 
-		if(name == "D") {
+		if(name == "D" || name == "D_PARAM") {
 			// this is magic: syntax highlight it
 			auto holder = Element.make("tt");
 			holder.className = "D highlighted";
@@ -1430,6 +1430,10 @@ Element expandDdocMacros2(string txt, Decl decl) {
 		}
 		if(name == "FULLY_QUALIFIED_NAME") {
 			return new TextNode(decl.fullyQualifiedName);
+		}
+		if(name == "SUBREF") {
+			auto cool = stuff.split(",");
+			return getReferenceLink(decl.fullyQualifiedName ~ "." ~ cool[0].strip ~ "." ~ cool[1].strip, decl, cool[1].strip);
 		}
 		if(name == "REF" || name == "MREF" || name == "LREF") {
 			// this is magic: do commas to dots then link it
