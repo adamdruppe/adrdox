@@ -21,3 +21,6 @@ Edit the makefile to build locate.d if you want the search thing. Also edit the 
 to make the listing and search indexes (bools in main) to build them.
 
 This is still pretty rough so don't expect too much yet.
+
+## License
+Boost
