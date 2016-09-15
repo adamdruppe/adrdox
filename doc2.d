@@ -4,6 +4,9 @@ string skeletonFile = "skeleton.html";
 string outputDirectory = "/var/www/dpldocs.info/experimental-docs/";
 
 /*
+	FIXME: it should be able to handle bom. consider core/thread.d the unittest example is offset.
+
+
 	FIXME:
 		* make sure there's a link to the source for everything
 		* search
@@ -39,7 +42,10 @@ static bool sorter(Decl a, Decl b) {
 }
 
 void annotatedPrototype(T)(T decl, MyOutputRange output) {
-	auto classDec = decl.astNode;
+	static if(is(T == MixinTemplateDecl))
+		auto classDec = decl.astNode.templateDeclaration;
+	else
+		auto classDec = decl.astNode;
 
 	auto f = new MyFormatter!(typeof(output))(output, decl);
 
@@ -485,7 +491,9 @@ Document writeHtml(Decl decl, bool forReal = true) {
 	{
 		auto p = decl.parent;
 		while(p) {
-			breadcrumbs.prependChild(Element.make("a", p.name, p.link).addClass("breadcrumb"));
+			// cut off package names that would be repeated
+			auto name = (p.isModule && p.parent) ? lastDotOnly(p.name) : p.name;
+			breadcrumbs.prependChild(Element.make("a", name, p.link).addClass("breadcrumb"));
 			p = p.parent;
 		}
 	}
@@ -633,8 +641,10 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
 	else if(auto fd = cast(Constructor) decl.getAstNode())
 		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
+	else if(auto fd = cast(TemplateDeclaration) decl.getAstNode())
+		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
 	else
-		comment.writeDetails(output, cast(FunctionDeclaration) null, decl.getUnittestDocTuple());
+		comment.writeDetails(output, decl, decl.getUnittestDocTuple());
 
 	content.addChild("div", Html(s));
 
@@ -698,7 +708,10 @@ Document writeHtml(Decl decl, bool forReal = true) {
 				list = nav.addChild("ul");
 				lastType = item.declarationType;
 			}
-			auto n = list.addChild("li").addChild("a", item.name, item.link).addClass(item.declarationType);
+
+			// cut off package names that would be repeated
+			auto name = (item.isModule && item.parent) ? lastDotOnly(item.name) : item.name;
+			auto n = list.addChild("li").addChild("a", name, item.link).addClass(item.declarationType);
 			if(item.name == decl.name)
 				n.addClass("current");
 		}
@@ -791,13 +804,25 @@ void addLineNumbering(Element pre, bool id = false) {
 	if(pre.hasClass("with-line-wrappers"))
 		return;
 	string html;
+	int count;
 	foreach(idx, line; pre.innerHTML.splitLines) {
-		html ~= "<span class=\"br\""~(id ? " id=\"L"~to!string(idx + 1)~"\"" : "")~"></span>";
+		auto num = to!string(idx + 1);
+		auto href = "L"~num;
+		if(id)
+			html ~= "<a class=\"br\""~(id ? " id=\""~href~"\"" : "")~" href=\"#"~href~"\">"~num~"</a>";
+		else
+			html ~= "<span class=\"br\">"~num~"</span>";
 		html ~= line;
 		html ~= "\n";
+		count++;
 	}
 	pre.innerHTML = html;
 	pre.addClass("with-line-wrappers");
+
+	if(count >= 10000)
+		pre.addClass("ten-thousand-lines");
+	else if(count >= 1000)
+		pre.addClass("thousand-lines");
 }
 
 string lastDotOnly(string s) {
@@ -864,6 +889,15 @@ abstract class Decl {
 		auto mod = this.parentModule.name;
 		//if(mod.startsWith("core.sys") || mod.startsWith("core.stdc"))
 		//	return true;
+		return false;
+	}
+
+	bool isStatic() {
+		foreach (a; attributes) {
+			if(a.attr && a.attr.attribute.type == tok!"static")
+				return true;
+		}
+
 		return false;
 	}
 
@@ -1297,6 +1331,10 @@ class VariableDecl : Decl {
 		output.put(name);
 		output.putTag("</span>");
 	}
+
+	override string declarationType() {
+		return (isStatic() ? "static variable" : "variable");
+	}
 }
 
 
@@ -1307,7 +1345,7 @@ class FunctionDecl : Decl {
 	}
 
 	override string declarationType() {
-		return isProperty() ? "property" : "function";
+		return isProperty() ? "property" : (isStatic() ? "static function" : "function");
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
@@ -1420,6 +1458,21 @@ mixin template InheritanceSupport() {
 class TemplateDecl : Decl {
 	mixin CtorFrom!TemplateDeclaration;
 
+	Decl eponymousMember() {
+		foreach(child; this.children)
+			if(child.name == this.name)
+				return child;
+		return null;
+	}
+
+	override void getAnnotatedPrototype(MyOutputRange output) {
+		annotatedPrototype(this, output);
+	}
+}
+
+class MixinTemplateDecl : Decl {
+	mixin CtorFrom!MixinTemplateDeclaration;
+
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		annotatedPrototype(this, output);
 	}
@@ -1494,7 +1547,9 @@ mixin template CtorFrom(T) {
 			{ assert(0); } // overridden above
 		else static if(is(T == VariableDeclaration))
 			{assert(0);} // not compiled, overridden above
-		else static if(is(T == StructDeclaration) || is(T == UnionDeclaration))
+		else static if(is(T == MixinTemplateDeclaration)) {
+			return astNode.templateDeclaration.name.text;
+		} else static if(is(T == StructDeclaration) || is(T == UnionDeclaration))
 			if(astNode.name.text.length)
 				return astNode.name.text;
 			else
@@ -1545,6 +1600,8 @@ mixin template CtorFrom(T) {
 	override string rawComment() {
 		static if(is(T == Module))
 			return astNode.moduleDeclaration.comment;
+		else static if(is(T == MixinTemplateDeclaration))
+			return astNode.templateDeclaration.comment;
 		else
 			return astNode.comment;
 	}
@@ -1611,6 +1668,9 @@ class Looker : ASTVisitor {
 	}
 	override void visit(const TemplateDeclaration dec) {
 		visitInto!TemplateDecl(dec);
+	}
+	override void visit(const MixinTemplateDeclaration dec) {
+		visitInto!MixinTemplateDecl(dec);
 	}
 	override void visit(const EnumDeclaration dec) {
 		visitInto!EnumDecl(dec);
@@ -1722,11 +1782,12 @@ class Looker : ASTVisitor {
 	}
 
 	override void visit(const Declaration dec) {
+		auto originalAttributes = attributes[$ - 1];
 		foreach(a; dec.attributes)
 			attributes[$ - 1] ~= new VersionOrAttribute(a);
 		dec.accept(this);
 		if (dec.attributeDeclaration is null)
-			attributes[$ - 1] = attributes[$ - 1][0 .. $ - dec.attributes.length];
+			attributes[$ - 1] = originalAttributes;
 	}
 
 	override void visit(const AttributeDeclaration dec) {
@@ -1849,7 +1910,7 @@ void main(string[] args) {
 				auto li = nav.addChild("li");
 				if(decl.isDocumented && !decl.isPrivate)
 					li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
-				li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber));
+				li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
 				if(decl.children.length)
 					nav = li.addChild("ul");
 				foreach(child; decl.children)

@@ -69,6 +69,18 @@ bool isConvenientAttribute(string name) {
 
 /// The main document interface, including a html parser.
 class Document : FileResource {
+	/// Convenience method for web scraping. Requires [arsd.http2] to be
+	/// included in the build.
+	static Document fromUrl()(string url) {
+		import arsd.http2;
+		auto client = new HttpClient();
+
+		auto req = client.navigateTo(Uri(url), HttpVerb.GET);
+		auto res = req.waitForCompletion();
+
+		return new Document(cast(string) res.content);
+	}
+
 	///.
 	this(string data, bool caseSensitive = false, bool strict = false) {
 		parseUtf8(data, caseSensitive, strict);

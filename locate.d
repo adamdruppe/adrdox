@@ -104,15 +104,15 @@ void searcher(Cgi cgi) {
 		return n;
 	}
 
-	string lastFqn;
+	bool[string] alreadyPresent;
 	foreach(idx, item; magic) {
 		Element decl = getDecl(item.decl);
 		if(decl is null) continue; // should never happen
 		auto link = "http://dpldocs.info/experimental-docs/" ~ decl.requireSelector("link").innerText;
 		auto fqn = getFqn(decl);
-		if(fqn == lastFqn)
+		if(fqn in alreadyPresent)
 			continue;
-		lastFqn = fqn;
+		alreadyPresent[fqn] = true;
 		auto dt = ml.addChild("dt");
 		dt.addClass("search-result");
 		dt.addChild("a", fqn, link);

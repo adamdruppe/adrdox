@@ -58,27 +58,59 @@ string getIdent(T)(T t) {
 	return t.identifier.text;
 }
 
-bool hasParam(T)(const T dec, string name) {
+bool hasParam(T)(const T dec, string name, Decl declObject) {
 	if(dec is null)
 		return false;
 
-	if(dec.parameters && dec.parameters.parameters)
-	foreach(parameter; dec.parameters.parameters)
-		if(parameter.name.text == name)
-			return true;
-	if(dec.templateParameters && dec.templateParameters.templateParameterList)
-	foreach(parameter; dec.templateParameters.templateParameterList.items) {
-		if(getIdent(parameter.templateTypeParameter) == name)
-			return true;
-		if(getIdent(parameter.templateValueParameter) == name)
-			return true;
-		if(getIdent(parameter.templateAliasParameter) == name)
-			return true;
-		if(getIdent(parameter.templateTupleParameter) == name)
-			return true;
-		if(parameter.templateThisParameter && getIdent(parameter.templateThisParameter.templateTypeParameter) == name)
+	static if(__traits(compiles, dec.parameters)) {
+		if(dec.parameters && dec.parameters.parameters)
+		foreach(parameter; dec.parameters.parameters)
+			if(parameter.name.text == name)
+				return true;
+	}
+	static if(__traits(compiles, dec.templateParameters)) {
+		if(dec.templateParameters && dec.templateParameters.templateParameterList)
+		foreach(parameter; dec.templateParameters.templateParameterList.items) {
+			if(getIdent(parameter.templateTypeParameter) == name)
+				return true;
+			if(getIdent(parameter.templateValueParameter) == name)
+				return true;
+			if(getIdent(parameter.templateAliasParameter) == name)
+				return true;
+			if(getIdent(parameter.templateTupleParameter) == name)
+				return true;
+			if(parameter.templateThisParameter && getIdent(parameter.templateThisParameter.templateTypeParameter) == name)
+				return true;
+		}
+	}
+
+	// need to check parent template parameters in case they are
+	// referenced in a child
+	if(declObject.parent) {
+		bool h;
+		if(auto pdec = cast(TemplateDecl) declObject.parent)
+			h = hasParam(pdec.astNode, name, pdec);
+		else
+			 {}
+		if(h)
 			return true;
 	}
+
+	// and eponymous ones
+	static if(is(T == TemplateDeclaration)) {
+		auto decl = cast(TemplateDecl) declObject;
+		if(decl) {
+			auto e = decl.eponymousMember();
+			if(e) {
+				if(auto a = cast(ConstructorDecl) e)
+					return hasParam(a.astNode, name, a);
+				if(auto a = cast(FunctionDecl) e)
+					return hasParam(a.astNode, name, a);
+				// FIXME: add more
+			}
+		}
+	}
+
 	return false;
 }
 
@@ -125,7 +157,7 @@ struct DocComment {
 				auto split = param.indexOf("=");
 				auto paramName = param[0 .. split];
 
-				if(!hasParam(functionDec, paramName))
+				if(!hasParam(functionDec, paramName, decl))
 					continue;
 
 				output.putTag("<dt id=\"param-"~param[0 .. split]~"\">");
@@ -137,6 +169,7 @@ struct DocComment {
 				output.putTag("</dt>");
 				output.putTag("<dd>");
 
+				static if(is(T == FunctionDeclaration) || is(T == Constructor))
 				if(functionDec !is null) {
 					const(Parameter)* paramAst;
 					foreach(ref p; functionDec.parameters.parameters) {
@@ -165,10 +198,10 @@ struct DocComment {
 			output.putTag("</dl>");
 		}
 
-		static if(!is(T == Constructor))
 		if(returns !is null) {
 			output.putTag("<h2 id=\"returns\">Return Value</h2>");
 			output.putTag("<div>");
+			static if(is(T == FunctionDeclaration))
 			if(functionDec !is null) {
 				output.putTag("<div class=\"return-type-holder\">");
 				output.putTag("Type: ");
@@ -216,7 +249,7 @@ struct DocComment {
 		if(bugs.strip.length) {
 			output.putTag("<h2 id=\"bugs\">Bugs</h2>");
 			output.putTag("<div class=\"documentation-comment bugs-description\">");
-				output.putTag(formatDocumentationComment(throws, decl));
+				output.putTag(formatDocumentationComment(bugs, decl));
 			output.putTag("</div>");
 		}
 
@@ -1118,7 +1151,9 @@ static this() {
 		"TR" : 1,
 		"TH" : 1,
 		"TD" : 1,
+		"TABLE" : 1,
 		"TDNW" : 1,
+		"LEADINGROWN" : 1,
 
 		"UL" : 1,
 		"OL" : 1,
@@ -1198,7 +1233,9 @@ static this() {
 		"TR" : "<tr>$0</tr>",
 		"TH" : "<th>$0</th>",
 		"TD" : "<td>$0</td>",
+		"TABLE": "<table>$0</table>",
 		"TDNW" : "<td style=\"white-space: nowrap;\">$0</td>",
+		"LEADINGROWN":"<tr class=\"leading-row\"><th colspan=\"$1\">$2</th></tr>",
 
 		"UL" : "<ul>$0</ul>",
 		"OL" : "<ol>$0</ol>",
@@ -1206,6 +1243,7 @@ static this() {
 
 		"BR" : "<br />",
 		"I" : "<i>$0</i>",
+		"TT" : "<tt>$0</tt>",
 		"B" : "<b>$0</b>",
 		"P" : "<p>$0</p>",
 		"PRE" : "<pre>$0</pre>",
@@ -1271,6 +1309,7 @@ static this() {
 	ddocMacroInfo = [ // number of arguments expected, if needed
 		"BOOKTABLE" : 1,
 		"T2" : 1,
+		"LEADINGROWN" : 2,
 		"WEB" : 2,
 		"XREF_PACK_NAMED" : 4,
 		"DIVC" : 1,
@@ -1435,9 +1474,41 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			auto cool = stuff.split(",");
 			return getReferenceLink(decl.fullyQualifiedName ~ "." ~ cool[0].strip ~ "." ~ cool[1].strip, decl, cool[1].strip);
 		}
-		if(name == "REF" || name == "MREF" || name == "LREF") {
+		if(name == "MREF_ALTTEXT") {
+			auto parts = split(stuff, ",");
+			string cool;
+			foreach(indx, p; parts[1 .. $]) {
+				if(indx) cool ~= ".";
+				cool ~= p.strip;
+			}
+
+			return getReferenceLink(cool, decl, parts[0].strip);
+		}
+		if(name == "REF_ALTTEXT") {
+			auto parts = split(stuff, ",");
+			string cool;
+			foreach(indx, p; parts[2 .. $]) {
+				if(indx) cool ~= ".";
+				cool ~= p.strip;
+			}
+			cool ~= "." ~ parts[1].strip;
+
+			return getReferenceLink(cool, decl, parts[0].strip);
+		}
+
+		if(name == "REF" || name == "MREF" || name == "LREF" || name == "MYREF") {
 			// this is magic: do commas to dots then link it
-			auto cool = replace(stuff, ",", ".");
+			string cool;
+			if(name == "REF") {
+				auto parts = split(stuff, ",");
+				parts = parts[1 .. $] ~ parts[0];
+				foreach(indx, p; parts) {
+					if(indx)
+						cool ~= ".";
+					cool ~= p.strip;
+				}
+			} else
+				cool = replace(stuff, ",", ".").replace(" ", "");
 			return getReferenceLink(cool, decl);
 		}
 
