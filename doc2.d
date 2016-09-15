@@ -1823,6 +1823,8 @@ ModuleDecl[string] modulesByName;
 
 void main(string[] args) {
 	import std.stdio;
+	import std.path : buildPath;
+	import std.getopt;
 
 	static import std.file;
 	LexerConfig config;
@@ -1834,18 +1836,25 @@ void main(string[] args) {
 	Module[] modules;
 	ModuleDecl[] moduleDecls;
 
-	import std.getopt;
+	bool makeHtml = true;
+	bool makeListing = false;
+	bool makeSearchIndex = false;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
+		std.getopt.config.bundling,
+		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
-		"skeleton", "Location of the skeleton.html file, change to your use case", &skeletonFile);
+		"genHtml|h", "Generate html, default: true", &makeHtml,
+		"genListings|l", "Generate file listings, default: false", &makeListing,
+		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
 	
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
 
-	if (opt.helpWanted) {
-		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016\n", opt.options);
+	if (opt.helpWanted || args.length == 1) {
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016\n" ~
+			"Syntax: " ~ args[0] ~ " -hilo <docs> -s skeleton.html\n", opt.options);
 		return;
 	}
 
@@ -1936,14 +1945,10 @@ void main(string[] args) {
 		}
 	}
 
-	bool makeHtml = true;
-	bool makeListing = false;
-	bool makeSearchIndex = false;
-
 	if(makeListing) {
 		File index;
 		int id;
-		index = File("index.xml", "wt");
+		index = File(buildPath(outputDirectory, "index.xml"), "wt");
 
 		index.writeln("<listing>");
 		foreach(decl; moduleDecls) {
@@ -1975,7 +1980,7 @@ void main(string[] args) {
 
 		writeln("Writing search.xml");
 
-		auto file = File("search.xml", "wt");
+		auto file = File(buildPath(outputDirectory, "search.xml"), "wt");
 		file.writeln("<index>");
 		foreach(term, arr; searchTerms) {
 			file.write("<term value=\""~term~"\">");
