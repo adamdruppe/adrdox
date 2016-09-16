@@ -5,21 +5,12 @@
 	"homepage": "https://github.com/adamdruppe/adrdox",
 	"license": "BSL-1.0",
 
+	"copyFiles": ["skeleton.html", "script.js", "style.css"],
+	"targetPath": "build",
 	"targetType": "executable",
 	"buildRequirements": ["allowWarnings"],
-	"sourceFiles": ["doc2.d", "latex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d"],
-	"stringImportPaths": ["."],
-	"copyFiles": ["skeleton.html", "script.js", "style.css"],
-	"dependencies": {
-		"adrdox:dscanner": "*"
-	},
 
-	"targetPath": "build",
-	"subPackages": [
-		{
-			"name": "dscanner",
-			"sourcePaths": ["Dscanner/libdparse/src"],
-			"importPaths": ["Dscanner/libdparse/src"]
-		}
-	]
+	"sourcePaths": ["Dscanner/libdparse/src"],
+	"sourceFiles": ["doc2.d", "latex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d"],
+	"stringImportPaths": ["."]
 }
