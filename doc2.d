@@ -1839,6 +1839,7 @@ void main(string[] args) {
 	bool makeHtml = true;
 	bool makeListing = false;
 	bool makeSearchIndex = false;
+	bool useJavascriptSearch = false;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -1847,7 +1848,8 @@ void main(string[] args) {
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genListings|l", "Generate file listings, default: false", &makeListing,
-		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
+		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
+		"useJavascriptSearch|f", "Use the Javascript search functionality vs locate.d, default: locate.d", &useJavascriptSearch);
 	
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
@@ -1918,6 +1920,13 @@ void main(string[] args) {
 			addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), mod);
 
 			annotatedSourceDocument.title = mod.name ~ " source code";
+			
+			if (useJavascriptSearch) {
+				auto theHead = annotatedSourceDocument.getFirstElementByTagName("head");
+				theHead.appendHtml(`<script type="text/javascript" src="searcher.js"></script>`);
+				theHead.appendHtml(`<link rel="preload" href="index.xml" onerror="alert('ERROR: index.xml was not loaded, please refresh');"/>`);
+				theHead.appendHtml(`<link rel="preload" href="search.xml" onerror="alert('ERROR: search.xml was not loaded, please refresh');"/>`);
+			}
 
 			std.file.write(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString());
 			}
