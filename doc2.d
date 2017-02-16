@@ -4,6 +4,10 @@ string skeletonFile = "skeleton.html";
 string outputDirectory = "/var/www/dpldocs.info/experimental-docs/";
 
 /*
+
+Glossary feature: little short links that lead somewhere else.
+
+
 	FIXME: it should be able to handle bom. consider core/thread.d the unittest example is offset.
 
 
@@ -23,7 +27,7 @@ import dparse.ast;
 import arsd.dom;
 import arsd.docgen.comment;
 
-import std.algorithm :sort;
+import std.algorithm :sort, canFind;
 
 import std.string;
 import std.conv : to;
@@ -42,6 +46,18 @@ static bool sorter(Decl a, Decl b) {
 }
 
 void annotatedPrototype(T)(T decl, MyOutputRange output) {
+	static if(is(T == TemplateDecl)) {
+		auto td = cast(TemplateDecl) decl;
+		auto epony = td.eponymousMember;
+		if(epony) {
+			if(auto e = cast(FunctionDecl) epony) {
+				doFunctionDec(e, output);
+			}
+		}
+		return;
+	}
+
+
 	static if(is(T == MixinTemplateDecl))
 		auto classDec = decl.astNode.templateDeclaration;
 	else
@@ -176,8 +192,8 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 	{
 		auto functionDec = decl.astNode;
 
-		if(!decl.isDocumented() && skip_undocumented)
-			return;
+		//if(!decl.isDocumented() && skip_undocumented)
+			//return;
 
 		string[] conceptsFound;
 
@@ -233,6 +249,11 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		+/
 
 		void writeFunctionPrototype() {
+			string outputStr;
+			auto originalOutput = output;
+
+			MyOutputRange output = MyOutputRange(&outputStr);
+			auto f = new MyFormatter!(typeof(output))(output);
 
 			output.putTag("<div class=\"function-prototype\">");
 
@@ -312,7 +333,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 			output.putTag("</div>");
 
-			output.putTag("</div>");
+			originalOutput.putTag(linkUpHtml(outputStr, decl));
 		}
 
 
@@ -809,9 +830,9 @@ void addLineNumbering(Element pre, bool id = false) {
 		auto num = to!string(idx + 1);
 		auto href = "L"~num;
 		if(id)
-			html ~= "<a class=\"br\""~(id ? " id=\""~href~"\"" : "")~" href=\"#"~href~"\">"~num~"</a>";
+			html ~= "<a class=\"br\""~(id ? " id=\""~href~"\"" : "")~" href=\"#"~href~"\">"~num~" </a>";
 		else
-			html ~= "<span class=\"br\">"~num~"</span>";
+			html ~= "<span class=\"br\">"~num~" </span>";
 		html ~= line;
 		html ~= "\n";
 		count++;
@@ -1010,9 +1031,10 @@ abstract class Decl {
 			if(lookUp)
 			foreach(mod; subject.importedModules) {
 				auto lookupInsideModule = originalFullName;
-				if(auto modDeclPtr = mod in modulesByName) {
+				if(auto modDeclPtr = mod.name in modulesByName) {
 					auto modDecl = *modDeclPtr;
-					auto located = modDecl.lookupName(lookupInsideModule, false);
+					// FIXME: what if two modules import each other publicly? gross but we'll barf.
+					auto located = modDecl.lookupName(lookupInsideModule, mod.publicImport);
 					if(located !is null)
 						return located;
 				}
@@ -1028,12 +1050,12 @@ abstract class Decl {
 			subject = this;
 			while(subject !is null) {
 				foreach(mod; subject.importedModules) {
-					if(originalFullName.startsWith(mod ~ ".")) {
+					if(originalFullName.startsWith(mod.name ~ ".")) {
 						// fully qualified name from this module
-						auto lookupInsideModule = originalFullName[mod.length + 1 .. $];
-						if(auto modDeclPtr = mod in modulesByName) {
+						auto lookupInsideModule = originalFullName[mod.name.length + 1 .. $];
+						if(auto modDeclPtr = mod.name in modulesByName) {
 							auto modDecl = *modDeclPtr;
-							auto located = modDecl.lookupName(lookupInsideModule, false);
+							auto located = modDecl.lookupName(lookupInsideModule, mod.publicImport);
 							if(located !is null)
 								return located;
 						}
@@ -1099,9 +1121,13 @@ abstract class Decl {
 		children ~= decl;
 	}
 
-	string[] importedModules;
-	void addImport(string moduleName) {
-		importedModules ~= moduleName;
+	struct ImportedModule {
+		string name;
+		bool publicImport;
+	}
+	ImportedModule[] importedModules;
+	void addImport(string moduleName, bool isPublic) {
+		importedModules ~= ImportedModule(moduleName, isPublic);
 	}
 
 	struct Unittest {
@@ -1112,7 +1138,20 @@ abstract class Decl {
 
 	Unittest[] unittests;
 
-	void addUnittest(const(dparse.ast.Unittest) ut, in ubyte[] code, string comment) {
+	void addUnittest(const(dparse.ast.Unittest) ut, const(ubyte)[] code, string comment) {
+		int slicePoint = 0;
+		foreach(idx, b; code) {
+			if(b == ' ' || b == '\t' || b == '\r')
+				slicePoint++;
+			else if(b == '\n') {
+				slicePoint++;
+				break;
+			} else {
+				slicePoint = 0;
+				break;
+			}
+		}
+		code = code[slicePoint .. $];
 		unittests ~= Unittest(ut, (cast(char[]) code).idup, comment);
 	}
 
@@ -1251,7 +1290,10 @@ class AliasDecl : Decl {
 		output.put(" = ");
 
 		if(initializer) {
-			output.putTag(toHtml(initializer.type).source);
+			if(link)
+				output.putTag(toLinkedHtml(initializer.type, this).source);
+			else
+				output.putTag(toHtml(initializer.type).source);
 		}
 
 		if(astNode.type) {
@@ -1342,6 +1384,39 @@ class FunctionDecl : Decl {
 	mixin CtorFrom!FunctionDeclaration;
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		doFunctionDec(this, output);
+	}
+
+	override Decl lookupName(string name, bool lookUp = true) {
+		// is it a param or template param? If so, return that.
+
+		foreach(param; astNode.parameters.parameters) {
+			if (param.name.type != tok!"")
+				if(param.name.text == name) {
+					return null; // it is local, but we don't have a decl..
+				}
+		}
+		if(astNode.templateParameters && astNode.templateParameters.templateParameterList && astNode.templateParameters.templateParameterList.items)
+		foreach(param; astNode.templateParameters.templateParameterList.items) {
+			auto paramName = "";
+
+			if(param.templateTypeParameter)
+				paramName = param.templateTypeParameter.identifier.text;
+			else if(param.templateValueParameter)
+				paramName = param.templateValueParameter.identifier.text;
+			else if(param.templateAliasParameter)
+				paramName = param.templateAliasParameter.identifier.text;
+			else if(param.templateTupleParameter)
+				paramName = param.templateTupleParameter.identifier.text;
+
+			if(paramName.length && paramName == name) {
+				return null; // it is local, but we don't have a decl..
+			}
+		}
+
+		if(lookUp)
+			return super.lookupName(name, lookUp);
+		else
+			return null;
 	}
 
 	override string declarationType() {
@@ -1582,6 +1657,14 @@ mixin template CtorFrom(T) {
 		output.putTag("<span class=\"name\">");
 		output.put(name);
 		output.putTag("</span>");
+
+		static if(__traits(compiles, astNode.templateParameters)) {
+			if(astNode.templateParameters) {
+				output.putTag("<span class=\"template-params\">");
+				output.put(toText(astNode.templateParameters));
+				output.putTag("</span>");
+			}
+		}
 	}
 	override string declarationType() {
 		import std.string:toLower;
@@ -1735,7 +1818,16 @@ class Looker : ASTVisitor {
 					oldName ~= ".";
 				oldName ~= ident.text;
 			}
-			stack[$-1].addImport(oldName);
+			bool isPublic = false;
+
+			foreach(a; attributes[$-1]) {
+				if (a.attr && isProtection(a.attr.attribute.type))
+					if(a.attr.attribute.type == tok!"public") {
+						isPublic = true;
+						break;
+					}
+			}
+			stack[$-1].addImport(oldName, isPublic);
 			// FIXME: handle the rest
 		}
 
@@ -1835,14 +1927,18 @@ void main(string[] args) {
 
 	Module[] modules;
 	ModuleDecl[] moduleDecls;
+	ModuleDecl[] moduleDeclsGenerate;
 
 	bool makeHtml = true;
 	bool makeListing = false;
 	bool makeSearchIndex = false;
+
+	string[] preloadArgs;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
 		std.getopt.config.bundling,
+		"load", "Load for automatic cross-referencing, but do not generate for it", &preloadArgs,
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
@@ -1853,7 +1949,7 @@ void main(string[] args) {
 		outputDirectory ~= '/';
 
 	if (opt.helpWanted || args.length == 1) {
-		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016\n" ~
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2017\n" ~
 			"Syntax: " ~ args[0] ~ " -hilo <docs> -s skeleton.html\n", opt.options);
 		return;
 	}
@@ -1862,7 +1958,7 @@ void main(string[] args) {
 	// and making a mapping of module names, package listing, and files.
 	// cuz reading all of Phobos takes several seconds. Then they can parse it fully lazily.
 
-	void process(string arg) {
+	void process(string arg, bool generate) {
 		try {
 			writeln("First pass processing ", arg);
 			import std.file;
@@ -1874,24 +1970,29 @@ void main(string[] args) {
 			import std.path : baseName;
 			auto m = parseModule(tokens, baseName(arg));
 
-			modules ~= m;
-
 			auto sweet = new Looker(b, baseName(arg));
 			sweet.visit(m);
+
+			auto mod = cast(ModuleDecl) sweet.root;
+			if(mod.astNode.moduleDeclaration is null)
+				throw new Exception("you must have a module declaration for this to work on it");
+
+			modules ~= m;
 
 			if(b.startsWith(cast(ubyte[])"// just docs:"))
 				sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
 
 			moduleDecls ~= sweet.root;
+			if(generate)
+				moduleDeclsGenerate ~= sweet.root;
 
-			auto mod = cast(ModuleDecl) sweet.root;
 			assert(mod !is null);
 			modulesByName[sweet.root.name] = mod;
 
 			packages[sweet.root.packageName] ~= sweet.root;
 
 
-			{
+			if(generate && false) { // FIXME
 			auto annotatedSourceDocument = new Document();
 			annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
 			auto code = Element.make("pre", Html(highlight(cast(string) b))).addClass("d_code highlighted");
@@ -1928,13 +2029,46 @@ void main(string[] args) {
 		}
 	}
 
+	args = args[1 .. $]; // remove program name
+
 	// Process them all first so name-lookups have more chance of working
-	foreach(argIdx, arg; args[1 .. $]) {
+	foreach(argIdx, arg; preloadArgs) {
+		if(std.file.isDir(arg)) {
+			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth)) {
+				bool g = false;
+				foreach(idx, a; args) {
+					if(a == name) {
+						g = true;
+						args[idx] = args[$-1];
+						args = args[0 .. $-1];
+						break;
+					}
+				}
+
+				process(name, g);
+			}
+		} else {
+			bool g = false;
+
+			foreach(idx, a; args) {
+				if(a == arg) {
+					g = true;
+					args[idx] = args[$-1];
+					args = args[0 .. $-1];
+					break;
+				}
+			}
+
+			process(arg, g);
+		}
+	}
+
+	foreach(argIdx, arg; args) {
 		if(std.file.isDir(arg))
 			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth))
-				process(name);
+				process(name, true);
 		else
-			process(arg);
+			process(arg, true);
 	}
 
 	// add modules to their packages, if possible
@@ -1951,7 +2085,7 @@ void main(string[] args) {
 		index = File(buildPath(outputDirectory, "index.xml"), "wt");
 
 		index.writeln("<listing>");
-		foreach(decl; moduleDecls) {
+		foreach(decl; moduleDeclsGenerate) {
 			writeln("Listing ", decl.name);
 
 			writeIndexXml(decl, index, id);
@@ -1960,8 +2094,8 @@ void main(string[] args) {
 	}
 
 	if(makeHtml) {
-		foreach(decl; moduleDecls) {
-			if(decl.parent)
+		foreach(decl; moduleDeclsGenerate) {
+			if(decl.parent && moduleDeclsGenerate.canFind(decl.parent))
 				continue; // it will be written in the list of children
 			writeln("Generating HTML for ", decl.name);
 
@@ -1972,7 +2106,7 @@ void main(string[] args) {
 	if(makeSearchIndex) {
 		// also making the search index
 		int id;
-		foreach(decl; moduleDecls) {
+		foreach(decl; moduleDeclsGenerate) {
 			writeln("Generating search for ", decl.name);
 
 			generateSearchIndex(decl, id);
@@ -2293,6 +2427,74 @@ string pluralize(string word, int count = 2, string pluralWord = null) {
 		default:
 			return word ~ "s";
 	}
+}
+
+Html toLinkedHtml(T)(const T t, Decl decl) {
+	import dparse.formatter;
+	string s;
+	struct Foo {
+		void put(in char[] a) {
+			s ~= a;
+		}
+	}
+	Foo output;
+	auto f = new MyFormatter!(typeof(output))(output);
+	f.format(t);
+
+	return Html(linkUpHtml(s, decl));
+}
+
+string linkUpHtml(string s, Decl decl) {
+	auto document = new Document("<root>" ~ s ~ "</root>", true, true);
+
+	// additional cross referencing we weren't able to do at lower level
+	foreach(ident; document.querySelectorAll("*:not(a) [data-ident]:not(:has(a))")) {
+		// since i modify the tree in the loop, i recheck that we still match the selector
+		if(ident.parentNode is null)
+			continue;
+		if(ident.tagName == "a" || (ident.parentNode && ident.parentNode.tagName == "a"))
+			continue;
+		auto i = ident.dataset.ident;
+
+		auto n = ident.nextSibling;
+		while(n && n.nodeValue == ".") {
+			i ~= ".";
+			auto txt = n;
+			n = n.nextSibling; // the span, ideally
+			if(n is null)
+				break;
+			if(n && n.hasAttribute("data-ident")) {
+				txt.removeFromTree();
+				i ~= n.dataset.ident;
+				auto span = n;
+				n = n.nextSibling;
+				span.removeFromTree;
+			}
+		}
+
+		//ident.dataset.ident = i;
+		ident.innerText = i;
+
+		auto found = decl.lookupName(i);
+		string hash;
+
+		if(found is null) {
+			auto lastPieceIdx = i.lastIndexOf(".");
+			if(lastPieceIdx != -1) {
+				found = decl.lookupName(i[0 .. lastPieceIdx]);
+				if(found)
+					hash = "#" ~ i[lastPieceIdx + 1 .. $];
+			}
+		}
+
+		if(found) {
+			ident.attrs.title = found.fullyQualifiedName;
+			ident.tagName = "a";
+			ident.href = found.link ~ hash;
+		}
+	}
+
+	return document.root.innerHTML;
 }
 
 

@@ -58,7 +58,7 @@ string getIdent(T)(T t) {
 	return t.identifier.text;
 }
 
-bool hasParam(T)(const T dec, string name, Decl declObject) {
+bool hasParam(T)(const T dec, string name, Decl declObject, bool descend = true) {
 	if(dec is null)
 		return false;
 
@@ -84,12 +84,15 @@ bool hasParam(T)(const T dec, string name, Decl declObject) {
 		}
 	}
 
+	if(!descend)
+		return false;
+
 	// need to check parent template parameters in case they are
 	// referenced in a child
 	if(declObject.parent) {
 		bool h;
 		if(auto pdec = cast(TemplateDecl) declObject.parent)
-			h = hasParam(pdec.astNode, name, pdec);
+			h = hasParam(pdec.astNode, name, pdec, false);
 		else
 			 {}
 		if(h)
@@ -103,9 +106,9 @@ bool hasParam(T)(const T dec, string name, Decl declObject) {
 			auto e = decl.eponymousMember();
 			if(e) {
 				if(auto a = cast(ConstructorDecl) e)
-					return hasParam(a.astNode, name, a);
+					return hasParam(a.astNode, name, a, false);
 				if(auto a = cast(FunctionDecl) e)
-					return hasParam(a.astNode, name, a);
+					return hasParam(a.astNode, name, a, false);
 				// FIXME: add more
 			}
 		}
@@ -220,7 +223,9 @@ struct DocComment {
 				output.putTag("</span>");
 				output.putTag("</div>");
 			}
+			output.putTag("<div class=\"documentation-comment returns-description\">");
 			output.putTag(formatDocumentationComment(returns, decl));
+			output.putTag("</div>");
 			output.putTag("</div>");
 		}
 
@@ -256,10 +261,12 @@ struct DocComment {
 
 		if(examples.length || utInfo.length) {
 			output.putTag("<h2 id=\"examples\"><a href=\"#examples\" class=\"header-anchor\">Examples</a></h2>");
+			output.putTag("<div class=\"documentation-comment unittest-description\">");
 			output.putTag(formatDocumentationComment(examples, decl));
+			output.putTag("</div>");
 
 			foreach(example; utInfo) {
-				output.putTag("<div class=\"unittest-example-holder\">");
+				output.putTag("<div class=\"documentation-comment unittest-example-holder\">");
 				output.putTag(formatDocumentationComment(preprocessComment(example[1]), decl));
 				output.putTag("</div>");
 				output.putTag("<pre class=\"d_code highlighted\">");
@@ -270,7 +277,9 @@ struct DocComment {
 
 		if(see_alsos.length) {
 			output.putTag("<h2 id=\"see-also\">See Also</h2>");
+			output.putTag("<div class=\"documentation-comment see-also-section\">");
 			output.putTag(formatDocumentationComment(see_alsos, decl));
+			output.putTag("</div>");
 		}
 
 		if(otherSections.keys.length) {
@@ -1269,6 +1278,7 @@ static this() {
 		"LREF" : `<a class="symbol-reference" href="$(MODULE_NAME).$0.html">$0</a>`,
 		"MREF" : `MAGIC`,
 		"WEB" : `<a href="http://$1">$2</a>`,
+		"HTTP" : `<a href="http://$1">$2</a>`,
 		"XREF_PACK_NAMED" : `<a href="std.$1.$2.$3.html">$4</a>`,
 
 		"RES": `<i>result</i>`,
@@ -1311,6 +1321,7 @@ static this() {
 		"T2" : 1,
 		"LEADINGROWN" : 2,
 		"WEB" : 2,
+		"HTTP" : 2,
 		"XREF_PACK_NAMED" : 4,
 		"DIVC" : 1,
 		"LINK2" : 2,
@@ -2182,16 +2193,18 @@ class MyFormatter(Sink) : Formatter!Sink {
 	{
 		debug(verbose) writeln("IdentifierOrTemplateInstance");
 
-		if(!suppressMagic)
-			putTag("<span class=\"some-ident\">");
+		bool suppressMagicGoingIn = suppressMagic;
+
+		//if(!suppressMagicGoingIn)
+			//putTag("<span class=\"some-ident\">");
 		with(identifierOrTemplateInstance)
 		{
 			format(identifier);
 			if (templateInstance)
 				format(templateInstance);
 		}
-		if(!suppressMagic)
-			putTag("</span>");
+		//if(!suppressMagicGoingIn)
+			//putTag("</span>");
 	}
 
 	version(none)

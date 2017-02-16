@@ -253,6 +253,8 @@ import std.algorithm, std.conv, std.exception, std.range, std.traits,
     std.typecons;
 version(unittest) import std.random, std.stdio;
 
+alias Ternary = std.experimental.allocator.common.Ternary;
+
 /**
 Dynamic allocator interface. Code that defines allocators ultimately implements
 this interface. This should be used wherever a uniform type is required for
@@ -1250,7 +1252,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     }
 
     /// Returns $(D impl.alignment).
-    override @property uint alignment()
+    @property uint alignment()
     {
         return impl.alignment;
     }
@@ -1258,7 +1260,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     /**
     Returns $(D impl.goodAllocSize(s)).
     */
-    override size_t goodAllocSize(size_t s)
+    size_t goodAllocSize(size_t s)
     {
         return impl.goodAllocSize(s);
     }
@@ -1266,7 +1268,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     /**
     Returns $(D impl.allocate(s)).
     */
-    override void[] allocate(size_t s, TypeInfo ti = null)
+    void[] allocate(size_t s, TypeInfo ti = null)
     {
         return impl.allocate(s);
     }
@@ -1275,7 +1277,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     If $(D impl.alignedAllocate) exists, calls it and returns the result.
     Otherwise, always returns `null`.
     */
-    override void[] alignedAllocate(size_t s, uint a)
+    void[] alignedAllocate(size_t s, uint a)
     {
         static if (hasMember!(Allocator, "alignedAllocate"))
             return impl.alignedAllocate(s, a);
@@ -1287,14 +1289,14 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     If `Allocator` implements `owns`, forwards to it. Otherwise, returns
     `Ternary.unknown`.
     */
-    override Ternary owns(void[] b)
+    Ternary owns(void[] b)
     {
         static if (hasMember!(Allocator, "owns")) return impl.owns(b);
         else return Ternary.unknown;
     }
 
     /// Returns $(D impl.expand(b, s)) if defined, $(D false) otherwise.
-    override bool expand(ref void[] b, size_t s)
+    bool expand(ref void[] b, size_t s)
     {
         static if (hasMember!(Allocator, "expand"))
             return impl.expand(b, s);
@@ -1303,7 +1305,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     }
 
     /// Returns $(D impl.reallocate(b, s)).
-    override bool reallocate(ref void[] b, size_t s)
+    bool reallocate(ref void[] b, size_t s)
     {
         return impl.reallocate(b, s);
     }
@@ -1342,7 +1344,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     it and returns $(D Ternary.yes) for $(D true), $(D Ternary.no) for $(D
     false).
     */
-    override bool deallocate(void[] b)
+    bool deallocate(void[] b)
     {
         static if (hasMember!(Allocator, "deallocate"))
         {
@@ -1358,7 +1360,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     Calls $(D impl.deallocateAll()) and returns $(D Ternary.yes) if defined,
     otherwise returns $(D Ternary.unknown).
     */
-    override bool deallocateAll()
+    bool deallocateAll()
     {
         static if (hasMember!(Allocator, "deallocateAll"))
         {
@@ -1374,7 +1376,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     Forwards to $(D impl.empty()) if defined, otherwise returns
     $(D Ternary.unknown).
     */
-    override Ternary empty()
+    Ternary empty()
     {
         static if (hasMember!(Allocator, "empty"))
         {
@@ -1389,7 +1391,7 @@ class CAllocatorImpl(Allocator, Flag!"indirect" indirect = No.indirect)
     /**
     Returns $(D impl.allocateAll()) if present, $(D null) otherwise.
     */
-    override void[] allocateAll()
+    void[] allocateAll()
     {
         static if (hasMember!(Allocator, "allocateAll"))
         {

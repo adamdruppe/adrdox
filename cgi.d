@@ -1243,6 +1243,7 @@ class Cgi {
 				throw new Exception("wtf is up with such a gigantic form submission????");
 
 			pps.buffer ~= chunk;
+
 			// simple handling, but it works... until someone bombs us with gigabytes of crap at least...
 			if(pps.buffer.length == pps.expectedLength)
 				pps._post = decodeVariables(cast(string) pps.buffer);
@@ -3639,6 +3640,8 @@ ByChunkRange byChunk(BufferedInputRange ir, size_t atMost) {
 		}
 
 		override void popFront() {
+			ir.consume(f.length);
+			atMost -= f.length;
 			auto a = ir.front();
 
 			if(a.length <= atMost) {
@@ -3987,12 +3990,27 @@ version(cgi_with_websocket) {
 
 }
 
+
+version(Windows)
+{
+    version(CRuntime_DigitalMars)
+    {
+        extern(C) int setmode(int, int) nothrow @nogc;
+    }
+    else version(CRuntime_Microsoft)
+    {
+        extern(C) int _setmode(int, int) nothrow @nogc;
+        alias setmode = _setmode;
+    }
+    else static assert(0);
+}
+
 /*
-Copyright: Adam D. Ruppe, 2008 - 2015
+Copyright: Adam D. Ruppe, 2008 - 2016
 License:   <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
 Authors: Adam D. Ruppe
 
-	Copyright Adam D. Ruppe 2008 - 2015.
+	Copyright Adam D. Ruppe 2008 - 2016.
 Distributed under the Boost Software License, Version 1.0.
    (See accompanying file LICENSE_1_0.txt or copy at
 	http://www.boost.org/LICENSE_1_0.txt)
