@@ -32,6 +32,8 @@ import std.algorithm :sort, canFind;
 import std.string;
 import std.conv : to;
 
+// FIXME: make See Also automatically list dittos that are not overloads
+
 enum skip_undocumented = true;
 
 static bool sorter(Decl a, Decl b) {
@@ -52,59 +54,80 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		if(epony) {
 			if(auto e = cast(FunctionDecl) epony) {
 				doFunctionDec(e, output);
+				return;
 			}
 		}
-		return;
 	}
 
 
-	static if(is(T == MixinTemplateDecl))
-		auto classDec = decl.astNode.templateDeclaration;
-	else
-		auto classDec = decl.astNode;
+	auto classDec = decl.astNode;
 
 	auto f = new MyFormatter!(typeof(output))(output, decl);
 
-	output.putTag("<div class=\"aggregate-prototype\">");
+	void writePrototype() {
+		output.putTag("<div class=\"aggregate-prototype\">");
 
-	if(decl.parent !is null && !decl.parent.isModule) {
-		output.putTag("<div class=\"parent-prototype\">");
-		decl.parent.getSimplifiedPrototype(output);
-		output.putTag("</div><div>");
-	}
+		if(decl.parent !is null && !decl.parent.isModule) {
+			output.putTag("<div class=\"parent-prototype\">");
+			decl.parent.getSimplifiedPrototype(output);
+			output.putTag("</div><div>");
+		}
 
-	writeAttributes(f, output, decl.attributes);
+		writeAttributes(f, output, decl.attributes);
 
-	output.putTag("<span class=\"builtin-type\">");
-	output.put(decl.declarationType);
-	output.putTag("</span>");
-	output.put(" ");
-	output.put(decl.name);
-	output.put(" ");
+		output.putTag("<span class=\"builtin-type\">");
+		output.put(decl.declarationType);
+		output.putTag("</span>");
+		output.put(" ");
+		output.put(decl.name);
+		output.put(" ");
 
-	foreach(idx, ir; decl.inheritsFrom()) {
-		if(idx == 0)
-			output.put(" : ");
-		else
-			output.put(", ");
-		if(ir.decl is null)
-			f.format(ir.ast);
-		else
-			output.putTag(`<a class="xref parent-class" href=`~ir.decl.link~`>`~ir.decl.name~`</a>`);
-	}
+		foreach(idx, ir; decl.inheritsFrom()) {
+			if(idx == 0)
+				output.put(" : ");
+			else
+				output.put(", ");
+			if(ir.decl is null)
+				f.format(ir.ast);
+			else
+				output.putTag(`<a class="xref parent-class" href=`~ir.decl.link~`>`~ir.decl.name~`</a> `);
+		}
 
-	if(classDec.templateParameters)
-		f.format(classDec.templateParameters);
-	if(classDec.constraint)
-		f.format(classDec.constraint);
+		if(classDec.templateParameters)
+			f.format(classDec.templateParameters);
+		if(classDec.constraint)
+			f.format(classDec.constraint);
 
-	// FIXME: invariant
+		// FIXME: invariant
 
-	if(decl.parent !is null && !decl.parent.isModule) {
+		output.put(" {");
+		foreach(child; decl.children) {
+			if(child.isPrivate())
+				continue;
+			// I want to show undocumented plain data members (if not private)
+			// since they might be used as public fields or in ctors for simple
+			// structs, but I'll skip everything else undocumented.
+			if(!child.isDocumented() && (cast(VariableDecl) child) is null)
+				continue;
+			output.putTag("<div class=\"aggregate-member\">");
+			if(child.isDocumented())
+				output.putTag("<a href=\""~child.link~"\"");
+			child.getAggregatePrototype(output);
+			if(child.isDocumented())
+				output.putTag("</a>");
+			output.putTag("</div>");
+		}
+		output.put("}");
+
+		if(decl.parent !is null && !decl.parent.isModule) {
+			output.putTag("</div>");
+		}
+
 		output.putTag("</div>");
 	}
 
-	output.putTag("</div>");
+
+	writeOverloads!writePrototype(decl, output);
 }
 
 
@@ -171,7 +194,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				td.addChild("span", toHtml(member.type)).addClass("enum-type");
 			}
 
-			td.addChild("span", member.name.text).addClass("enum-member-name");
+			td.addChild("a", member.name.text, "#" ~ member.name.text).addClass("enum-member-name");
 
 			if(member.assignExpression) {
 				td.addChild("span", toHtml(member.assignExpression)).addClass("enum-member-value");
@@ -268,7 +291,11 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			writeAttributes(f, output, decl.attributes);
 
 
-			static if(!is(typeof(functionDec) == const(Constructor))) {
+			static if(
+				!is(typeof(functionDec) == const(Constructor)) &&
+				!is(typeof(functionDec) == const(Postblit)) &&
+				!is(typeof(functionDec) == const(Destructor))
+			) {
 				output.putTag("<div class=\"return-type\">");
 
 				if (functionDec.hasAuto && functionDec.hasRef)
@@ -287,11 +314,14 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			}
 
 			output.putTag("<div class=\"function-name\">");
-			static if(is(typeof(functionDec) == const(Constructor)))
-				output.put("this");
-			else
-				output.put(functionDec.name.text);
+			output.put(decl.name);
 			output.putTag("</div>");
+
+			foreach(attr; decl.astNode.memberFunctionAttributes) {
+				f.format(attr);
+				output.put(" ");
+			}
+
 			output.putTag("<div class=\"template-parameters\">");
 			if (functionDec.templateParameters !is null)
 				f.format(functionDec.templateParameters);
@@ -329,6 +359,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 			if(decl.parent !is null && !decl.parent.isModule) {
 				output.putTag("</div>");
+				decl.parent.writeTemplateConstraint(output);
 			}
 
 			output.putTag("</div>");
@@ -337,17 +368,38 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		}
 
 
+		writeOverloads!writeFunctionPrototype(decl, output);
+	}
+
+	void writeOverloads(alias writePrototype, D : Decl)(D decl, ref MyOutputRange output) {
 		auto overloadsList = decl.getImmediateDocumentedOverloads();
 
+		// I'm treating dittos similarly to overloads
+		if(overloadsList.length == 1) {
+			overloadsList = decl.getDittos();
+		} else {
+			foreach(ditto; decl.getDittos()) {
+				if(!overloadsList.canFind(ditto))
+					overloadsList ~= ditto;
+			}
+		}
 		if(overloadsList.length > 1) {
 			import std.conv;
 			output.putTag("<ol class=\"overloads\">");
 			foreach(idx, item; overloadsList) {
+				assert(item.parent !is null);
 				string cn;
-				if(item !is decl)
+				Decl epony;
+				if(auto t = cast(TemplateDecl) item)
+					epony = t.eponymousMember;
+
+				if(item !is decl && decl !is epony)
 					cn = "overload-option";
 				else
 					cn = "active-overload-option";
+
+				if(item.name != decl.name)
+					cn ~= " ditto-option";
 
 				output.putTag("<li class=\""~cn~"\">");
 
@@ -365,16 +417,17 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 						output.putTag(`</a>`);
 				}
 
-				if(item is decl)
-					writeFunctionPrototype();
+				if(item is decl || decl is epony)
+					writePrototype();
 
 				output.putTag("</li>");
 			}
 			output.putTag("</ol>");
 		} else {
-			writeFunctionPrototype();
+			writePrototype();
 		}
 	}
+
 
 	void writeAttributes(F, W)(F formatter, W writer, const(VersionOrAttribute)[] attrs)
 	{
@@ -531,6 +584,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 	Element lastDt;
 	string dittoedName;
+	string dittoedComment;
 
 	void handleChildDecl(Element dl, Decl child) {
 		auto cc = parseDocumentationComment(child.comment, child);
@@ -548,7 +602,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		auto st = newDt.addChild("div", Html(sp)).addClass("simplified-prototype");
 		st.style.maxWidth = to!string(st.innerText.length * 11 / 10) ~ "ch";
 
-		if(child.isDitto() && lastDt !is null) {
+		if(child.isDitto && child.comment == dittoedComment && lastDt !is null) {
 			// ditto'd names don't need to be written again
 			if(child.name == dittoedName) {
 				if(sp == lastDt.requireSelector(".simplified-prototype").innerHTML)
@@ -560,6 +614,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		} else {
 			dl.addChild(newDt);
 			dl.addChild("dd", Html(cc.ddocSummary));
+			dittoedComment = child.comment;
 		}
 
 		lastDt = newDt;
@@ -582,11 +637,19 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			members ~= child;
 	}
 
+	if(decl.disabledDefaultConstructor) {
+		content.addChild("h2", "Disabled Default Constructor").id = "disabled-default-constructor";
+		auto div = content.addChild("div");
+		div.addChild("p", "A disabled default is present on this object. To use it, use one of the other constructors or a factory function.");
+	}
+
 	if(ctors.length) {
 		content.addChild("h2", "Constructors").id = "constructors";
 		auto dl = content.addChild("dl").addClass("member-list constructors");
 
 		foreach(child; ctors) {
+			if(child is decl.disabledDefaultConstructor)
+				continue;
 			handleChildDecl(dl, child);
 			writeHtml(child);
 		}
@@ -602,6 +665,12 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		}
 	}
 
+	if(auto at = decl.aliasThis) {
+		content.addChild("h2", "Alias This").id = "alias-this";
+		auto div = content.addChild("div");
+
+		div.addChild("a", at.name, at.link);
+	}
 
 	if(members.length) {
 		content.addChild("h2", "Members").id = "members";
@@ -664,7 +733,12 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
 	else if(auto fd = cast(TemplateDeclaration) decl.getAstNode())
 		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
-	else
+	else if(auto fd = cast(AliasDecl) decl) {
+		if(fd.initializer)
+			comment.writeDetails(output, fd.initializer, decl.getUnittestDocTuple());
+		else
+			comment.writeDetails(output, decl, decl.getUnittestDocTuple());
+	} else
 		comment.writeDetails(output, decl, decl.getUnittestDocTuple());
 
 	content.addChild("div", Html(s));
@@ -732,7 +806,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 			// cut off package names that would be repeated
 			auto name = (item.isModule && item.parent) ? lastDotOnly(item.name) : item.name;
-			auto n = list.addChild("li").addChild("a", name, item.link).addClass(item.declarationType);
+			auto n = list.addChild("li").addChild("a", name, item.link).addClass(item.declarationType.replace(" ", "-"));
 			if(item.name == decl.name)
 				n.addClass("current");
 		}
@@ -741,7 +815,6 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			if(auto d = document.querySelector("#details"))
 				d.removeFromTree;
 		} {
-			if(document.querySelectorAll(".user-header").length > 2)
 			if(auto d = document.querySelector("#more-link")) {
 				auto toc = Element.make("div");
 				toc.id = "table-of-contents";
@@ -799,13 +872,22 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 					addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
 				}
-				d.replaceWith(toc);
+				if(document.querySelectorAll(".user-header").length > 2)
+					d.replaceWith(toc);
 			}
 			skip_toc: {}
 		}
 
-		if(auto a = document.querySelector(".parameters-list"))
-			a.addClass("toplevel");
+		if(auto a = document.querySelector(".annotated-prototype"))
+			outer: foreach(c; a.querySelectorAll(".parameters-list")) {
+				auto p = c.parentNode;
+				while(p) {
+					if(p.hasClass("lambda-expression"))
+						continue outer;
+					p = p.parentNode;
+				}
+				c.addClass("toplevel");
+			}
 
 		// for line numbering
 		foreach(pre; document.querySelectorAll("pre.highlighted, pre.block-code[data-language!=\"\"]")) {
@@ -867,6 +949,10 @@ abstract class Decl {
 
 	abstract void getAnnotatedPrototype(MyOutputRange);
 	abstract void getSimplifiedPrototype(MyOutputRange);
+
+	void getAggregatePrototype(MyOutputRange r) {
+		getSimplifiedPrototype(r);
+	}
 
 	/* virtual */ void addSupplementalData(Element) {}
 
@@ -941,18 +1027,50 @@ abstract class Decl {
 		return false;
 	}
 
+	bool isAggregateMember() {
+		return parent ? !parent.isModule : false; // FIXME?
+	}
+
 	// does NOT look for aliased overload sets, just ones right in this scope
-	// includes this in the return. Check if overloaded with .length > 1
+	// includes this in the return (plus eponymous check). Check if overloaded with .length > 1
 	Decl[] getImmediateDocumentedOverloads() {
 		Decl[] ret;
 
-		if(this.parent !is null)
-		foreach(child; this.parent.children) {
-			if(child.name == this.name && child.isDocumented() && !child.isPrivate())
-				ret ~= child;
+		if(this.parent !is null) {
+			foreach(child; this.parent.children) {
+				if(child.name == this.name && child.isDocumented() && !child.isPrivate())
+					ret ~= child;
+			}
+			if(auto t = cast(TemplateDecl) this.parent)
+			if(this is t.eponymousMember)
+				ret ~= t.getImmediateDocumentedOverloads();
 		}
 
 		return ret;
+	}
+
+	Decl[] getDittos() {
+		if(this.parent is null)
+			return null;
+
+		size_t lastNonDitto;
+
+		foreach(idx, child; this.parent.children) {
+			if(!child.isDitto())
+				lastNonDitto = idx;
+			if(child is this) {
+				break;
+			}
+		}
+
+		size_t stop = lastNonDitto;
+		foreach(idx, child; this.parent.children[lastNonDitto + 1 .. $])
+			if(child.isDitto())
+				stop = idx + lastNonDitto + 1 + 1; // one +1 is offset of begin, other is to make sure it is inclusive
+			else
+				break;
+
+		return this.parent.children[lastNonDitto .. stop];
 	}
 
 	string link() {
@@ -1002,7 +1120,11 @@ abstract class Decl {
 
 	InheritanceResult[] inheritsFrom() { return null; }
 
-	Decl lookupName(string name, bool lookUp = true) {
+	// the excludeModules is meant to prevent circular lookups
+	Decl lookupName(string name, bool lookUp = true, string[] excludeModules = null) {
+		if(importedModules.length == 0 || importedModules[$-1].name != "object")
+			addImport("object", false);
+
 		if(name.length == 0)
 			return null;
 		string originalFullName = name;
@@ -1029,12 +1151,15 @@ abstract class Decl {
 					return child;
 
 			if(lookUp)
-			foreach(mod; subject.importedModules) {
+			lookup: foreach(mod; subject.importedModules) {
 				auto lookupInsideModule = originalFullName;
 				if(auto modDeclPtr = mod.name in modulesByName) {
 					auto modDecl = *modDeclPtr;
-					// FIXME: what if two modules import each other publicly? gross but we'll barf.
-					auto located = modDecl.lookupName(lookupInsideModule, mod.publicImport);
+
+					foreach(imod; excludeModules)
+						if(imod == modDeclPtr.name)
+							break lookup;
+					auto located = modDecl.lookupName(lookupInsideModule, mod.publicImport, excludeModules ~ this.parentModule.name);
 					if(located !is null)
 						return located;
 				}
@@ -1113,6 +1238,8 @@ abstract class Decl {
 
 	Decl parent;
 	Decl[] children;
+
+	void writeTemplateConstraint(MyOutputRange output);
 
 	const(VersionOrAttribute)[] attributes;
 
@@ -1212,6 +1339,28 @@ abstract class Decl {
 	abstract bool isDitto();
 	bool isModule() { return false; }
 	bool isConstructor() { return false; }
+
+	bool aliasThisPresent;
+	Token aliasThisToken;
+
+	Decl aliasThis() {
+		if(!aliasThisPresent)
+			return null;
+		else
+			return lookupName(aliasThisToken.text, false);
+	}
+
+	abstract bool isDisabled();
+
+	ConstructorDecl disabledDefaultConstructor() {
+		foreach(child; children)
+		if(child.isConstructor() && child.isDisabled()) {
+			auto ctor = cast(ConstructorDecl) child;
+			if(ctor.astNode.parameters || ctor.astNode.parameters.parameters.length == 0)
+				return ctor;
+		}
+		return null;
+	}
 }
 
 class ModuleDecl : Decl {
@@ -1261,18 +1410,21 @@ class AliasDecl : Decl {
 	}
 
 	override void getAnnotatedPrototype(MyOutputRange output) {
-		// FIXME - this isn't an aggregate
-		output.putTag("<div class=\"aggregate-prototype\">");
-		if(parent !is null && !parent.isModule) {
-			output.putTag("<div class=\"parent-prototype\"");
-			parent.getSimplifiedPrototype(output);
-			output.putTag("</div><div>");
-			getPrototype(output, true);
+		void cool() {
+			output.putTag("<div class=\"declaration-prototype\">");
+			if(parent !is null && !parent.isModule) {
+				output.putTag("<div class=\"parent-prototype\"");
+				parent.getSimplifiedPrototype(output);
+				output.putTag("</div><div>");
+				getPrototype(output, true);
+				output.putTag("</div>");
+			} else {
+				getPrototype(output, true);
+			}
 			output.putTag("</div>");
-		} else {
-			getPrototype(output, true);
 		}
-		output.putTag("</div>");
+
+		writeOverloads!cool(this, output);
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
@@ -1286,6 +1438,10 @@ class AliasDecl : Decl {
 		output.putTag("<span class=\"name\">");
 		output.put(name);
 		output.putTag("</span>");
+
+		if(initializer && initializer.templateParameters) {
+			output.putTag(toHtml(initializer.templateParameters).source);
+		}
 
 		output.put(" = ");
 
@@ -1346,8 +1502,7 @@ class VariableDecl : Decl {
 	}
 
 	override void getAnnotatedPrototype(MyOutputRange output) {
-		// FIXME - this isn't an aggregate
-		output.putTag("<div class=\"aggregate-prototype\">");
+		output.putTag("<div class=\"declaration-prototype\">");
 		if(parent !is null && !parent.isModule) {
 			output.putTag("<div class=\"parent-prototype\"");
 			parent.getSimplifiedPrototype(output);
@@ -1361,7 +1516,11 @@ class VariableDecl : Decl {
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
-		// FIXME: storage classes?
+		foreach(sc; astNode.storageClasses) {
+			output.putTag(toHtml(sc).source);
+			output.put(" ");
+		}
+
 		if(astNode.type)
 			output.putTag(toHtml(astNode.type).source);
 		else
@@ -1372,6 +1531,9 @@ class VariableDecl : Decl {
 		output.putTag("<span class=\"name\">");
 		output.put(name);
 		output.putTag("</span>");
+
+		if(declarator && declarator.templateParameters)
+			output.putTag(toHtml(declarator.templateParameters).source);
 	}
 
 	override string declarationType() {
@@ -1386,7 +1548,7 @@ class FunctionDecl : Decl {
 		doFunctionDec(this, output);
 	}
 
-	override Decl lookupName(string name, bool lookUp = true) {
+	override Decl lookupName(string name, bool lookUp = true, string[] excludeModules = null) {
 		// is it a param or template param? If so, return that.
 
 		foreach(param; astNode.parameters.parameters) {
@@ -1414,7 +1576,7 @@ class FunctionDecl : Decl {
 		}
 
 		if(lookUp)
-			return super.lookupName(name, lookUp);
+			return super.lookupName(name, lookUp, excludeModules);
 		else
 			return null;
 	}
@@ -1423,9 +1585,23 @@ class FunctionDecl : Decl {
 		return isProperty() ? "property" : (isStatic() ? "static function" : "function");
 	}
 
+	override void getAggregatePrototype(MyOutputRange output) {
+		if(isStatic()) {
+			output.putTag("<span class=\"storage-class\">static</span> ");
+			
+		}
+
+		getSimplifiedPrototype(output);
+	}
+
 	override void getSimplifiedPrototype(MyOutputRange output) {
-		if(isProperty() && (paramCount == 0 || paramCount == 1)) {
-			if(paramCount == 1) {
+		foreach(sc; astNode.storageClasses) {
+			output.putTag(toHtml(sc).source);
+			output.put(" ");
+		}
+
+		if(isProperty() && (paramCount == 0 || paramCount == 1 || (paramCount == 2 && !isAggregateMember))) {
+			if((paramCount == 1 && isAggregateMember()) || (paramCount == 2 && !isAggregateMember())) {
 				// setter
 				output.putTag(toHtml(astNode.parameters.parameters[0].type).source);
 				output.put(" ");
@@ -1467,13 +1643,45 @@ class ConstructorDecl : Decl {
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
-		output.putTag("<span class=\"name\">");
+		output.putTag("<span class=\"lang-feature name\">");
 		output.put("this");
 		output.putTag("</span>");
 		putSimplfiedArgs(output, astNode);
 	}
 
 	override bool isConstructor() { return true; }
+}
+
+class DestructorDecl : Decl {
+	mixin CtorFrom!Destructor;
+
+	override void getSimplifiedPrototype(MyOutputRange output) {
+		output.putTag("<span class=\"lang-feature name\">");
+		output.put("~this");
+		output.putTag("</span>");
+	}
+}
+
+class PostblitDecl : Decl {
+	mixin CtorFrom!Postblit;
+
+	override void getSimplifiedPrototype(MyOutputRange output) {
+		output.putTag("<span class=\"lang-feature name\">");
+		output.put("this(this)");
+		output.putTag("</span>");
+	}
+}
+
+class MixedInTemmplateDecl : Decl {
+	mixin CtorFrom!TemplateMixinExpression;
+
+	override string declarationType() {
+		return "mixin";
+	}
+
+	override void getSimplifiedPrototype(MyOutputRange output) {
+		output.putTag(toHtml(astNode).source);
+	}
 }
 
 class StructDecl : Decl {
@@ -1546,10 +1754,14 @@ class TemplateDecl : Decl {
 }
 
 class MixinTemplateDecl : Decl {
-	mixin CtorFrom!MixinTemplateDeclaration;
+	mixin CtorFrom!TemplateDeclaration; // MixinTemplateDeclaration does nothing interesting except this..
 
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		annotatedPrototype(this, output);
+	}
+
+	override string declarationType() {
+		return "mixin template";
 	}
 }
 
@@ -1611,9 +1823,24 @@ mixin template CtorFrom(T) {
 		return 0;
 	}
 
+	override void writeTemplateConstraint(MyOutputRange output) {
+		static if(__traits(compiles, astNode.constraint)) {
+			if(astNode.constraint) {
+				auto f = new MyFormatter!(typeof(output))(output);
+				output.putTag("<div class=\"template-constraint\">");
+				f.format(astNode.constraint);
+				output.putTag("</div>");
+			}
+		}
+	}
+
 	override string name() {
 		static if(is(T == Constructor))
 			return "this";
+		else static if(is(T == Destructor))
+			return "~this";
+		else static if(is(T == Postblit))
+			return "this(this)";
 		else static if(is(T == Module))
 			return _name is null ? .format(astNode.moduleDeclaration.moduleName) : _name;
 		else static if(is(T == AnonymousEnumDeclaration))
@@ -1629,7 +1856,9 @@ mixin template CtorFrom(T) {
 				return astNode.name.text;
 			else
 				return "__anonymous";
-		else
+		else static if(is(T == TemplateMixinExpression)) {
+			return astNode.identifier.text.length ? astNode.identifier.text : "__anonymous";
+		} else
 			return astNode.name.text;
 	}
 
@@ -1689,6 +1918,17 @@ mixin template CtorFrom(T) {
 			return astNode.comment;
 	}
 
+	override bool isDisabled() {
+		foreach(attribute; attributes)
+			if(attribute.attr && attribute.attr.atAttribute && attribute.attr.atAttribute.identifier.text == "disable")
+				return true;
+		static if(__traits(compiles, astNode.memberFunctionAttributes))
+		foreach(attribute; astNode.memberFunctionAttributes)
+			if(attribute && attribute.atAttribute && attribute.atAttribute.identifier.text == "disable")
+				return true;
+		return false;
+	}
+
 }
 
 
@@ -1737,6 +1977,16 @@ class Looker : ASTVisitor {
 	override void visit(const Constructor dec) {
 		stack[$-1].addChild(new ConstructorDecl(dec, attributes[$-1]));
 	}
+	override void visit(const TemplateMixinExpression dec) {
+		stack[$-1].addChild(new MixedInTemmplateDecl(dec, attributes[$-1]));
+	}
+	override void visit(const Postblit dec) {
+		stack[$-1].addChild(new PostblitDecl(dec, attributes[$-1]));
+	}
+	override void visit(const Destructor dec) {
+		stack[$-1].addChild(new DestructorDecl(dec, attributes[$-1]));
+	}
+
 	override void visit(const StructDeclaration dec) {
 		visitInto!StructDecl(dec);
 	}
@@ -1753,10 +2003,14 @@ class Looker : ASTVisitor {
 		visitInto!TemplateDecl(dec);
 	}
 	override void visit(const MixinTemplateDeclaration dec) {
-		visitInto!MixinTemplateDecl(dec);
+		visitInto!MixinTemplateDecl(dec.templateDeclaration);
 	}
 	override void visit(const EnumDeclaration dec) {
 		visitInto!EnumDecl(dec);
+	}
+	override void visit(const AliasThisDeclaration dec) {
+		stack[$-1].aliasThisPresent = true;
+		stack[$-1].aliasThisToken = dec.identifier;
 	}
 	override void visit(const AnonymousEnumDeclaration dec) {
 		// we can't do anything with an empty anonymous enum, we need a name from somewhere
@@ -1810,7 +2064,7 @@ class Looker : ASTVisitor {
 	}
 
 	override void visit(const ImportDeclaration id) {
-		foreach(si; id.singleImports) {
+		void handleSingleImport(const SingleImport si) {
 			auto newName = si.rename.text;
 			auto oldName = "";
 			foreach(idx, ident; si.identifierChain.identifiers) {
@@ -1828,8 +2082,16 @@ class Looker : ASTVisitor {
 					}
 			}
 			stack[$-1].addImport(oldName, isPublic);
-			// FIXME: handle the rest
+			// FIXME: handle the rest like newName
 		}
+
+
+		foreach(si; id.singleImports) {
+			handleSingleImport(si);
+		}
+
+		if(id.importBindings && id.importBindings.singleImport)
+			handleSingleImport(id.importBindings.singleImport); // FIXME: handle bindings
 
 	}
 
@@ -1995,7 +2257,7 @@ void main(string[] args) {
 			if(generate && false) { // FIXME
 			auto annotatedSourceDocument = new Document();
 			annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
-			auto code = Element.make("pre", Html(highlight(cast(string) b))).addClass("d_code highlighted");
+			auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root))).addClass("d_code highlighted");
 			addLineNumbering(code.requireSelector("pre"), true);
 			auto content = annotatedSourceDocument.requireElementById("page-content");
 			content.addChild(code);
@@ -2232,6 +2494,10 @@ void generateSearchIndex(Decl decl, ref int id) {
 	// and other names that are referenced are worth quite a bit.
 	foreach(tag; document.querySelectorAll(".xref"))
 		searchTerms[tag.innerText] ~= SearchResult(tid, tag.hasClass("parent-class") ? 10 : 5);
+	foreach(tag; document.querySelectorAll("a[data-ident][title]"))
+		searchTerms[tag.dataset.ident] ~= SearchResult(tid, 3);
+	foreach(tag; document.querySelectorAll("a.hid[title]"))
+		searchTerms[tag.innerText] ~= SearchResult(tid, 3);
 
 	// and full-text search
 	import ps = PorterStemmer;
@@ -2448,13 +2714,13 @@ string linkUpHtml(string s, Decl decl) {
 	auto document = new Document("<root>" ~ s ~ "</root>", true, true);
 
 	// additional cross referencing we weren't able to do at lower level
-	foreach(ident; document.querySelectorAll("*:not(a) [data-ident]:not(:has(a))")) {
+	foreach(ident; document.querySelectorAll("*:not(a) [data-ident]:not(:has(a)), .hid")) {
 		// since i modify the tree in the loop, i recheck that we still match the selector
 		if(ident.parentNode is null)
 			continue;
 		if(ident.tagName == "a" || (ident.parentNode && ident.parentNode.tagName == "a"))
 			continue;
-		auto i = ident.dataset.ident;
+		string i = ident.hasAttribute("data-ident") ? ident.dataset.ident : ident.innerText;
 
 		auto n = ident.nextSibling;
 		while(n && n.nodeValue == ".") {
@@ -2463,9 +2729,9 @@ string linkUpHtml(string s, Decl decl) {
 			n = n.nextSibling; // the span, ideally
 			if(n is null)
 				break;
-			if(n && n.hasAttribute("data-ident")) {
+			if(n && (n.hasAttribute("data-ident") || n.hasClass("hid"))) {
 				txt.removeFromTree();
-				i ~= n.dataset.ident;
+				i ~= n.hasAttribute("data-ident") ? n.dataset.ident : n.innerText;
 				auto span = n;
 				n = n.nextSibling;
 				span.removeFromTree;
@@ -2488,6 +2754,12 @@ string linkUpHtml(string s, Decl decl) {
 		}
 
 		if(found) {
+			auto overloads = found.getImmediateDocumentedOverloads();
+			if(overloads.length)
+				found = overloads[0];
+		}
+
+		if(found && found.isDocumented && !found.isPrivate) {
 			ident.attrs.title = found.fullyQualifiedName;
 			ident.tagName = "a";
 			ident.href = found.link ~ hash;

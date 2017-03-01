@@ -107,8 +107,10 @@ class Parser
             storageClasses ~= parseStorageClass();
             if (storageClasses.length > 0)
                 node.storageClasses = ownArray(storageClasses);
+	    /*
             warn("Prefer the new \"'alias' identifier '=' type ';'\" syntax"
                 ~ " to the  old \"'alias' type identifier ';'\" syntax");
+	*/
             mixin (nullCheck!`node.type = parseType()`);
             mixin (nullCheck!`node.identifierList = parseIdentifierList()`);
         }
@@ -2273,7 +2275,7 @@ class Parser
         {
             advance();
             Token[] tokens;
-            while (currentIs(tok!"stringLiteral"))
+            while (currentIs(tok!"stringLiteral") || currentIs(tok!"~"))
                 tokens ~= advance();
             node.stringLiterals = ownArray(tokens);
             mixin (nullCheck!`expect(tok!")")`);
@@ -3766,10 +3768,11 @@ class Parser
         case tok!"pure":
         case tok!"nothrow":
         case tok!"return":
+        case tok!"scope":
             node.tokenType = advance().type;
             break;
         default:
-            error(`Member funtion attribute expected`);
+            error(`Member function attribute expected`);
         }
         return node;
     }
@@ -4317,6 +4320,8 @@ class Parser
     {
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!Postblit;
+	node.comment = comment;
+	comment = null;
         expect(tok!"this");
         expect(tok!"(");
         expect(tok!"this");
@@ -4460,9 +4465,11 @@ class Parser
             mixin (nullCheck!`node.type = parseType()`);
             expect(tok!")");
             expect(tok!".");
+	    {
             const ident = expect(tok!"identifier");
             if (ident !is null)
                 node.primary = *ident;
+	    }
             break;
         mixin (BUILTIN_TYPE_CASES);
             node.basicType = advance();
@@ -5525,6 +5532,8 @@ class Parser
     {
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!TemplateMixinExpression;
+        node.comment = comment;
+        comment = null;
         if (expect(tok!"mixin") is null) { deallocate(node); return null; }
         mixin (nullCheck!`node.mixinTemplateName = parseMixinTemplateName()`);
         if (currentIs(tok!"!"))
@@ -6956,6 +6965,7 @@ protected:
         case tok!"pure":
         case tok!"nothrow":
         case tok!"return":
+        case tok!"scope":
             return true;
         default:
             return false;

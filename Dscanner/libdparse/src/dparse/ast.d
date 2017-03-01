@@ -2394,6 +2394,7 @@ public:
     }
     /** */ FunctionBody functionBody;
     /** */ MemberFunctionAttribute[] memberFunctionAttributes;
+    /** */ string comment;
     mixin OpEquals;
 }
 
@@ -2900,6 +2901,7 @@ public:
     /** */ Token identifier;
     /** */ TemplateArguments templateArguments;
     /** */ MixinTemplateName mixinTemplateName;
+    /** */ string comment;
     mixin OpEquals;
 }
 

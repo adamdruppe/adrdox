@@ -65,13 +65,38 @@ void searcher(Cgi cgi) {
 	struct Magic {
 		string decl;
 		int score;
+		Element declElement;
 	}
 	Magic[] magic;
 
 	foreach(decl, score; declScores)
-		magic ~= Magic(decl, score);
+		magic ~= Magic(decl, score, getDecl(decl));
+
+	// boosts based on topography
+	foreach(ref item; magic) {
+		auto decl = item.declElement;
+		if(decl.attrs.type == "module") {
+			// if it is a module, give it moar points
+			item.score += 8;
+			continue;
+		}
+		if(decl.parentNode.attrs.type == "module") {
+			item.score += 5;
+		}
+	}
 
 	sort!((a, b) => a.score > b.score)(magic);
+
+	// adjustments based on previously showing results
+	{
+		bool[string] alreadyPresent;
+		foreach(ref item; magic) {
+			auto decl = item.declElement;
+			if(decl.parentNode.id in alreadyPresent)
+				item.score -= 8;
+			alreadyPresent[decl.id] = true;
+		}
+	}
 
 	auto document = new Document();
 	document.parseUtf8(import("skeleton.html"), true, true);
@@ -105,6 +130,7 @@ void searcher(Cgi cgi) {
 	}
 
 	bool[string] alreadyPresent;
+	int count = 0;
 	foreach(idx, item; magic) {
 		Element decl = getDecl(item.decl);
 		if(decl is null) continue; // should never happen
@@ -115,7 +141,7 @@ void searcher(Cgi cgi) {
 		alreadyPresent[fqn] = true;
 		auto dt = ml.addChild("dt");
 		dt.addClass("search-result");
-		dt.addChild("a", fqn, link);
+		dt.addChild("a", fqn.replace(".", ".\u200B"), link);
 		dt.dataset.score = to!string(item.score);
 		auto html = decl.requireSelector("desc").innerText;
 		//auto d = new Document(html);
@@ -123,8 +149,9 @@ void searcher(Cgi cgi) {
 		//writeln();
 
 		ml.addChild("dd", Html(html));
+		count++;
 
-		if(idx >= 20)
+		if(count >= 20)
 			break;
 	}
 

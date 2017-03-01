@@ -154,51 +154,63 @@ struct DocComment {
 		auto f = new MyFormatter!(typeof(output))(output, decl);
 
 		if(params.length) {
-			output.putTag("<h2 id=\"parameters\">Parameters</h2>");
-			output.putTag("<dl class=\"parameter-descriptions\">");
+			int count = 0;
 			foreach(param; params) {
 				auto split = param.indexOf("=");
 				auto paramName = param[0 .. split];
 
 				if(!hasParam(functionDec, paramName, decl))
 					continue;
-
-				output.putTag("<dt id=\"param-"~param[0 .. split]~"\">");
-				output.putTag("<a href=\"#param-"~param[0 .. split]~"\" class=\"parameter-name\" data-ident=\"");
-					output.put(param[0 .. split]);
-				output.putTag("\">");
-				output.put(param[0 .. split]);
-				output.putTag("</a>");
-				output.putTag("</dt>");
-				output.putTag("<dd>");
-
-				static if(is(T == FunctionDeclaration) || is(T == Constructor))
-				if(functionDec !is null) {
-					const(Parameter)* paramAst;
-					foreach(ref p; functionDec.parameters.parameters) {
-						if(p.name.type != tok!"")
-							if(p.name.text == param[0 .. split]) {
-								paramAst = &p;
-								break;
-							}
-					}
-
-					if(paramAst) {
-						output.putTag("<div class=\"parameter-type-holder\">");
-						output.putTag("Type: ");
-						output.putTag("<span class=\"parameter-type\">");
-							f.format(paramAst.type);
-						output.putTag("</span>");
-						output.putTag("</div>");
-					}
-				}
-
-
-				output.putTag("<div class=\"documentation-comment\">");
-				output.putTag(formatDocumentationComment(param[split + 1 .. $], decl));
-				output.putTag("</div></dd>");
+				count++;
 			}
-			output.putTag("</dl>");
+
+			if(count) {
+				output.putTag("<h2 id=\"parameters\">Parameters</h2>");
+				output.putTag("<dl class=\"parameter-descriptions\">");
+				foreach(param; params) {
+					auto split = param.indexOf("=");
+					auto paramName = param[0 .. split];
+
+					if(!hasParam(functionDec, paramName, decl))
+						continue;
+
+					output.putTag("<dt id=\"param-"~param[0 .. split]~"\">");
+					output.putTag("<a href=\"#param-"~param[0 .. split]~"\" class=\"parameter-name\" data-ident=\"");
+						output.put(param[0 .. split]);
+					output.putTag("\">");
+					output.put(param[0 .. split]);
+					output.putTag("</a>");
+					output.putTag("</dt>");
+					output.putTag("<dd>");
+
+					static if(is(T == FunctionDeclaration) || is(T == Constructor))
+					if(functionDec !is null) {
+						const(Parameter)* paramAst;
+						foreach(ref p; functionDec.parameters.parameters) {
+							if(p.name.type != tok!"")
+								if(p.name.text == param[0 .. split]) {
+									paramAst = &p;
+									break;
+								}
+						}
+
+						if(paramAst) {
+							output.putTag("<div class=\"parameter-type-holder\">");
+							output.putTag("Type: ");
+							output.putTag("<span class=\"parameter-type\">");
+								f.format(paramAst.type);
+							output.putTag("</span>");
+							output.putTag("</div>");
+						}
+					}
+
+
+					output.putTag("<div class=\"documentation-comment\">");
+					output.putTag(formatDocumentationComment(param[split + 1 .. $], decl));
+					output.putTag("</div></dd>");
+				}
+				output.putTag("</dl>");
+			}
 		}
 
 		if(returns !is null) {
@@ -368,7 +380,8 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 	DocComment c;
 
 	if(decl.lineNumber)
-		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", Annotated source)$(BR)";
+		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", See Implementation)$(BR)";
+	// FIXME: add links to ddoc and ddox iff std.* or core.*
 
 	c.decl = decl;
 
@@ -486,6 +499,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				inSynopsis = false;
 				section = "date";
 			} else if(maybe.startsWith("bugs:")) {
+				line = line[line.indexOf(":")+1 .. $];
 				inSynopsis = false;
 				section = "bugs";
 			} else if(maybe.startsWith("macros:")) {
@@ -630,10 +644,19 @@ bool isIdentifierOrUrl(string text) {
 	if(text.length && text[0] == '#')
 		return true; // is local url link
 
+	bool seenHash;
+
 	import std.uni;
 	foreach(idx, dchar ch; text) {
-		if(!isIdentifierChar(idx, ch) && ch != '.')
+		if(!isIdentifierChar(idx, ch) && ch != '.') {
+			if(!seenHash && ch == '#') {
+				seenHash = true;
+				continue;
+			} else if(seenHash && ch == '-') {
+				continue;
+			}
 			return false;
+		}
 	}
 
 	// passed the ident test...
@@ -657,6 +680,12 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 	if(l != -1 || text.length && text[0] == '#')
 		text = text;
 	else {
+		auto hashIdx = text.indexOf("#");
+		if(hashIdx != -1) {
+			hash = text[hashIdx .. $];
+			text = text[0 .. hashIdx];
+		}
+
 		auto found = decl.lookupName(text);
 
 		className = "xref";
@@ -665,7 +694,7 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 			auto lastPieceIdx = text.lastIndexOf(".");
 			if(lastPieceIdx != -1) {
 				found = decl.lookupName(text[0 .. lastPieceIdx]);
-				if(found)
+				if(found && hash is null)
 					hash = "#" ~ text[lastPieceIdx + 1 .. $];
 			}
 		}
@@ -912,7 +941,8 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 			break;
 			case '[':
 				// wiki-style reference iff [[text]] or [[text|other text]]
-				// text MUST be either a valid D identifier chain or a fully-encoded http url.
+				// text MUST be either a valid D identifier chain, optionally with a section hash,
+				// or a fully-encoded http url.
 				// text may never include ']' or '|' or whitespace or ',' and must always start with '_' or alphabetic (like a D identifier or http url)
 				// other text may include anything except the string ']]'
 				// it balances [] inside it.
@@ -993,6 +1023,12 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 
 	if(termination !is null && !earlyTermination)
 		termination.remaining = null;
+
+	/*
+	if(div.firstChild !is null && div.firstChild.nodeType == NodeType.Text
+	   && div.firstChild.nextSibling !is null && div.firstChild.nextSibling.tagName == "p")
+	     div.firstChild.wrapIn(Element.make("p"));
+	*/
 
 	return div;
 }
@@ -1279,6 +1315,7 @@ static this() {
 		"MREF" : `MAGIC`,
 		"WEB" : `<a href="http://$1">$2</a>`,
 		"HTTP" : `<a href="http://$1">$2</a>`,
+		"BUGZILLA": `<a href="https://issues.dlang.org/show_bug.cgi?id=$1">https://issues.dlang.org/show_bug.cgi?id=$1</a>`,
 		"XREF_PACK_NAMED" : `<a href="std.$1.$2.$3.html">$4</a>`,
 
 		"RES": `<i>result</i>`,
@@ -1322,6 +1359,7 @@ static this() {
 		"LEADINGROWN" : 2,
 		"WEB" : 2,
 		"HTTP" : 2,
+		"BUGZILLA" : 1,
 		"XREF_PACK_NAMED" : 4,
 		"DIVC" : 1,
 		"LINK2" : 2,
@@ -1468,7 +1506,7 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			auto holder = Element.make("tt");
 			holder.className = "D highlighted";
 			try {
-				holder.innerHTML = highlight(stuff);
+				holder.innerHTML = linkUpHtml(highlight(stuff), decl);
 			} catch(Throwable t) {
 				holder.innerText = stuff;
 			}
@@ -1701,9 +1739,12 @@ string highlight(string sourceCode)
     auto tokens = byToken(cast(ubyte[]) sourceCode, config, &cache);
 
 
-    void writeSpan(string cssClass, string value)
+    void writeSpan(string cssClass, string value, string dataIdent = "")
     {
-        ret ~= `<span class="` ~ cssClass ~ `">` ~ value.replace("&", "&amp;").replace("<", "&lt;") ~ `</span>`;
+        ret ~= `<span class="` ~ cssClass ~ `" `;
+	if(dataIdent.length)
+		ret ~= "data-ident=\""~dataIdent~"\"";
+	ret ~= `>` ~ value.replace("&", "&amp;").replace("<", "&lt;") ~ `</span>`;
     }
 
 
@@ -1724,9 +1765,12 @@ string highlight(string sourceCode)
 		else if (isNumberLiteral(t.type))
 			writeSpan("num", t.text);
 		else if (isOperator(t.type))
-			writeSpan("op", str(t.type));
+			//writeSpan("op", str(t.type));
+			ret ~= str(t.type);
 		else if (t.type == tok!"specialTokenSequence" || t.type == tok!"scriptLine")
 			writeSpan("cons", t.text);
+		else if (t.type == tok!"identifier")
+			writeSpan("hid", t.text);
 		else
 		{
 			ret ~= t.text.replace("<", "&lt;");
@@ -1766,13 +1810,17 @@ class MyFormatter(Sink) : Formatter!Sink {
 
 	override void format(const TemplateParameterList templateParameterList)
 	{
+		putTag("<div class=\"parameters-list\">");
 		foreach(i, param; templateParameterList.items)
 		{
 			putTag("<div class=\"template-parameter-item parameter-item\">");
 			put("\t");
+			putTag("<span>");
 			format(param);
+			putTag("</span>");
 			putTag("</div>");
 		}
+		putTag("</div>");
 	}
 
 	override void format(const InStatement inStatement) {
@@ -1927,9 +1975,9 @@ class MyFormatter(Sink) : Formatter!Sink {
 
 			if (expression)
 			{
-				put("(");
+				putTag("<span class=\"parenthetical-expression\">(<span class=\"parenthetical-expression-contents\">");
 				format(expression);
-				put(")");
+				putTag("</span>)</span>");
 			}
 			else if (identifierOrTemplateInstance)
 			{
@@ -1940,7 +1988,7 @@ class MyFormatter(Sink) : Formatter!Sink {
 			else if (arrayLiteral) format(arrayLiteral);
 			else if (assocArrayLiteral) format(assocArrayLiteral);
 			else if (isExpression) format(isExpression);
-			//else if (lambdaExpression) format(lambdaExpression);
+			else if (lambdaExpression) { putTag("<span class=\"lambda-expression\">"); format(lambdaExpression); putTag("</span>"); }
 			else if (functionLiteralExpression) format(functionLiteralExpression);
 			else if (traitsExpression) format(traitsExpression);
 			else if (mixinExpression) format(mixinExpression);
@@ -2232,14 +2280,13 @@ class MyFormatter(Sink) : Formatter!Sink {
 		putTag("<div class=\"parameters-list\">");
 		foreach (count, param; parameters.parameters)
 		{
-			if (count) put("\n");
-			put("\t");
+			if (count) putTag("<span class=\"comma\">,</span>");
 			format(param);
 		}
 		if (parameters.hasVarargs)
 		{
 			if (parameters.parameters.length)
-				put("\n");
+				putTag("<span class=\"comma\">,</span>");
 			putTag("<div class=\"runtime-parameter-item parameter-item\">");
 			putTag("<a href=\"http://dpldocs.info/variadic-function-arguments\" class=\"lang-feature\">");
 			putTag("...");
@@ -2269,7 +2316,7 @@ class MyFormatter(Sink) : Formatter!Sink {
 			format(left);
 			if (right)
 			{
-				putTag(" &amp;&amp;</div><div class=\"andand-right\">");
+				putTag(" &amp;&amp; </div><div class=\"andand-right\">");
 				format(right);
 			}
 			putTag("</div>");
@@ -2284,7 +2331,7 @@ class MyFormatter(Sink) : Formatter!Sink {
 			format(left);
 			if (right)
 			{
-				putTag(" ||</div><div class=\"oror-right\">");
+				putTag(" || </div><div class=\"oror-right\">");
 				format(right);
 			}
 			putTag("</div>");
