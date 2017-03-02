@@ -554,7 +554,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 	auto content = document.requireElementById("page-content");
 
-	auto comment = parseDocumentationComment(decl.comment, decl);
+	auto comment = decl.parsedDocComment;
 
 	content.addChild("h1", title);
 
@@ -587,7 +587,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 	string dittoedComment;
 
 	void handleChildDecl(Element dl, Decl child) {
-		auto cc = parseDocumentationComment(child.comment, child);
+		auto cc = child.parsedDocComment;
 		string sp;
 		MyOutputRange or = MyOutputRange(&sp);
 		child.getSimplifiedPrototype(or);
@@ -613,7 +613,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			lastDt.addSibling(newDt);
 		} else {
 			dl.addChild(newDt);
-			dl.addChild("dd", Html(cc.ddocSummary));
+			dl.addChild("dd", Html(formatDocumentationComment(cc.ddocSummary, child)));
 			dittoedComment = child.comment;
 		}
 
@@ -633,6 +633,10 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			ctors ~= child;
 		else if(child.isModule)
 			submodules ~= child;
+		else if(cast(DestructorDecl) child)
+			 {} // intentionally blank
+		else if(cast(PostblitDecl) child)
+			 {} // intentionally blank
 		else
 			members ~= child;
 	}
@@ -655,6 +659,32 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		}
 	}
 
+	if(auto dtor = decl.destructor) {
+		content.addChild("h2", "Destructor").id = "destructor";
+		auto dl = content.addChild("dl").addClass("member-list");
+
+		if(dtor.isDocumented)
+			handleChildDecl(dl, dtor);
+		else
+			content.addChild("p", "A destructor is present on this object, but not explicitly documented in the source.");
+		//writeHtml(dtor);
+	}
+
+	if(auto postblit = decl.postblit) {
+		content.addChild("h2", "Postblit").id = "postblit";
+		auto dl = content.addChild("dl").addClass("member-list");
+
+		if(postblit.isDisabled())
+			content.addChild("p", "Copying this object is disabled.");
+
+		if(postblit.isDocumented)
+			handleChildDecl(dl, postblit);
+		else
+			content.addChild("p", "A postblit is present on this object, but not explicitly documented in the source.");
+		//writeHtml(dtor);
+	}
+
+
 	if(submodules.length) {
 		content.addChild("h2", "Modules").id = "modules";
 		auto dl = content.addChild("dl").addClass("member-list native");
@@ -670,6 +700,12 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		auto div = content.addChild("div");
 
 		div.addChild("a", at.name, at.link);
+
+		if(decl.aliasThisComment.length) {
+			auto memberComment = formatDocumentationComment(preprocessComment(decl.aliasThisComment), decl);
+			auto dc = div.addChild("div").addClass("documentation-comment");
+			dc.innerHTML = memberComment;
+		}
 	}
 
 	if(members.length) {
@@ -950,6 +986,13 @@ abstract class Decl {
 	abstract void getAnnotatedPrototype(MyOutputRange);
 	abstract void getSimplifiedPrototype(MyOutputRange);
 
+	DocComment parsedDocComment_;
+	final @property DocComment parsedDocComment() {
+		if(parsedDocComment_ is DocComment.init)
+			parsedDocComment_ = parseDocumentationComment(comment, this);
+		return parsedDocComment_;
+	}
+
 	void getAggregatePrototype(MyOutputRange r) {
 		getSimplifiedPrototype(r);
 	}
@@ -1042,8 +1085,11 @@ abstract class Decl {
 					ret ~= child;
 			}
 			if(auto t = cast(TemplateDecl) this.parent)
-			if(this is t.eponymousMember)
-				ret ~= t.getImmediateDocumentedOverloads();
+			if(this is t.eponymousMember) {
+				foreach(i; t.getImmediateDocumentedOverloads())
+					if(i !is t)
+						ret ~= i;
+			}
 		}
 
 		return ret;
@@ -1342,6 +1388,7 @@ abstract class Decl {
 
 	bool aliasThisPresent;
 	Token aliasThisToken;
+	string aliasThisComment;
 
 	Decl aliasThis() {
 		if(!aliasThisPresent)
@@ -1349,6 +1396,21 @@ abstract class Decl {
 		else
 			return lookupName(aliasThisToken.text, false);
 	}
+
+	DestructorDecl destructor() {
+		foreach(child; children)
+			if(auto dd = cast(DestructorDecl) child)
+				return dd;
+		return null;
+	}
+
+	PostblitDecl postblit() {
+		foreach(child; children)
+			if(auto dd = cast(PostblitDecl) child)
+				return dd;
+		return null;
+	}
+
 
 	abstract bool isDisabled();
 
@@ -1659,6 +1721,7 @@ class DestructorDecl : Decl {
 		output.putTag("<span class=\"lang-feature name\">");
 		output.put("~this");
 		output.putTag("</span>");
+		output.put("()");
 	}
 }
 
@@ -1666,6 +1729,12 @@ class PostblitDecl : Decl {
 	mixin CtorFrom!Postblit;
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
+		if(isDisabled) {
+			output.putTag("<span class=\"builtin-type\">");
+			output.put("@disable");
+			output.putTag("</span>");
+			output.put(" ");
+		}
 		output.putTag("<span class=\"lang-feature name\">");
 		output.put("this(this)");
 		output.putTag("</span>");
@@ -2011,6 +2080,7 @@ class Looker : ASTVisitor {
 	override void visit(const AliasThisDeclaration dec) {
 		stack[$-1].aliasThisPresent = true;
 		stack[$-1].aliasThisToken = dec.identifier;
+		stack[$-1].aliasThisComment = dec.comment;
 	}
 	override void visit(const AnonymousEnumDeclaration dec) {
 		// we can't do anything with an empty anonymous enum, we need a name from somewhere
@@ -2244,6 +2314,9 @@ void main(string[] args) {
 			if(b.startsWith(cast(ubyte[])"// just docs:"))
 				sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
 
+			if(sweet.root.name in modulesByName)
+				return; // it is here twice for some reason, do not double process
+
 			moduleDecls ~= sweet.root;
 			if(generate)
 				moduleDeclsGenerate ~= sweet.root;
@@ -2292,6 +2365,17 @@ void main(string[] args) {
 	}
 
 	args = args[1 .. $]; // remove program name
+
+	string[] generateFiles;
+	foreach(argIdx, arg; args) {
+		if(std.file.isDir(arg))
+			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth))
+				generateFiles ~= name;
+		else
+			generateFiles ~= arg;
+	}
+	args = generateFiles;
+
 
 	// Process them all first so name-lookups have more chance of working
 	foreach(argIdx, arg; preloadArgs) {
@@ -2657,13 +2741,13 @@ void writeIndexXml(Decl decl, File index, ref int id) {
 	if(decl.isPrivate() || !decl.isDocumented())
 		return;
 
-	auto cc = parseDocumentationComment(decl.comment, decl);
+	auto cc = decl.parsedDocComment;
 
 	// the id needs to match the search index!
 	index.write("<decl id=\"" ~ to!string(++id) ~ "\" type=\""~decl.declarationType~"\">");
 
 	index.write("<name>" ~ xmlEntitiesEncode(decl.name) ~ "</name>");
-	index.write("<desc>" ~ xmlEntitiesEncode(cc.ddocSummary) ~ "</desc>");
+	index.write("<desc>" ~ xmlEntitiesEncode(formatDocumentationComment(cc.ddocSummary, decl)) ~ "</desc>");
 	index.write("<link>" ~ xmlEntitiesEncode(decl.link) ~ "</link>");
 
 	foreach(child; decl.children)

@@ -117,6 +117,104 @@ bool hasParam(T)(const T dec, string name, Decl declObject, bool descend = true)
 	return false;
 }
 
+struct LinkReferenceInfo {
+	enum Type { none, text, link, image }
+	Type type;
+	bool isFootnote;
+	string text; // or alt
+	string link; // or src
+
+	string toHtml(string fun, string rt) {
+		if(rt is fun && text !is null && type != Type.text)
+			rt = text;
+
+		string display = isFootnote ? ("[" ~ rt ~ "]") : rt;
+
+		Element element;
+		final switch(type) {
+			case Type.none:
+				return null;
+			case Type.text:
+			case Type.link:
+				element = isFootnote ? Element.make("sup", "", "footnote-ref") : Element.make("span");
+				if(type == Type.text) {
+					element.addChild("abbr", display).setAttribute("title", text);
+				} else {
+					element.addChild("a", display, link);
+				}
+			break;
+			case Type.image:
+				element = Element.make("img", link, text);
+			break;
+		}
+
+		return element.toString();
+	}
+}
+LinkReferenceInfo getLinkReference(string name, Decl decl) {
+	bool numeric = (name.all!((ch) => ch >= '0' && ch <= '9'));
+
+	// FIXME: globals
+
+	try_again:
+	auto refs = decl.parsedDocComment.linkReferences;
+
+	if(name in refs) {
+		auto txt = refs[name];
+
+		assert(txt.length);
+
+		LinkReferenceInfo lri;
+
+		import std.uri;
+		auto l = uriLength(txt);
+		if(l != -1) {
+			lri.link = txt;
+			lri.type = LinkReferenceInfo.Type.link;
+		} else if(txt[0] == '$') {
+			// should be an image or plain text
+			if(txt.length > 5 && txt[0 .. 6] == "$(IMG " && txt[$-1] == ')') {
+				txt = txt[6 .. $-1];
+				auto idx = txt.indexOf(",");
+				if(idx == -1) {
+					lri.link = txt.strip;
+				} else {
+					lri.text = txt[idx + 1 .. $].strip;
+					lri.link = txt[0 .. idx].strip;
+				}
+				lri.type = LinkReferenceInfo.Type.image;
+			} else goto plain_text;
+		} else if(txt[0] == '[' && txt[$-1] == ']') {
+			txt = txt[1 .. $-1];
+			auto idx = txt.indexOf("|");
+			if(idx == -1) {
+				lri.link = txt;
+				lri.text = txt;
+			} else {
+				lri.link = txt[0 .. idx].strip;
+				lri.text = txt[idx + 1 .. $].strip;
+			}
+
+			lri.link = getReferenceLink(lri.link, decl).href;
+
+			lri.type = LinkReferenceInfo.Type.link;
+		} else {
+			plain_text:
+			lri.type = LinkReferenceInfo.Type.text;
+			lri.link = null;
+			lri.text = txt;
+		}
+
+		lri.isFootnote = numeric;
+		return lri;
+	} else if(!numeric && decl.parent !is null) {
+		decl = decl.parent;
+		goto try_again;
+	}
+
+	return LinkReferenceInfo.init;
+}
+
 struct DocComment {
 	string ddocSummary;
 	string synopsis;
@@ -133,13 +231,15 @@ struct DocComment {
 
 	string[string] otherSections;
 
+	string[string] linkReferences;
+
 	Decl decl;
 
 	bool synopsisEndedOnDoubleBlank;
 
 	void writeSynopsis(MyOutputRange output) {
 		output.putTag("<div class=\"documentation-comment synopsis\">");
-			output.putTag(synopsis);
+			output.putTag(formatDocumentationComment(synopsis, decl));
 			if(details !is synopsis && details.strip.length && details.strip != "<div></div>")
 				output.putTag(` <a id="more-link" href="#details">More...</a>`);
 		output.putTag("</div>");
@@ -244,7 +344,7 @@ struct DocComment {
 		if(details.strip.length && details.strip != "<div></div>") {
 			output.putTag("<h2 id=\"details\">Detailed Description</h2>");
 			output.putTag("<div class=\"documentation-comment detailed-description\">");
-				output.putTag(details);
+				output.putTag(formatDocumentationComment(details, decl));
 			output.putTag("</div>");
 		}
 
@@ -505,6 +605,9 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			} else if(maybe.startsWith("macros:")) {
 				inSynopsis = false;
 				section = "macros";
+			} else if(maybe.startsWith("link_references:")) {
+				inSynopsis = false;
+				section = "link_references";
 			} else if(maybe.isDdocSection()) {
 				inSynopsis = false;
 
@@ -568,6 +671,14 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				case "macros":
 					// ignoring for now
 				break;
+				case "link_references":
+					auto eql = line.indexOf("=");
+					if(eql != -1) {
+						string name = line[0 .. eql].strip;
+						string value = line[eql + 1 .. $].strip;
+						c.linkReferences[name] = value;
+					}
+				break;
 				case "returns":
 					c.returns ~= line ~ "\n";
 				break;
@@ -605,9 +716,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			}
 		}
 
-		c.ddocSummary = formatDocumentationComment(c.ddocSummary, decl);
-		c.synopsis = formatDocumentationComment(c.synopsis, decl);
-		c.details = formatDocumentationComment(remaining, decl);
+		c.details = remaining;
 		c.synopsisEndedOnDoubleBlank = synopsisEndedOnDoubleBlank;
 	}
 
@@ -959,11 +1068,21 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					fun = fun[0 .. idx2].strip;
 				}
 
-				if(!fun.isIdentifierOrUrl())
+				if(fun.all!((ch) => ch >= '0' && ch <= '9')) {
+					// footnote reference
+					auto lri = getLinkReference(fun, decl);
+					if(lri.type == LinkReferenceInfo.Type.none)
+						goto ordinary;
+					put(lri.toHtml(fun, rt));
+				} else if(!fun.isIdentifierOrUrl()) {
 					goto ordinary;
-
-				//FIXME
-				put(getReferenceLink(fun, decl, rt).toString);
+				} else {
+					auto lri = getLinkReference(fun, decl);
+					if(lri.type == LinkReferenceInfo.Type.none)
+						put(getReferenceLink(fun, decl, rt).toString);
+					else
+						put(lri.toHtml(fun, rt));
+				}
 
 				idx += txt.length;
 				idx --; // so the ++ in the for loop brings us back to i
@@ -1298,6 +1417,11 @@ static this() {
 		"DD" : "<dd>$0</dd>",
 		"LINK2" : "<a href=\"$1\">$2</a>",
 
+		"DDLINK": "<a href=\"http://dlang.org/$1\">$3</a>",
+		"DDSUBLINK": "<a href=\"http://dlang.org/$1#$2\">$3</a>",
+
+		"IMG": "<img src=\"$1\" alt=\"$2\" />",
+
 		"BLUE" : "<span style=\"color: blue;\">$0</span>",
 		"RED" : "<span style=\"color: red;\">$0</span>",
 
@@ -1363,6 +1487,9 @@ static this() {
 		"XREF_PACK_NAMED" : 4,
 		"DIVC" : 1,
 		"LINK2" : 2,
+		"DDLINK" : 3,
+		"DDSUBLINK" : 3,
+		"IMG" : 2,
 		"XREF" : 2,
 		"CXREF" : 2,
 		"SHORTXREF" : 2,
@@ -1766,7 +1893,7 @@ string highlight(string sourceCode)
 			writeSpan("num", t.text);
 		else if (isOperator(t.type))
 			//writeSpan("op", str(t.type));
-			ret ~= str(t.type);
+			ret ~= htmlEncode(str(t.type));
 		else if (t.type == tok!"specialTokenSequence" || t.type == tok!"scriptLine")
 			writeSpan("cons", t.text);
 		else if (t.type == tok!"identifier")

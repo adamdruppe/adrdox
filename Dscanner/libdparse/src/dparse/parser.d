@@ -155,6 +155,8 @@ class Parser
     {
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!AliasThisDeclaration;
+	node.comment = comment;
+	comment = null;
         mixin (nullCheck!`expect(tok!"alias")`);
         const ident = expect(tok!"identifier");
         mixin (nullCheck!`ident`);
