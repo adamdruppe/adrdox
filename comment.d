@@ -208,7 +208,6 @@ LinkReferenceInfo getLinkReference(string name, Decl decl) {
 			auto idx = txt.indexOf("|");
 			if(idx == -1) {
 				lri.link = txt;
-				lri.text = txt;
 			} else {
 				lri.link = txt[0 .. idx].strip;
 				lri.text = txt[idx + 1 .. $].strip;
@@ -518,16 +517,26 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 		bool inSynopsis = true;
 		bool justSawBlank = false;
 		bool inCode = false;
+		string inCodeStyle;
 		bool hasAnySynopsis = false;
 		bool inDdocSummary = true;
 		bool synopsisEndedOnDoubleBlank = false;
 		foreach(line; comment.splitter("\n")) {
 			auto maybe = line.strip.toLower;
 
-			if(maybe.startsWith("---")) {
+			if(maybe.startsWith("---") || maybe.startsWith("```")) {
 				justSawBlank = false;
-				inDdocSummary = false;
-				inCode = !inCode;
+
+				if(inCode && inCodeStyle == maybe[0 .. 3]) {
+					inCode = false;
+					inCodeStyle = null;
+				} else if(inCode)
+					goto ss; // just still inside code section
+				else {
+					inCodeStyle = maybe[0 .. 3];
+					inDdocSummary = false;
+					inCode = !inCode;
+				}
 			}
 			if(inCode){ 
 				justSawBlank = false;
@@ -633,6 +642,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			} else if(maybe.startsWith("link_references:")) {
 				inSynopsis = false;
 				section = "link_references";
+				line = line[line.indexOf(":")+1 .. $].strip;
 			} else if(maybe.isDdocSection()) {
 				inSynopsis = false;
 
@@ -702,6 +712,9 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 						string name = line[0 .. eql].strip;
 						string value = line[eql + 1 .. $].strip;
 						c.linkReferences[name] = value;
+					} else if(line.strip.length) {
+						section = null;
+						goto case_default;
 					}
 				break;
 				case "returns":
@@ -730,6 +743,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 					c.examples ~= line ~ "\n";
 				break;
 				default:
+				case_default:
 					if(inSynopsis) {
 						if(inDdocSummary)
 							c.ddocSummary ~= line ~ "\n";
@@ -1001,8 +1015,13 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					string code = outdent(stripRight(remaining[0 .. sliceEnding]));
 					Element ele;
 					// all these languages are close enough for hack good enough.
-					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php")
-						ele = div.addChild("pre", syntaxHighlightJavascript(code));
+					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php" || language == "c#" || language == "d")
+						ele = div.addChild("pre", syntaxHighlightCFamily(code, language));
+					else if(language == "css")
+						ele = div.addChild("pre", syntaxHighlightCss(code));
+
+					else if(language == "html" || language == "xml")
+						ele = div.addChild("pre", syntaxHighlightHtml(code));
 					else
 						ele = div.addChild("pre", code);
 					ele.addClass("block-code");
@@ -1355,6 +1374,7 @@ static this() {
 		"DT" : 1,
 		"DD" : 1,
 		"POST" : 1,
+		"DIV" : 1,
 
 		"DIVC" : 1,
 
@@ -1471,6 +1491,7 @@ static this() {
 		"POST": `<div class="postcondition">$0</div>`,
 		"COMMENT" : ``,
 
+		"DIV" : `<div>$0</div>`,
 		"DIVC" : `<div class="$1">$+</div>`,
 
 		// std.regex
@@ -2686,7 +2707,254 @@ Element translateList(string text, Decl decl, string tagName) {
 	return holder;
 }
 
-Html syntaxHighlightJavascript(string jsCode) {
+Html syntaxHighlightCss(string code) {
+	string highlighted;
+
+	while(code.length) {
+		switch(code[0]) {
+			case '\'':
+			case '\"':
+				// string literal
+				char start = code[0];
+				size_t i = 1;
+				while(i < code.length && code[i] != start && code[i] != '\n') {
+					if(code[i] == '\\')
+						i++; // skip escaped char too
+					i++;
+				}
+
+				i++; // skip closer
+				highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '/':
+				// check for comment
+				if(code.length > 1 && code[1] == '*') {
+					// a star comment
+					size_t i;
+					while((i+1) < code.length && !(code[i] == '*' && code[i+1] == '/'))
+						i++;
+
+					if(i < code.length)
+						i+=2; // skip the */
+
+					highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+					code = code[i .. $];
+				} else {
+					highlighted ~= '/';
+					code = code[1 .. $];
+				}
+			break;
+			case '<':
+				highlighted ~= "&lt;";
+				code = code[1 .. $];
+			break;
+			case '>':
+				highlighted ~= "&gt;";
+				code = code[1 .. $];
+			break;
+			case '&':
+				highlighted ~= "&amp;";
+				code = code[1 .. $];
+			break;
+
+			default:
+				highlighted ~= code[0];
+				code = code[1 .. $];
+		}
+	}
+
+	return Html(highlighted);
+}
+
+string highlightHtmlTag(string tag) {
+	string highlighted = "&lt;";
+
+	bool isWhite(char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+	}
+
+	tag = tag[1 .. $];
+
+	if(tag[0] == '/') {
+		highlighted ~= '/';
+		tag = tag[1 .. $];
+	}
+
+	int i = 0;
+	while(i < tag.length && !isWhite(tag[i]) && tag[i] != '>') {
+		i++;
+	}
+
+	highlighted ~= "<span class=\"highlighted-tag-name\">" ~ htmlEntitiesEncode(tag[0 .. i]) ~ "</span>";
+	tag = tag[i .. $];
+
+	while(tag.length && tag[0] != '>') {
+		while(isWhite(tag[0])) {
+			highlighted ~= tag[0];
+			tag = tag[1 .. $];
+		}
+
+		i = 0;
+		while(i < tag.length && tag[i] != '=' && tag[i] != '>')
+			i++;
+
+		highlighted ~= "<span class=\"highlighted-attribute-name\">" ~ htmlEntitiesEncode(tag[0 .. i]) ~ "</span>";
+		tag = tag[i .. $];
+
+		if(tag.length && tag[0] == '=') {
+			highlighted ~= '=';
+			tag = tag[1 .. $];
+			if(tag.length && (tag[0] == '\'' || tag[0] == '"')) {
+				char end = tag[0];
+				i = 1;
+				while(i < tag.length && tag[i] != end)
+					i++;
+				if(i < tag.length)
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-attribute-value\">" ~ htmlEntitiesEncode(tag[0 .. i]) ~ "</span>";
+				tag = tag[i .. $];
+			} else if(tag.length) {
+				i = 0;
+				while(i < tag.length && !isWhite(tag[i]))
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-attribute-value\">" ~ htmlEntitiesHighlight(tag[0 .. i]) ~ "</span>";
+				tag = tag[i .. $];
+			}
+		}
+	}
+
+
+	highlighted ~= htmlEntitiesEncode(tag);
+
+	return highlighted;
+}
+
+string htmlEntitiesHighlight(string code) {
+	string highlighted;
+
+	bool isWhite(char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+	}
+
+	while(code.length)
+	switch(code[0]) {
+		case '&':
+			// possibly an entity
+			int i = 0;
+			while(i < code.length && code[i] != ';' && !isWhite(code[i]))
+				i++;
+			if(i == code.length || isWhite(code[i])) {
+				highlighted ~= "&amp;";
+				code = code[1 .. $];
+			} else {
+				i++;
+				highlighted ~=
+					"<abbr class=\"highlighted-entity\" title=\"Attribute: "~code[0 .. i].replace("\"", "&quot;")~"\">" ~
+						htmlEntitiesEncode(code[0 .. i]) ~
+					"</abbr>";
+				code = code[i .. $];
+			}
+		break;
+		case '<':
+			highlighted ~= "&lt;";
+			code = code[1 .. $];
+		break;
+		case '"':
+			highlighted ~= "&quot;";
+			code = code[1 .. $];
+		break;
+		case '>':
+			highlighted ~= "&gt;";
+			code = code[1 .. $];
+		break;
+		default:
+			highlighted ~= code[0];
+			code = code[1 .. $];
+	}
+
+	return highlighted;
+}
+
+Html syntaxHighlightHtml(string code) {
+	string highlighted;
+
+	bool isWhite(char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+	}
+
+	while(code.length) {
+		switch(code[0]) {
+			case '<':
+				if(code.length > 1 && code[1] == '!') {
+					// comment or processing instruction
+
+					int i = 0;
+					while(i < code.length && code[i] != '>') {
+						i++;
+					}
+					if(i < code.length)
+						i++;
+
+					highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+					code = code[i .. $];
+					continue;
+				} else if(code.length > 1 && (code[1] == '/' || (code[1] >= 'a' && code[1] <= 'z') || (code[1] >= 'A' && code[1] <= 'Z'))) {
+					// possibly a tag
+					int i = 1;
+					while(i < code.length && code[i] != '>' && code[i] != '<')
+						i++;
+					if(i == code.length || code[i] == '<')
+						goto plain_lt;
+
+					auto tag = code[0 .. i + 1];
+
+					highlighted ~= "<span class=\"highlighted-tag\">" ~ highlightHtmlTag(tag) ~ "</span>";
+
+					code = code[i + 1 .. $];
+					continue;
+				}
+
+				plain_lt:
+				highlighted ~= "&lt;";
+				code = code[1 .. $];
+			break;
+			case '"':
+				highlighted ~= "&quot;";
+				code = code[1 .. $];
+			break;
+			case '>':
+				highlighted ~= "&gt;";
+				code = code[1 .. $];
+			break;
+			case '&':
+				// possibly an entity
+
+				int i = 0;
+				while(i < code.length && code[i] != ';' && !isWhite(code[i]))
+					i++;
+				if(i == code.length || isWhite(code[i])) {
+					highlighted ~= "&amp;";
+					code = code[1 .. $];
+				} else {
+					i++;
+					highlighted ~= htmlEntitiesHighlight(code[0 .. i]);
+					code = code[i .. $];
+				}
+			break;
+
+			default:
+				highlighted ~= code[0];
+				code = code[1 .. $];
+		}
+	}
+
+	return Html(highlighted);
+}
+
+Html syntaxHighlightCFamily(string jsCode, string language) {
 	string highlighted;
 
 	bool isJsIdentifierChar(char c) {
@@ -2716,6 +2984,7 @@ Html syntaxHighlightJavascript(string jsCode) {
 				highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
 				jsCode = jsCode[i .. $];
 			break;
+			// FIXME: preprocessor directive / PHP # comment
 			case '/':
 				// check for comment
 				// javascript also has that stupid regex literal, but screw it
@@ -2789,9 +3058,9 @@ Html syntaxHighlightJavascript(string jsCode) {
 					auto ident = jsCode[0 .. i];
 					jsCode = jsCode[i .. $];
 
-					if(["function", "for", "in", "while", "new", "if", "else", "switch", "return", "break", "do", "delete", "this", "super"].canFind(ident))
+					if(["function", "for", "in", "while", "new", "if", "else", "switch", "return", "break", "do", "delete", "this", "super", "continue", "goto"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-keyword\">" ~ ident ~ "</span>";
-					else if(["var", "const", "let", "int", "char", "class", "struct", "float", "double"].canFind(ident))
+					else if(["enum", "final", "virtual", "explicit", "var", "void", "const", "let", "int", "short", "unsigned", "char", "class", "struct", "float", "double", "typedef"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
 					else
 						highlighted ~= "<span>" ~ ident ~ "</span>";

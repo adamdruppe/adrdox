@@ -2418,11 +2418,7 @@ void main(string[] args) {
 	}
 
 	foreach(argIdx, arg; args) {
-		if(std.file.isDir(arg))
-			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth))
-				process(name, true);
-		else
-			process(arg, true);
+		process(arg, true);
 	}
 
 	// add modules to their packages, if possible
