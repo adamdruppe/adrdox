@@ -850,69 +850,78 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		if(justDocs) {
 			if(auto d = document.querySelector("#details"))
 				d.removeFromTree;
-		} {
-			if(auto d = document.querySelector("#more-link")) {
-				auto toc = Element.make("div");
-				toc.id = "table-of-contents";
-				auto current = toc;
-				int lastLevel;
-				foreach(header; document.root.tree) {
-					int level;
-					switch(header.tagName) {
-						case "h2":
-							level = 2;
-						break;
-						case "h3":
-							level = 3;
-						break;
-						case "h4":
-							level = 4;
-						break;
-						case "h5:":
-							level = 5;
-						break;
-						case "h6":
-							level = 6;
-						break;
-						default: break;
-					}
-
-					if(level == 0) continue;
-
-					if(level > lastLevel) {
-						current = current.addChild("ol");
-						current.addClass("heading-level-" ~ to!string(level));
-					} else if(level < lastLevel) {
-						while(current && !current.hasClass("heading-level-" ~ to!string(level)))
-							current = current.parentNode;
-						if(current is null) {
-							import std.stdio;
-							writeln("WARNING: TOC broken on " ~ decl.name);
-							goto skip_toc;
-						}
-						assert(current !is null);
-					}
-
-					lastLevel = level;
-					auto addTo = current;
-					if(addTo.tagName != "ol")
-						addTo = addTo.parentNode;
-
-					if(!header.hasAttribute("id"))
-						header.attrs.id = toId(header.innerText);
-					if(header.querySelector(" > *") is null) {
-						auto selfLink = Element.make("a", header.innerText, "#" ~ header.attrs.id);
-						selfLink.addClass("header-anchor");
-						header.innerHTML = selfLink.toString();
-					}
-
-					addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
-				}
-				if(document.querySelectorAll(".user-header").length > 2)
-					d.replaceWith(toc);
-			}
-			skip_toc: {}
 		}
+
+		auto toc = Element.make("div");
+		toc.id = "table-of-contents";
+		auto current = toc;
+		int lastLevel;
+		tree: foreach(header; document.root.tree) {
+			int level;
+			switch(header.tagName) {
+				case "h2":
+					level = 2;
+				break;
+				case "h3":
+					level = 3;
+				break;
+				case "h4":
+					level = 4;
+				break;
+				case "h5:":
+					level = 5;
+				break;
+				case "h6":
+					level = 6;
+				break;
+				default: break;
+			}
+
+			if(level == 0) continue;
+
+			auto parentCheck = header;
+			while(parentCheck) {
+				if(parentCheck.hasClass("adrdox-sample"))
+					continue tree;
+				parentCheck = parentCheck.parentNode;
+			}
+
+			if(level > lastLevel) {
+				current = current.addChild("ol");
+				current.addClass("heading-level-" ~ to!string(level));
+			} else if(level < lastLevel) {
+				while(current && !current.hasClass("heading-level-" ~ to!string(level)))
+					current = current.parentNode;
+				if(current is null) {
+					import std.stdio;
+					writeln("WARNING: TOC broken on " ~ decl.name);
+					goto skip_toc;
+				}
+				assert(current !is null);
+			}
+
+			lastLevel = level;
+			auto addTo = current;
+			if(addTo.tagName != "ol")
+				addTo = addTo.parentNode;
+
+			if(!header.hasAttribute("id"))
+				header.attrs.id = toId(header.innerText);
+			if(header.querySelector(" > *") is null) {
+				auto selfLink = Element.make("a", header.innerText, "#" ~ header.attrs.id);
+				selfLink.addClass("header-anchor");
+				header.innerHTML = selfLink.toString();
+			}
+
+			addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
+		}
+
+		if(auto d = document.querySelector("#more-link")) {
+			if(document.querySelectorAll(".user-header").length > 2)
+				d.replaceWith(toc);
+		}
+
+		skip_toc: {}
 
 		if(auto a = document.querySelector(".annotated-prototype"))
 			outer: foreach(c; a.querySelectorAll(".parameters-list")) {
@@ -2889,7 +2898,7 @@ string toText(T)(const T t) {
 }
 
 string toId(string txt) {
-	auto id = txt.toLower.strip.replace(" ", "-");
+	auto id = txt.toLower.strip.squeeze.replace(" ", "-");
 	return id;
 }
 

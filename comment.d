@@ -3060,7 +3060,7 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 
 					if(["function", "for", "in", "while", "new", "if", "else", "switch", "return", "break", "do", "delete", "this", "super", "continue", "goto"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-keyword\">" ~ ident ~ "</span>";
-					else if(["enum", "final", "virtual", "explicit", "var", "void", "const", "let", "int", "short", "unsigned", "char", "class", "struct", "float", "double", "typedef"].canFind(ident))
+					else if(["enum", "final", "virtual", "explicit", "var", "void", "const", "let", "int", "short", "unsigned", "char", "class", "struct", "float", "double", "typedef", "public", "protected", "private", "static"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
 					else
 						highlighted ~= "<span>" ~ ident ~ "</span>";
