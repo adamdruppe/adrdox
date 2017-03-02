@@ -1375,6 +1375,8 @@ static this() {
 		"DD" : 1,
 		"POST" : 1,
 		"DIV" : 1,
+		"SIDE_BY_SIDE" : 1,
+		"COLUMN" : 1,
 
 		"DIVC" : 1,
 
@@ -1492,6 +1494,8 @@ static this() {
 		"COMMENT" : ``,
 
 		"DIV" : `<div>$0</div>`,
+		"SIDE_BY_SIDE" : `<table class="side-by-side"><tbody><tr>$0</tr></tbody></table>`,
+		"COLUMN" : `<td>$0</td>`,
 		"DIVC" : `<div class="$1">$+</div>`,
 
 		// std.regex
