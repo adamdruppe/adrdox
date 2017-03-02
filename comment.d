@@ -151,13 +151,32 @@ struct LinkReferenceInfo {
 		return element.toString();
 	}
 }
+
+string[string] globalLinkReferences;
+
+void loadGlobalLinkReferences(string text) {
+	foreach(line; text.splitLines) {
+		line = line.strip;
+		if(line.length == 0)
+			continue;
+		auto idx = line.indexOf("=");
+		if(idx == -1)
+			continue;
+		auto name = line[0 .. idx].strip;
+		auto value = line[idx + 1 .. $].strip;
+		if(name.length == 0 || value.length == 0)
+			continue;
+		globalLinkReferences[name] = value;
+	}
+}
+
 LinkReferenceInfo getLinkReference(string name, Decl decl) {
 	bool numeric = (name.all!((ch) => ch >= '0' && ch <= '9'));
 
-	// FIXME: globals
+	bool onGlobal = false;
+	auto refs = decl.parsedDocComment.linkReferences;
 
 	try_again:
-	auto refs = decl.parsedDocComment.linkReferences;
 
 	if(name in refs) {
 		auto txt = refs[name];
@@ -207,8 +226,14 @@ LinkReferenceInfo getLinkReference(string name, Decl decl) {
 
 		lri.isFootnote = numeric;
 		return lri;
-	} else if(!numeric && decl.parent !is null) {
-		decl = decl.parent;
+	} else if(!onGlobal && !numeric) {
+		if(decl.parent !is null)
+			decl = decl.parent;
+		else {
+			onGlobal = true;
+			refs = globalLinkReferences;
+			// decl = null; // so I kinda want it to be null, but that breaks like everything so I can't.
+		}
 		goto try_again;
 	}
 

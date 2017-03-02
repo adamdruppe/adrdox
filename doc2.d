@@ -2266,11 +2266,14 @@ void main(string[] args) {
 	bool makeSearchIndex = false;
 
 	string[] preloadArgs;
+
+	string[] linkReferences;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
 		std.getopt.config.bundling,
 		"load", "Load for automatic cross-referencing, but do not generate for it", &preloadArgs,
+		"link-references", "A file defining global link references", &linkReferences,
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
@@ -2365,6 +2368,11 @@ void main(string[] args) {
 	}
 
 	args = args[1 .. $]; // remove program name
+
+	foreach(arg; linkReferences) {
+		import std.file;
+		loadGlobalLinkReferences(readText(arg));
+	}
 
 	string[] generateFiles;
 	foreach(argIdx, arg; args) {
