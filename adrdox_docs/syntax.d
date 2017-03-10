@@ -601,7 +601,7 @@ $(H2 Commenting stuff out in comments)
 
 The macro `$(COMMENT ...)` is removed from the generated document. You can use it to comment
 stuff out of your comment. Of course, you can also just use regular `/*` comments instead of
-`/++`.
+`/**`.
 
 +/
 module adrdox.syntax;

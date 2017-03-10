@@ -7,83 +7,138 @@ import std.conv : to;
 import std.algorithm : sort;
 import std.string : toLower, replace, split;
 
+class ProjectSearcher {
+	this() {
+		auto index = new Document();
+		index.parseUtf8(readText("experimental-docs/index.xml"), true, true);
 
-Document index;
-Document search;
+		foreach(element; index.querySelectorAll("adrdox > listing decl[id]"))
+			declById[element.attrs.id] = element;
+		foreach(element; index.querySelectorAll("adrdox > index term[value]"))
+			termByValue[element.attrs.value] = element;
+	}
 
-Element[string] declById;
-Element[string] termByValue;
+	int projectAdjustment = 0;
 
-static this() {
-	index = new Document();
-	index.parseUtf8(readText("experimental-docs/index.xml"), true, true);
-	search = new Document();
-	search.parseUtf8(readText("experimental-docs/search.xml"), true, true);
+	Element[] resultsByTerm(string term) {
+		if(auto t = term in termByValue) {
+			return (*t).querySelectorAll("result");
+		} else {
+			return null;
+		}
+	}
 
-	foreach(element; index.querySelectorAll("decl[id]"))
-		declById[element.attrs.id] = element;
-	foreach(element; search.querySelectorAll("term[value]"))
-		termByValue[element.attrs.value] = element;
-}
-
-Element[] resultsByTerm(string term) {
-	if(auto t = term in termByValue) {
-		return (*t).querySelectorAll("result");
-	} else {
+	Element getDecl(string i) {
+		if(auto a = i in declById)
+			return *a;
 		return null;
 	}
+
+
+	Element[string] declById;
+	Element[string] termByValue;
+
+	static struct Magic {
+		string declId;
+		int score;
+		Element decl;
+	}
+
+	Magic[] getPossibilities(string search) {
+		int[string] declScores;
+
+		int[string] declHits;
+
+		ps.PorterStemmer s;
+
+		auto terms = search.split(" ");// ~ search.split(".");
+		// filter empty terms
+		for(int i = 0; i < terms.length; i++) {
+			if(terms[i].length == 0) {
+				terms[i] = terms[$-1];
+				terms = terms[0 .. $-1];
+				i--;
+			}
+		}
+
+		void addHit(Element item, size_t idx) {
+			if(idx == 0) {
+				declScores[item.attrs.decl] += to!int(item.attrs.score);
+				return;
+			}
+			if(item.attrs.decl in declScores) {
+				declScores[item.attrs.decl] += 25; // hit both terms
+				declScores[item.attrs.decl] += to!int(item.attrs.score);
+			} else {
+				// only hit one term...
+				declScores[item.attrs.decl] += to!int(item.attrs.score) / 2;
+			}
+		}
+
+		// On each term, we want to check for exact match and fuzzy match / natural language match.
+		// FIXME: if something matches both it should be really strong. see time_t vs "time_t std.datetime"
+		foreach(idx, term; terms) {
+			assert(term.length > 0);
+
+			foreach(item; resultsByTerm(term)) {
+				addHit(item, idx);
+				declHits[item.attrs.decl] |= 1 << idx;
+			}
+			auto l = term.toLower;
+			if(l != term)
+			foreach(item; resultsByTerm(l)) {
+				addHit(item, idx);
+				declHits[item.attrs.decl] |= 1 << idx;
+			}
+			auto st = s.stem(term.toLower).idup;
+			if(st != l)
+			foreach(item; resultsByTerm(st)) {
+				addHit(item, idx);
+				declHits[item.attrs.decl] |= 1 << idx;
+			}
+		}
+
+		Magic[] magic;
+
+		foreach(decl, score; declScores) {
+			auto hits = declHits[decl];
+			foreach(idx, term; terms) {
+				if(!(hits & (1 << idx)))
+					score /= 2;
+			}
+			magic ~= Magic(decl, score + projectAdjustment, getDecl(decl));
+		}
+
+		// boosts based on topography
+		foreach(ref item; magic) {
+			auto decl = item.decl;
+			if(decl.attrs.type == "module") {
+				// if it is a module, give it moar points
+				item.score += 8;
+				continue;
+			}
+			if(decl.parentNode.attrs.type == "module") {
+				item.score += 5;
+			}
+		}
+
+		return magic;
+	}
+
 }
 
-Element getDecl(string i) {
-	if(auto a = i in declById)
-		return *a;
-	return null;
+ProjectSearcher[] projectSearchers;
+
+static this() {
+	projectSearchers ~= new ProjectSearcher();
 }
 
 void searcher(Cgi cgi) {
 	auto search = cgi.request("q", cgi.queryString);
 
-	int[string] declScores;
-
-	ps.PorterStemmer s;
-
-	// On each term, we want to check for exact match and fuzzy match / natural language match.
-	foreach(term; search.split(" ") ~ search.split(".")) {
-		if(term.length == 0) continue;
-		foreach(item; resultsByTerm(term))
-			declScores[item.attrs.decl] += to!int(item.attrs.score);
-		auto l = term.toLower;
-		if(l != term)
-		foreach(item; resultsByTerm(l))
-			declScores[item.attrs.decl] += to!int(item.attrs.score);
-		auto st = s.stem(term.toLower).idup;
-		if(st != l)
-		foreach(item; resultsByTerm(st))
-			declScores[item.attrs.decl] += to!int(item.attrs.score);
-	}
-
-	struct Magic {
-		string decl;
-		int score;
-		Element declElement;
-	}
-	Magic[] magic;
-
-	foreach(decl, score; declScores)
-		magic ~= Magic(decl, score, getDecl(decl));
-
-	// boosts based on topography
-	foreach(ref item; magic) {
-		auto decl = item.declElement;
-		if(decl.attrs.type == "module") {
-			// if it is a module, give it moar points
-			item.score += 8;
-			continue;
-		}
-		if(decl.parentNode.attrs.type == "module") {
-			item.score += 5;
-		}
-	}
+	ProjectSearcher.Magic[] magic;
+	foreach(searcher; projectSearchers)
+		magic ~= searcher.getPossibilities(search);
 
 	sort!((a, b) => a.score > b.score)(magic);
 
@@ -91,7 +146,7 @@ void searcher(Cgi cgi) {
 	{
 		bool[string] alreadyPresent;
 		foreach(ref item; magic) {
-			auto decl = item.declElement;
+			auto decl = item.decl;
 			if(decl.parentNode.id in alreadyPresent)
 				item.score -= 8;
 			alreadyPresent[decl.id] = true;
@@ -132,7 +187,7 @@ void searcher(Cgi cgi) {
 	bool[string] alreadyPresent;
 	int count = 0;
 	foreach(idx, item; magic) {
-		Element decl = getDecl(item.decl);
+		Element decl = item.decl;
 		if(decl is null) continue; // should never happen
 		auto link = "http://dpldocs.info/experimental-docs/" ~ decl.requireSelector("link").innerText;
 		auto fqn = getFqn(decl);

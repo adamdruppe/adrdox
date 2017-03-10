@@ -2,23 +2,25 @@ This is my documentation generator, the results of which can be seen on http://d
 
 You should be able to just clone it and run `make`, everything it needs is included.
 
-Once it is build, run `./doc2 path/to/your/package --directory where/html/goes`
+After you compile it, open skeleton.html and edit a few things to your liking. You may
+want to replace the contents of the `<div id="page-header">` and delete the suggestion
+box. You might also want to edit the style.css file. At the top, the first 20 lines or
+so define some basic colors. You can choose from the three I set or create your own scheme.
 
-It works best if you build a whole package at a time. You might want to hack the program
-to make the search and index (there are bools in main that enable this) and if you keep
-them in the current directory, it will be better at incremental builds.
+The rest of the css file is a monster, so you probably don't get to get far into it.
 
-Copy style.css and script.s into the directory along with the HTML, then open one of
-the files in your browser. You should see the result!
+Once you are ready, run `./doc2 path/to/your/package` For example, `./doc2 ~/code/arsd`.
+The generator will scan it automatically for .d files and generate output in a new `generated-docs`
+folder it will create.
+
+Then open one of the resulting files in your browser and you should see the results.
 
 Syntax is currently described here:
 
-http://dpldocs.info/experimental-docs/test.html
+http://dpldocs.info/experimental-docs/adrdox.syntax.html
 
-The skeleton.html file is used to change the page layout, if you want to.
-
-Edit the makefile to build locate.d if you want the search thing. Also edit the doc2.d
-to make the listing and search indexes (bools in main) to build them.
+Edit the makefile to build locate.d if you want the search thing. That is currently unsupported
+for other people (it just works on my server and is programmed with some assumptions).
 
 This is still pretty rough so don't expect too much yet.
 

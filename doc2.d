@@ -1,7 +1,7 @@
 module adrdox.main;
 
 string skeletonFile = "skeleton.html";
-string outputDirectory = "/var/www/dpldocs.info/experimental-docs/";
+string outputDirectory = "generated-docs";
 
 /*
 
@@ -1578,23 +1578,39 @@ class VariableDecl : Decl {
 			output.putTag("<div class=\"parent-prototype\"");
 			parent.getSimplifiedPrototype(output);
 			output.putTag("</div><div>");
-			getSimplifiedPrototype(output);
+			getSimplifiedPrototypeInternal(output, true);
 			output.putTag("</div>");
 		} else {
-			getSimplifiedPrototype(output);
+			getSimplifiedPrototypeInternal(output, true);
 		}
 		output.putTag("</div>");
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
+		getSimplifiedPrototypeInternal(output, false);
+	}
+
+	final void getSimplifiedPrototypeInternal(MyOutputRange output, bool link) {
 		foreach(sc; astNode.storageClasses) {
 			output.putTag(toHtml(sc).source);
 			output.put(" ");
 		}
 
-		if(astNode.type)
-			output.putTag(toHtml(astNode.type).source);
-		else
+		if(astNode.type) {
+			if(link) {
+				auto html = toHtml(astNode.type).source;
+				auto txt = toText(astNode.type);
+
+				auto typeDecl = lookupName(txt);
+				if(typeDecl is null || typeDecl.isPrivate || !typeDecl.isDocumented)
+					goto plain;
+
+				output.putTag("<a title=\""~typeDecl.fullyQualifiedName~"\" href=\""~typeDecl.link~"\">" ~ html ~ "</a>");
+			} else {
+				plain:
+				output.putTag(toHtml(astNode.type).source);
+			}
+		} else
 			output.putTag("<span class=\"builtin-type\">auto</span>");
 
 		output.put(" ");
@@ -2251,7 +2267,7 @@ string format(const IdentifierChain identifierChain) {
 import std.algorithm : startsWith, findSplitBefore;
 import std.string : strip;
 
-Decl[][string] packages;
+//Decl[][string] packages;
 ModuleDecl[string] modulesByName;
 
 void main(string[] args) {
@@ -2271,7 +2287,6 @@ void main(string[] args) {
 	ModuleDecl[] moduleDeclsGenerate;
 
 	bool makeHtml = true;
-	bool makeListing = false;
 	bool makeSearchIndex = false;
 
 	string[] preloadArgs;
@@ -2286,7 +2301,6 @@ void main(string[] args) {
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
-		"genListings|l", "Generate file listings, default: false", &makeListing,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
 	
 	if (outputDirectory[$-1] != '/')
@@ -2296,6 +2310,16 @@ void main(string[] args) {
 		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2017\n" ~
 			"Syntax: " ~ args[0] ~ " -hilo <docs> -s skeleton.html\n", opt.options);
 		return;
+	}
+
+	{
+		import std.file;
+		if(!exists(outputDirectory))
+			mkdir(outputDirectory);
+		if(!exists(outputDirectory ~ "style.css") || (timeLastModified(outputDirectory ~ "style.css") < timeLastModified("style.css")))
+			copy("style.css", outputDirectory ~ "style.css");
+		if(!exists(outputDirectory ~ "script.js") || (timeLastModified(outputDirectory ~ "script.js") < timeLastModified("script.js")))
+			copy("script.js", outputDirectory ~ "script.js");
 	}
 
 	// FIXME: maybe a zeroth path just grepping for a module declaration in located files
@@ -2336,10 +2360,11 @@ void main(string[] args) {
 			assert(mod !is null);
 			modulesByName[sweet.root.name] = mod;
 
-			packages[sweet.root.packageName] ~= sweet.root;
+			//packages[sweet.root.packageName] ~= sweet.root;
 
 
 			if(generate && false) { // FIXME
+			//if(generate) {
 			auto annotatedSourceDocument = new Document();
 			annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
 			auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root))).addClass("d_code highlighted");
@@ -2430,26 +2455,45 @@ void main(string[] args) {
 		process(arg, true);
 	}
 
+	// create dummy packages for those not found in the source
+	// this makes linking far more sane, without requiring package.d
+	// everywhere (though I still strongly recommending you write them!)
+		// I'm using for instead of foreach so I can append in the loop
+		// and keep it going
+	for(size_t i = 0; i < moduleDecls.length; i++ ) {
+		auto decl = moduleDecls[i];
+		auto pkg = decl.packageName;
+		if(pkg is null)
+			continue;
+		if(pkg !in modulesByName) {
+			writeln("Making FAKE package for ", pkg);
+			config.fileName = "dummy";
+			auto b = cast(ubyte[]) (`/++
+			+/ module `~pkg~`; `);
+			auto tokens = getTokensForParser(b, config, &stringCache);
+			auto m = parseModule(tokens, "dummy");
+			auto sweet = new Looker(b, "dummy");
+			sweet.visit(m);
+
+			auto mod = cast(ModuleDecl) sweet.root;
+
+			moduleDecls ~= mod;
+			modulesByName[pkg] = mod;
+
+			// only generate a fake one if the real one isn't already there
+			// like perhaps the real one was generated before but just not loaded
+			// this time.
+			if(!std.file.exists(outputDirectory ~ mod.link))
+				moduleDeclsGenerate ~= mod;
+		}
+	}
+
 	// add modules to their packages, if possible
 	foreach(decl; moduleDecls) {
 		auto pkg = decl.packageName;
 		if(auto a = pkg in modulesByName) {
 			(*a).addChild(decl);
 		}
-	}
-
-	if(makeListing) {
-		File index;
-		int id;
-		index = File(buildPath(outputDirectory, "index.xml"), "wt");
-
-		index.writeln("<listing>");
-		foreach(decl; moduleDeclsGenerate) {
-			writeln("Listing ", decl.name);
-
-			writeIndexXml(decl, index, id);
-		}
-		index.writeln("</listing>");
 	}
 
 	if(makeHtml) {
@@ -2463,26 +2507,41 @@ void main(string[] args) {
 	}
 
 	if(makeSearchIndex) {
-		// also making the search index
+
+		// we need the listing and the search index
+		File index;
 		int id;
+		index = File(buildPath(outputDirectory, "index.xml"), "wt");
+
+		index.writeln("<adrdox>");
+
+		index.writeln("<listing>");
+		foreach(decl; moduleDeclsGenerate) {
+			writeln("Listing ", decl.name);
+
+			writeIndexXml(decl, index, id);
+		}
+		index.writeln("</listing>");
+
+		// also making the search index
 		foreach(decl; moduleDeclsGenerate) {
 			writeln("Generating search for ", decl.name);
 
 			generateSearchIndex(decl, id);
 		}
 
-		writeln("Writing search.xml");
+		writeln("Writing search...");
 
-		auto file = File(buildPath(outputDirectory, "search.xml"), "wt");
-		file.writeln("<index>");
+		index.writeln("<index>");
 		foreach(term, arr; searchTerms) {
-			file.write("<term value=\""~term~"\">");
+			index.write("<term value=\""~term~"\">");
 			foreach(item; arr) {
-				file.write("<result decl=\""~to!string(item.declId)~"\" score=\""~to!string(item.score)~"\" />");
+				index.write("<result decl=\""~to!string(item.declId)~"\" score=\""~to!string(item.score)~"\" />");
 			}
-			file.writeln("</term>");
+			index.writeln("</term>");
 		}
-		file.writeln("</index>");
+		index.writeln("</index>");
+		index.writeln("</adrdox>");
 	}
 }
 
