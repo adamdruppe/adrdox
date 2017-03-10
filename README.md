@@ -2,7 +2,7 @@ This is my documentation generator, the results of which can be seen on http://d
 
 You should be able to just clone it and run `make`, everything it needs is included.
 
-After you compile it, open skeleton.html and edit a few things to your liking. You may
+After you compile it, you can copy skeleton-default.html to skeleton.html and edit a few things  inside it to your liking (or you can leave it and the generator will copy it automatically on first run). You may
 want to replace the contents of the `<div id="page-header">` and delete the suggestion
 box. You might also want to edit the style.css file. At the top, the first 20 lines or
 so define some basic colors. You can choose from the three I set or create your own scheme.

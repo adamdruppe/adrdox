@@ -2314,6 +2314,10 @@ void main(string[] args) {
 
 	{
 		import std.file;
+
+		if(!exists(skeletonFile) && exists("skeleton-default.html"))
+			copy("skeleton-default.html", skeletonFile);
+
 		if(!exists(outputDirectory))
 			mkdir(outputDirectory);
 		if(!exists(outputDirectory ~ "style.css") || (timeLastModified(outputDirectory ~ "style.css") < timeLastModified("style.css")))
