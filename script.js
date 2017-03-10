@@ -13,6 +13,13 @@ window.onload = function() {
 				all[i].className = all[i].className.replace(" active", "");
 		}
 	});
+	/*
+	document.body.addEventListener("dblclick", function(event) {
+		if(event.target.hasAttribute("data-ident")) {
+			location.href = "/" + event.target.getAttribute("data-ident");
+		}
+	});
+	*/
 
 	var sn = document.getElementById("source-navigation");
 	if(sn) {

@@ -1,5 +1,49 @@
+/* a few things you can change to pick a basic color scheme */
+
+#page-header,
+#suggestion-box {
+	background-color: rgb(49, 57, 176);
+	background-color: rgb(49, 110, 47);
+	background-color: rgb(176, 57, 49);
+}
+
+#page-header,
+#suggestion-box,
+#page-footer,
+#page-nav {
+	border-color: rgb(41, 48, 148);
+	border-color: rgb(41, 110, 48);
+	border-color: rgb(148, 48, 41);
+}
+
+#page-nav {
+	background-color: rgb(245, 245, 255);
+	background-color: rgb(245, 250, 245);
+	background-color: rgb(245, 245, 255);
+
+}
+
+a:link {
+	color: #0000ff;
+	color: #880000;
+}
+
+a:visited {
+	color: #004488;
+	color: #880066;
+}
+
+
+
+/* done with basic colors */
+
 body {
 	font-family: sans-serif;
+	color: #111;
+}
+
+.big-o {
+	white-space: nowrap;
 }
 
 .member-list .dt,
@@ -16,8 +60,8 @@ pre {
 	height: 32px;
 	line-height: 32px;
 	margin-bottom: 6px;
-	background-color: rgb(176, 57, 49);
-	border-bottom: solid 1px rgb(148, 48, 41);
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
 	color: white;
 	margin: -0.5em;
 	padding: 0em 0.5em;
@@ -72,8 +116,8 @@ pre {
 
 	overflow: hidden;
 
-	background-color: rgb(245, 245, 256);
-	border-right: solid 1px rgb(148, 48, 41);
+	border-right-style: solid;
+	border-right-width: 1px;
 	box-sizing: border-box;
 }
 
@@ -96,7 +140,8 @@ pre {
 		display: block;
 		width: auto;
 		max-width: 800px;
-		border-top: solid 1px rgb(148, 48, 41);
+		border-top-style: solid;
+		border-top-width: 1px;
 		border-right: none;
 		min-height: 0px;
 	}
@@ -122,7 +167,8 @@ pre {
 	color: #999;
 	font-size: 80%;
 	text-align: center;
-	border-top: solid 1px rgb(148, 48, 41);
+	border-top-style: solid;
+	border-top-width: 1px;
 }
 
 a:link {
@@ -150,8 +196,19 @@ pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border
 .highlighted .type { color: #268bd2; font-weight: bold;  }
 .highlighted .cons { color: #859900; font-weight: bold;  }
 
-.documentation-comment {
+/* .member-list p, */
+#table-of-contents,
+.enum-members,
+.documentation-comment .tip,
+.documentation-comment .note,
+.documentation-comment .warning,
+.documentation-comment .pitfall,
+.documentation-comment li,
+.documentation-comment p {
 	/* white-space: pre-line; */
+	max-width: 70ch;
+	font-size: 15px;
+	line-height: 1.5;
 }
 
 /*
@@ -166,6 +223,18 @@ pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border
 
 .aggregate-declaration {
     margin: 1em;
+}
+
+.aggregate-member {
+	padding-left: 2em;
+}
+
+.aggregate-member::after {
+	content: ";";
+}
+
+.aggregate-member > a {
+	color: inherit;
 }
 
 .template-constraint-expression,
@@ -232,6 +301,7 @@ ol.overloads + .function-prototype {
 	background-color: #ccc;
 }
 
+.declaration-prototype,
 .aggregate-prototype,
 .function-prototype {
 	border: solid 1px #ccc;
@@ -239,6 +309,10 @@ ol.overloads + .function-prototype {
 	margin: 1em;
 	font-family: monospace;
 	position: relative;
+}
+
+.declaration-prototype {
+	padding: 3em 2em;
 }
 
 .parameters-list:empty {
@@ -261,6 +335,10 @@ ol.overloads + .function-prototype {
 
 .toplevel.parameters-list > .parameter-item > *:first-child {
 	padding-left: 2em !important;
+}
+
+.toplevel.parameters-list > .parameter-item + .comma {
+	display: none;
 }
 
 .toplevel.parameters-list > .parameter-item > *:last-child::after {
@@ -299,14 +377,14 @@ ol.overloads + .function-prototype {
 .type-constructor,
 .builtin-type {
 	text-decoration: none;
-	color: green;
+	color: green !important;
 	font-weight: bold;
 }
 
 .lang-feature,
 .storage-class {
 	text-decoration: none;
-	color: #888800;
+	color: #888800 !important;
 	font-weight: bold;
 }
 
@@ -341,6 +419,7 @@ table.enum-members {
 
 .enum-members .enum-member-name {
 	font-weight: bold;
+	color: inherit;
 }
 
 .enum-members .enum-member-value {
@@ -421,6 +500,28 @@ table.enum-members {
 	display: inline;
 }
 
+.parenthetical-expression > .parenthetical-expression-contents > .andand-left,
+.parenthetical-expression > .parenthetical-expression-contents > .oror-left {
+	display: inline;
+}
+
+/*
+.parenthetical-expression > .parenthetical-expression-contents > .oror-left:first-child {
+	display: block;
+}
+*/
+
+
+.template-constraint-expression .parenthetical-expression {
+	display: block;
+	margin-left: 1em;
+}
+
+.oror-left > .andand-left,
+.oror-left > .andand-right {
+	display: inline;
+}
+
 .aggregate-members:empty::after {
 	content: "This aggregate has no documented members available.";
 }
@@ -492,11 +593,16 @@ h1 .entity-name {
 	background: #f3f3f3;
 	border: solid 1px #ccc;
 	width: 20%;
+	min-width: 30ch;
 	clear: right;
 }
 
 h2 {
 	clear: both;
+}
+
+.sidebar > *:first-child {
+	margin-top: 0px;
 }
 
 /* I want to clear floats. This leaves a gap about the size of a blank line
@@ -646,7 +752,6 @@ pre.console {
 #suggestion-box {
 	display: inline-block;
 	color: white;
-	background-color: rgb(176, 57, 49);
 	font-weight: bold;
 	border: solid 2px black;
 	border-radius: 8px 8px 0px 0px;
@@ -673,7 +778,7 @@ a.xref:link span[data-ident].active {
 }
 
 .parent-prototype {
-	font-size: 75%;
+	font-size: 90%;
 	padding-bottom: 1em;
 }
 
@@ -688,7 +793,7 @@ a.xref:link span[data-ident].active {
 .parent-prototype + div::after {
 	content: "}";
 	display: block;
-	font-size: 75%;
+	font-size: 90%;
 	padding-top: 1em;
 	margin-left: -1.33em; /* 1/(3/4) */
 }
@@ -725,6 +830,16 @@ table.std_math.special-values caption {
 	color: red;
 }
 
+.overload-option,
+.overload-signature {
+	font-family: monospace;
+}
+
+.block-code,
+.d_code,
+.annotated-prototype {
+	font-size: 14px;
+}
 
 .annotated-prototype .overloads {
 	display: block;
@@ -758,15 +873,37 @@ table.std_math.special-values caption {
 	text-overflow: ellipsis;
 }
 
+.annotated-prototype .overloads li.ditto-option::before,
 .annotated-prototype .overloads li.active-overload-option .overload-signature::before,
 .annotated-prototype .overloads li.overload-option::before {
-	content: "Overload: ";
-	display: inline;
+	display: inline-block;
+	width: 6em;
+	width: 9ch;
+	font-size: 12px;
+	vertical-align: baseline;
 }
 
+.annotated-prototype .overloads li.overload-option::before {
+	content: "Overload: ";
+}
+
+.annotated-prototype .overloads li.active-overload-option .overload-signature::before {
+	content: "Viewing: ";
+}
+
+.annotated-prototype .overloads li.ditto-option::before {
+	content: "Related: ";
+}
+
+.annotated-prototype li .declaration-prototype,
+.annotated-prototype li .aggregate-prototype,
 .annotated-prototype li .function-prototype {
 	border: none;
 	padding: 0px;
+}
+
+.annotated-prototype li .declaration-prototype {
+	padding: 2em 0px;
 }
 
 #page-nav ul {
@@ -896,7 +1033,25 @@ blockquote {
 .highlighted-comment {
 	color: blue;
 }
+.highlighted-tag {
+	color: #00cdcd
+}
+.highlighted-tag-name {
+	color: #859900;
+}
+.highlighted-entity {
+	color: #cd00cd;
+	text-decoration: none;
+	cursor: help;
+}
+.highlighted-attribute-name {
+	color: green;
+}
+.highlighted-attribute-value {
+	color: red;
+}
 
+/*
 .with-line-wrappers {
 	counter-reset: line_numbers;
 }
@@ -907,12 +1062,14 @@ blockquote {
 
 .with-line-wrappers span.br::before {
 	content: counter(line_numbers);
+*/
+.with-line-wrappers .br {
 	-webkit-user-select: none;
 	-moz-user-select: none;
 	-ms-user-select: none;
 	user-select: none;
 
-	width: 3ch;
+	width: 4ch;
 	display: inline-block;
 	color: #999;
 	border-right: solid 2px #ccc;
@@ -924,6 +1081,16 @@ blockquote {
 	font-weight: normal;
 	background-color: transparent;
 	text-align: right;
+}
+.with-line-wrappers .br:target {
+	background: #ffffbb;
+}
+
+.thousand-lines.with-line-wrappers .br {
+	width: 5ch;
+}
+.ten-thousand-lines.with-line-wrappers .br {
+	width: 6ch;
 }
 
 #source-navigation {
@@ -993,5 +1160,52 @@ blockquote {
 }
 
 .header-anchor {
+	color: inherit !important;
+}
+
+#members + h3,
+.member-list + h3 {
+	border-bottom: solid 1px #333;
+}
+
+tr.leading-row th {
+	border-bottom: solid 2px black;
+}
+
+.lambda-expression * {
+	display: inline !important;
+	padding: 0px !important;
+	margin: 0px !important;
+}
+
+.footnote-ref a {}
+.footnote-ref abbr {
+	font-variant: none;
+	text-decoration: none;
+	cursor: help;
+}
+
+.side-by-side {
+	table-layout: fixed;
+	border: none;
+}
+
+.side-by-side > tbody > tr > td {
+	vertical-align: top;
+}
+
+/*
+tt.D {
+	font-weight: bold;
+	background: transparent;
 	color: inherit;
+}
+*/
+
+tt.D.highlighted *:not(a) {
+	font-weight: inherit;
+	color: inherit;
+}
+tt.D.highlighted a {
+	color: #500000;
 }
