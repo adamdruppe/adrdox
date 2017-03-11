@@ -1,3 +1,5 @@
+// FIXME: load the new search-results.html and pull out the xml from there
+
 import ps = PorterStemmer;
 import arsd.cgi;
 import arsd.dom;

@@ -9,9 +9,13 @@ so define some basic colors. You can choose from the three I set or create your 
 
 The rest of the css file is a monster, so you probably don't get to get far into it.
 
-Once you are ready, run `./doc2 path/to/your/package` For example, `./doc2 ~/code/arsd`.
+Once you are ready, run `./doc2 -i path/to/your/package` For example, `./doc2 ~/code/arsd`.
 The generator will scan it automatically for .d files and generate output in a new `generated-docs`
 folder it will create.
+
+NOTE: the `-i` flag means "generate search index". It will create a full-text search index that can be loaded by `locate.d` or by javascript (the default skeleton includes a search form that will work with the JS search). The JS search kinda sucks but can be used offline (just open the file in your browser) or on a static site like github pages.
+
+You may omit the -i if you choose, the file it generates can be quite large so you don't always want it, but then the search form won't work unless you build locate.d and configure your setup to serve it (currently not supported for third parties, but that is what I do on dpldocs.info).
 
 Then open one of the resulting files in your browser and you should see the results.
 

@@ -795,6 +795,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 				}
 			}
 		} else {
+		/+ commented pending removal
 			// this is for building the module nav when doing an incremental
 			// rebuild. It loads the index.xml made with the special option below.
 			static bool attemptedXmlLoad;
@@ -814,6 +815,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			foreach(im; indexedModules)
 				if(im.packageName == tm.packageName)
 					navArray ~= im;
+		+/
 		}
 
 		{
@@ -2515,7 +2517,31 @@ void main(string[] args) {
 		// we need the listing and the search index
 		File index;
 		int id;
-		index = File(buildPath(outputDirectory, "index.xml"), "wt");
+
+		static import std.file;
+
+		// write out the landing page for JS search,
+		// see the comment in the source of that html
+		// for more details
+		std.file.write(outputDirectory ~ "search-docs.html", import("search-docs.html"));
+
+
+		// the search index is a HTML page containing some script
+		// and the index XML. See the source of search-docs.js for more info.
+		index = File(buildPath(outputDirectory, "search-results.html"), "wt");
+
+		auto skeletonDocument = new Document();
+		skeletonDocument.parseUtf8(std.file.readText(skeletonFile), true, true);
+		auto skeletonText = skeletonDocument.toString();
+
+		auto idx = skeletonText.indexOf("</body>");
+		if(idx == -1) throw new Exception("skeleton missing body element");
+
+		// write out the skeleton...
+		index.writeln(skeletonText[0 .. idx]);
+
+		// and then the data container for the xml
+		index.writeln(`<script type="text/xml" id="search-index-container">`);
 
 		index.writeln("<adrdox>");
 
@@ -2526,6 +2552,8 @@ void main(string[] args) {
 			writeIndexXml(decl, index, id);
 		}
 		index.writeln("</listing>");
+
+		id = 0;
 
 		// also making the search index
 		foreach(decl; moduleDeclsGenerate) {
@@ -2538,7 +2566,7 @@ void main(string[] args) {
 
 		index.writeln("<index>");
 		foreach(term, arr; searchTerms) {
-			index.write("<term value=\""~term~"\">");
+			index.write("<term value=\""~xmlEntitiesEncode(term)~"\">");
 			foreach(item; arr) {
 				index.write("<result decl=\""~to!string(item.declId)~"\" score=\""~to!string(item.score)~"\" />");
 			}
@@ -2546,6 +2574,17 @@ void main(string[] args) {
 		}
 		index.writeln("</index>");
 		index.writeln("</adrdox>");
+
+		// finish the container
+		index.writeln("</script>");
+
+		// write the script that runs the search
+		index.writeln("<script>");
+		index.write(import("search-docs.js"));
+		index.writeln("</script>");
+
+		// and close the skeleton
+		index.writeln("</body></html>");
 	}
 }
 
