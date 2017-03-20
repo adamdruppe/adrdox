@@ -764,18 +764,18 @@ Document writeHtml(Decl decl, bool forReal = true) {
 	s = null;
 
 	if(auto fd = cast(FunctionDeclaration) decl.getAstNode())
-		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(Constructor) decl.getAstNode())
-		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(TemplateDeclaration) decl.getAstNode())
-		comment.writeDetails(output, fd, decl.getUnittestDocTuple());
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(AliasDecl) decl) {
 		if(fd.initializer)
-			comment.writeDetails(output, fd.initializer, decl.getUnittestDocTuple());
+			comment.writeDetails(output, fd.initializer, decl.getProcessedUnittests());
 		else
-			comment.writeDetails(output, decl, decl.getUnittestDocTuple());
+			comment.writeDetails(output, decl, decl.getProcessedUnittests());
 	} else
-		comment.writeDetails(output, decl, decl.getUnittestDocTuple());
+		comment.writeDetails(output, decl, decl.getProcessedUnittests());
 
 	content.addChild("div", Html(s));
 
@@ -1056,6 +1056,9 @@ abstract class Decl {
 	bool isStatic() {
 		foreach (a; attributes) {
 			if(a.attr && a.attr.attribute.type == tok!"static")
+				return true;
+			// gshared also implies static (though note that shared does not!)
+			if(a.attr && a.attr.attribute.type == tok!"__gshared")
 				return true;
 		}
 
@@ -1339,10 +1342,23 @@ abstract class Decl {
 		unittests ~= Unittest(ut, (cast(char[]) code).idup, comment);
 	}
 
-	import std.typecons;
-	Tuple!(string, string)[] getUnittestDocTuple() {
+	struct ProcessedUnittest {
+		string code;
+		string comment;
+		bool embedded;
+	}
+
+	bool _unittestsProcessed;
+	ProcessedUnittest[] _processedUnittests;
+
+	ProcessedUnittest[] getProcessedUnittests() {
+		if(_unittestsProcessed)
+			return _processedUnittests;
+
+		_unittestsProcessed = true;
+
 		// source, comment
-		Tuple!(string, string)[] ret;
+		ProcessedUnittest[] ret;
 
 		Decl start = this;
 		if(isDitto()) {
@@ -1369,12 +1385,13 @@ abstract class Decl {
 			if(started)
 				foreach(test; child.unittests)
 					if(test.comment.length)
-						ret ~= tuple(test.code, test.comment);
+						ret ~= ProcessedUnittest(test.code, test.comment);
 		}
 		else
 			foreach(test; this.unittests)
 				if(test.comment.length)
-					ret ~= tuple(test.code, test.comment);
+					ret ~= ProcessedUnittest(test.code, test.comment);
+		_processedUnittests = ret;
 		return ret;
 	}
 
@@ -2294,6 +2311,8 @@ void main(string[] args) {
 	string[] preloadArgs;
 
 	string[] linkReferences;
+
+	bool annotateSource = false;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -2303,6 +2322,7 @@ void main(string[] args) {
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
+		"genSource|u", "Generate annotated source", &annotateSource,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
 	
 	if (outputDirectory[$-1] != '/')
@@ -2310,7 +2330,7 @@ void main(string[] args) {
 
 	if (opt.helpWanted || args.length == 1) {
 		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2017\n" ~
-			"Syntax: " ~ args[0] ~ " -hilo <docs> -s skeleton.html\n", opt.options);
+			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
 		return;
 	}
 
@@ -2369,36 +2389,35 @@ void main(string[] args) {
 			//packages[sweet.root.packageName] ~= sweet.root;
 
 
-			if(generate && false) { // FIXME
-			//if(generate) {
-			auto annotatedSourceDocument = new Document();
-			annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
-			auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root))).addClass("d_code highlighted");
-			addLineNumbering(code.requireSelector("pre"), true);
-			auto content = annotatedSourceDocument.requireElementById("page-content");
-			content.addChild(code);
+			if(generate && annotateSource) {
+				auto annotatedSourceDocument = new Document();
+				annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
+				auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root))).addClass("d_code highlighted");
+				addLineNumbering(code.requireSelector("pre"), true);
+				auto content = annotatedSourceDocument.requireElementById("page-content");
+				content.addChild(code);
 
-			auto nav = annotatedSourceDocument.requireElementById("page-nav");
+				auto nav = annotatedSourceDocument.requireElementById("page-nav");
 
-			void addDeclNav(Element nav, Decl decl) {
-				auto li = nav.addChild("li");
-				if(decl.isDocumented && !decl.isPrivate)
-					li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
-				li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
-				if(decl.children.length)
-					nav = li.addChild("ul");
-				foreach(child; decl.children)
-					addDeclNav(nav, child);
+				void addDeclNav(Element nav, Decl decl) {
+					auto li = nav.addChild("li");
+					if(decl.isDocumented && !decl.isPrivate)
+						li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
+					li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
+					if(decl.children.length)
+						nav = li.addChild("ul");
+					foreach(child; decl.children)
+						addDeclNav(nav, child);
 
-			}
+				}
 
-			auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
+				auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
 
-			addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), mod);
+				addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), mod);
 
-			annotatedSourceDocument.title = mod.name ~ " source code";
+				annotatedSourceDocument.title = mod.name ~ " source code";
 
-			std.file.write(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString());
+				std.file.write(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString());
 			}
 
 
@@ -3000,7 +3019,7 @@ string toText(T)(const T t) {
 }
 
 string toId(string txt) {
-	auto id = txt.toLower.strip.squeeze.replace(" ", "-");
+	auto id = txt.toLower.strip.squeeze(" ").replace(" ", "-");
 	return id;
 }
 

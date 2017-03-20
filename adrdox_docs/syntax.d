@@ -177,7 +177,9 @@ $(CONSOLE
 
 $(H3 Documented unittests)
 
-I also implemented the feature from ddoc where unittests with a documentation comment are appended to the examples section of the previous documented declaration.
+$(SIDEBAR Why does it allow inline examples? I often write full examples that I want to present in the prose, but I also like the compile check the unittests provide. So to get best of both worlds, I had to do it myself.)
+
+I also implemented the feature from ddoc where unittests with a documentation comment are appended to the examples section of the previous documented declaration. They will appear in an `Examples` section (together with any others you manually write in `Examples:`), or inline in the documentation if you give them an `$(ID some_unique_name)` in the doc comment of the unittest, and write `$(EMBED_UNITTEST some_unique_name)` somewhere in your body text. Both the test and its associated comment will be moved to that location instead of being put in the examples section.
 
 $(H2 Cross-referencing)
 
@@ -477,6 +479,70 @@ $(LIST
 	* `$(U underlined text)`
 	* `$(SUPERSCRIPT superscript text)`
 	* `$(SUB subscript text)`
+)
+
+$(H3 Adding ID and class attributes to HTML)
+
+You can add an ID or class attribute to an HTML tag by putting `$(ID id_here)` or `$(CLASS class_here)` inside a ddoc macro. It must be inside a `$(ddoc_style)` macro to be recognized.
+
+$(H2 Ddoc Sections)
+
+$(H3 List of supported DDoc Sections)
+
+$(LIST
+	* `Examples:` or `Example:` gives usage examples. Documented unittests, if present and not embedded (see [#documented-unittests]), will also appear here.
+	* `Bugs:`
+	* `See_Also:`
+	* `Returns:`
+	* `Throws:`
+	* `Deprecated:`
+	* `Params:` uses a special `name = comment` syntax, just like ddoc, where only param names detected are printed.
+	* `Macros:` are read, but ignored.
+)
+
+$(H3 Meta subsections)
+
+The following sections, if present, will be grouped under the `Meta` header:
+
+$(LIST
+	* `Authors:` or `Author:`
+	* `Date`
+	* `License:`
+	* `Source:`
+	* `History:`
+	* `Credits:`
+	* `Standards:`
+	* `Copyright:`
+	* `Version:`
+)
+
+$(H3 Adrdox extension sections)
+
+$(LIST
+	* `Diagnostics:` is a place to describe common errors you will see while trying to use the function, and explain how to fix them.
+	* `Link_References:` does name=value. See [#footnotes].
+	$(COMMENT * `Adrdox_Meta:` intrduces metadata for the generator. See [#metadata] )
+)
+
+$(H3 Custom sections)
+
+If you start a line with `some_section:`, it will become a custom section in the document. It must have at least one underscore to be recognizes as a custom section.
+
+$(COMMENT
+$(H2 Metadata)
+
+FIXME: NOT IMPLEMENTED
+
+You can add metadata about your project to a `Adrdox_Meta:` section in the doc comment attached to the module declaration. These are inherited by submodules in your project as long as the package.d with the definition is loaded (see `--load` or passed as command line arg to be generated).
+
+It can define:
+$(LINK
+	* Project name
+	* Project logo image
+	* Project homepage
+	* Project color scheme: light or dark and accent color
+	* Scripts for the project
+)
 )
 
 $(H2 Footnotes)

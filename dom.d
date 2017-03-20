@@ -406,7 +406,7 @@ class Document : FileResource {
 		}
 
 		void eatWhitespace() {
-			while(pos < data.length && (data[pos] == ' ' || data[pos] == '\n' || data[pos] == '\t'))
+			while(pos < data.length && (data[pos] == ' ' || data[pos] == '\n' || data[pos] == '\t' || data[pos] == '\r'))
 				pos++;
 		}
 
@@ -415,7 +415,7 @@ class Document : FileResource {
 			// basically just keep going until >, /, or whitespace
 			auto start = pos;
 			while(  data[pos] != '>' && data[pos] != '/' &&
-				data[pos] != ' ' && data[pos] != '\n' && data[pos] != '\t')
+				data[pos] != ' ' && data[pos] != '\n' && data[pos] != '\t' && data[pos] != '\r')
 			{
 				pos++;
 				if(pos == data.length) {
@@ -437,7 +437,7 @@ class Document : FileResource {
 			// basically just keep going until >, /, or whitespace
 			auto start = pos;
 			while(  data[pos] != '>' && data[pos] != '/'  && data[pos] != '=' &&
-				data[pos] != ' ' && data[pos] != '\n' && data[pos] != '\t')
+				data[pos] != ' ' && data[pos] != '\n' && data[pos] != '\t' && data[pos] != '\r')
 			{
 				if(data[pos] == '<') {
 					if(strict)
@@ -977,6 +977,7 @@ class Document : FileResource {
 						case ' ':
 						case '\t':
 						case '\n':
+						case '\r':
 							// there might be attributes...
 							moreAttributes:
 							eatWhitespace();
@@ -1141,6 +1142,12 @@ class Document : FileResource {
 		return root.requireSelector!(SomeElementType)(selector, file, line);
 	}
 
+	final MaybeNullElement!SomeElementType optionSelector(SomeElementType = Element)(string selector, string file = __FILE__, size_t line = __LINE__)
+		if(is(SomeElementType : Element))
+	{
+		return root.optionSelector!(SomeElementType)(selector, file, line);
+	}
+
 
 	/// ditto
 	Element querySelector(string selector) {
@@ -1299,6 +1306,25 @@ class Document : FileResource {
 		return prolog ~ root.toString();
 	}
 
+	/++
+		Writes it out with whitespace for easier eyeball debugging
+
+		Do NOT use for anything other than eyeball debugging,
+		because whitespace may be significant content in XML.
+	+/
+	string toPrettyString(bool insertComments = false) const {
+		string s = prolog;
+
+		if(insertComments) s ~= "<!--";
+		s ~= "\n";
+		if(insertComments) s ~= "-->";
+
+		s ~= root.toPrettyString(insertComments);
+		foreach(a; piecesAfterRoot)
+			s ~= a.toPrettyString(insertComments);
+		return s;
+	}
+
 	///.
 	Element root;
 
@@ -1355,6 +1381,16 @@ class Element {
 		return e;
 	}
 
+
+	/++
+		If a matching selector is found, it returns that Element. Otherwise, the returned object returns null for all methods.
+	+/
+	final MaybeNullElement!SomeElementType optionSelector(SomeElementType = Element)(string selector, string file = __FILE__, size_t line = __LINE__)
+		if(is(SomeElementType : Element))
+	{
+		auto e = cast(SomeElementType) querySelector(selector);
+		return MaybeNullElement!SomeElementType(e);
+	}
 
 
 
@@ -2936,7 +2972,7 @@ class Element {
 	/**
 		Same result as innerText; the tag with all inner tags stripped out
 	*/
-	string outerText() const {
+	@property string outerText() const {
 		return innerText;
 	}
 
@@ -3022,6 +3058,70 @@ class Element {
 	override string toString() const {
 		return writeToAppender();
 	}
+
+	protected string toPrettyStringIndent(bool insertComments, int indentationLevel) const {
+		string s;
+
+		if(insertComments) s ~= "<!--";
+		s ~= "\n";
+		foreach(indent; 0 .. indentationLevel)
+			s ~= "\t";
+		if(insertComments) s ~= "-->";
+
+		return s;
+	}
+
+	/++
+		Writes out with formatting. Be warned: formatting changes the contents. Use ONLY
+		for eyeball debugging.
+	+/
+	string toPrettyString(bool insertComments = false, int indentationLevel = 0) const {
+		string s = toPrettyStringIndent(insertComments, indentationLevel);
+
+		s ~= "<";
+		s ~= tagName;
+
+		foreach(n, v ; attributes) {
+			s ~= " ";
+			s ~= n;
+			s ~= "=\"";
+			s ~= htmlEntitiesEncode(v);
+			s ~= "\"";
+		}
+
+		if(selfClosed){
+			s ~= " />";
+			return s;
+		}
+
+		s ~= ">";
+
+		// for simple `<collection><item>text</item><item>text</item></collection>`, let's
+		// just keep them on the same line
+		if(children.length == 1 && children[0].nodeType == NodeType.Text)
+			s ~= children[0].toString();
+		else
+		foreach(child; children) {
+			assert(child !is null);
+
+			s ~= child.toPrettyString(insertComments, indentationLevel + 1);
+		}
+
+		// see comment above
+		if(!(children.length == 1 && children[0].nodeType == NodeType.Text))
+			s ~= toPrettyStringIndent(insertComments, indentationLevel);
+
+		s ~= "</";
+		s ~= tagName;
+		s ~= ">";
+
+		return s;
+	}
+
+	/+
+	/// Writes out the opening tag only, if applicable.
+	string writeTagOnly(Appender!string where = appender!string()) const {
+	+/
 
 	/// This is the actual implementation used by toString. You can pass it a preallocated buffer to save some time.
 	/// Returns the string it creates.
@@ -3184,6 +3284,37 @@ Element[] findComments(Element element, string txt) {
 	return ret;
 }
 
+/// An option type that propagates null. See: [Element.optionSelector]
+struct MaybeNullElement(SomeElementType) {
+	this(SomeElementType ele) {
+		this.element = ele;
+	}
+	SomeElementType element;
+
+	/// Forwards to the element, wit a null check inserted that propagates null.
+	auto opDispatch(string method, T...)(T args) {
+		alias type = typeof(__traits(getMember, element, method)(args));
+		static if(is(type : Element)) {
+			if(element is null)
+				return MaybeNullElement!type(null);
+			return __traits(getMember, element, method)(args);
+		} else static if(is(type == string)) {
+			if(element is null)
+				return cast(string) null;
+			return __traits(getMember, element, method)(args);
+		} else static if(is(type == void)) {
+			if(element is null)
+				return;
+			__traits(getMember, element, method)(args);
+		} else {
+			static assert(0);
+		}
+	}
+
+	/// Allows implicit casting to the wrapped element.
+	alias element this;
+}
+
 /++
 	A collection of elements which forwards methods to the children.
 +/
@@ -3214,6 +3345,11 @@ struct ElementCollection {
 		return ec;
 	}
 
+	///
+	Element opIndex(int i) {
+		return elements[i];
+	}
+
 	/// if you slice it, give the underlying array for easy forwarding of the
 	/// collection to range expecting algorithms or looping over.
 	Element[] opSlice() {
@@ -3233,6 +3369,17 @@ struct ElementCollection {
 	/// ditto
 	bool empty() {
 		return !elements.length;
+	}
+
+	/// Collects strings from the collection, concatenating them together
+	/// Kinda like running reduce and ~= on it.
+	string collect(string method)(string separator = "") {
+		string text;
+		foreach(e; elements) {
+			text ~= mixin("e." ~ method);
+			text ~= separator;
+		}
+		return text;
 	}
 
 	/// Forward method calls to each individual element of the collection
@@ -3524,6 +3671,13 @@ class DocumentFragment : Element {
 		return this.innerHTML(where);
 	}
 
+	override string toPrettyString(bool insertComments, int indentationLevel) const {
+		string s;
+		foreach(child; children)
+			s ~= child.toPrettyString(insertComments, indentationLevel);
+		return s;
+	}
+
 	/// DocumentFragments don't really exist in a dom, so they ignore themselves in parent nodes
 	/*
 	override inout(Element) parentNode() inout {
@@ -3777,56 +3931,57 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 	char[4] buffer;
 
 	bool tryingEntity = false;
-	dchar[] entityBeingTried;
+	dchar[16] entityBeingTried;
+	int entityBeingTriedLength = 0;
 	int entityAttemptIndex = 0;
 
 	foreach(dchar ch; data) {
 		if(tryingEntity) {
 			entityAttemptIndex++;
-			entityBeingTried ~= ch;
+			entityBeingTried[entityBeingTriedLength++] = ch;
 
 			// I saw some crappy html in the wild that looked like &0&#1111; this tries to handle that.
 			if(ch == '&') {
 				if(strict)
-					throw new Exception("unterminated entity; & inside another at " ~ to!string(entityBeingTried));
+					throw new Exception("unterminated entity; & inside another at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 
 				// if not strict, let's try to parse both.
 
-				if(entityBeingTried == "&&")
+				if(entityBeingTried[0 .. entityBeingTriedLength] == "&&")
 					a ~= "&"; // double amp means keep the first one, still try to parse the next one
 				else
-					a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried))];
+					a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
 
 				// tryingEntity is still true
-				entityBeingTried = entityBeingTried[0 .. 1]; // keep the &
+				entityBeingTriedLength = 1;
 				entityAttemptIndex = 0; // restarting o this
 			} else
 			if(ch == ';') {
 				tryingEntity = false;
-				a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried))];
+				a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
 			} else if(ch == ' ') {
 				// e.g. you &amp i
 				if(strict)
-					throw new Exception("unterminated entity at " ~ to!string(entityBeingTried));
+					throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 				else {
 					tryingEntity = false;
-					a ~= to!(char[])(entityBeingTried);
+					a ~= to!(char[])(entityBeingTried[0 .. entityBeingTriedLength]);
 				}
 			} else {
 				if(entityAttemptIndex >= 9) {
 					if(strict)
-						throw new Exception("unterminated entity at " ~ to!string(entityBeingTried));
+						throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 					else {
 						tryingEntity = false;
-						a ~= to!(char[])(entityBeingTried);
+						a ~= to!(char[])(entityBeingTried[0 .. entityBeingTriedLength]);
 					}
 				}
 			}
 		} else {
 			if(ch == '&') {
 				tryingEntity = true;
-				entityBeingTried = null;
-				entityBeingTried ~= ch;
+				entityBeingTriedLength = 0;
+				entityBeingTried[entityBeingTriedLength++] = ch;
 				entityAttemptIndex = 0;
 			} else {
 				a ~= buffer[0 .. std.utf.encode(buffer, ch)];
@@ -3836,10 +3991,10 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 
 	if(tryingEntity) {
 		if(strict)
-			throw new Exception("unterminated entity at " ~ to!string(entityBeingTried));
+			throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 
 		// otherwise, let's try to recover, at least so we don't drop any data
-		a ~= to!string(entityBeingTried);
+		a ~= to!string(entityBeingTried[0 .. entityBeingTriedLength]);
 		// FIXME: what if we have "cool &amp"? should we try to parse it?
 	}
 
@@ -3882,6 +4037,10 @@ class RawSource : SpecialElement {
 		return source;
 	}
 
+	override string toPrettyString(bool, int) const {
+		return source;
+	}
+
 	///.
 	string source;
 }
@@ -3904,6 +4063,10 @@ abstract class ServerSideCode : SpecialElement {
 		where.put(source);
 		where.put(">");
 		return where.data[start .. $];
+	}
+
+	override string toPrettyString(bool, int) const {
+		return "<" ~ source ~ ">";
 	}
 
 	///.
@@ -3951,6 +4114,14 @@ class BangInstruction : SpecialElement {
 		return where.data[start .. $];
 	}
 
+	override string toPrettyString(bool, int) const {
+		string s;
+		s ~= "<!";
+		s ~= source;
+		s ~= ">";
+		return s;
+	}
+
 	///.
 	string source;
 }
@@ -3978,6 +4149,15 @@ class QuestionInstruction : SpecialElement {
 		return where.data[start .. $];
 	}
 
+	override string toPrettyString(bool, int) const {
+		string s;
+		s ~= "<";
+		s ~= source;
+		s ~= ">";
+		return s;
+	}
+
+
 	///.
 	string source;
 }
@@ -4004,6 +4184,15 @@ class HtmlComment : SpecialElement {
 		where.put("-->");
 		return where.data[start .. $];
 	}
+
+	override string toPrettyString(bool, int) const {
+		string s;
+		s ~= "<!--";
+		s ~= source;
+		s ~= "-->";
+		return s;
+	}
+
 
 	///.
 	string source;
@@ -4061,6 +4250,29 @@ class TextNode : Element {
 			s = "";
 
 		assert(s !is null);
+		return s;
+	}
+
+	override string toPrettyString(bool insertComments = false, int indentationLevel = 0) const {
+		string s;
+		auto e = htmlEntitiesEncode(contents);
+		import std.algorithm.iteration : splitter;
+		bool first = true;
+		foreach(line; splitter(e, "\n")) {
+			if(first) {
+				s ~= toPrettyStringIndent(insertComments, indentationLevel);
+				first = false;
+			} else {
+				s ~= "\n";
+				if(insertComments)
+					s ~= "<!--";
+				foreach(i; 0 .. indentationLevel)
+					s ~= "\t";
+				if(insertComments)
+					s ~= "-->";
+			}
+			s ~= line;
+		}
 		return s;
 	}
 

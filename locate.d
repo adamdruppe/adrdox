@@ -1,4 +1,4 @@
-// FIXME: load the new search-results.html and pull out the xml from there
+// FIXME: add +proj and -proj to adjust project results
 
 import ps = PorterStemmer;
 import arsd.cgi;
@@ -10,9 +10,16 @@ import std.algorithm : sort;
 import std.string : toLower, replace, split;
 
 class ProjectSearcher {
-	this() {
+	this(string path, string name, int projectAdjustment) {
+		this.projectName = name;
+		this.projectAdjustment = projectAdjustment;
 		auto index = new Document();
-		index.parseUtf8(readText("experimental-docs/index.xml"), true, true);
+		index.parseUtf8(readText(path), true, true);
+
+		if(auto s = index.querySelector("script#search-index-container")) {
+			index = new Document();
+			index.parseUtf8(s.innerHTML, true, true);
+		}
 
 		foreach(element; index.querySelectorAll("adrdox > listing decl[id]"))
 			declById[element.attrs.id] = element;
@@ -20,6 +27,7 @@ class ProjectSearcher {
 			termByValue[element.attrs.value] = element;
 	}
 
+	string projectName;
 	int projectAdjustment = 0;
 
 	Element[] resultsByTerm(string term) {
@@ -44,6 +52,7 @@ class ProjectSearcher {
 		string declId;
 		int score;
 		Element decl;
+		ProjectSearcher searcher;
 	}
 
 	Magic[] getPossibilities(string search) {
@@ -108,7 +117,20 @@ class ProjectSearcher {
 				if(!(hits & (1 << idx)))
 					score /= 2;
 			}
-			magic ~= Magic(decl, score + projectAdjustment, getDecl(decl));
+			magic ~= Magic(decl, score + projectAdjustment, getDecl(decl), this);
+		}
+
+		if(magic.length == 0) {
+			foreach(term; terms) {
+				term = term.toLower();
+				foreach(id, decl; declById) {
+					import std.algorithm;
+					auto name = decl.requireSelector("> name").innerText.toLower;
+					auto dist = cast(int) levenshteinDistance(name, term);
+					if(dist <= 2)
+						magic ~= Magic(id, projectAdjustment + (3 - dist), decl, this);
+				}
+			}
 		}
 
 		// boosts based on topography
@@ -132,7 +154,10 @@ class ProjectSearcher {
 ProjectSearcher[] projectSearchers;
 
 static this() {
-	projectSearchers ~= new ProjectSearcher();
+	projectSearchers ~= new ProjectSearcher("experimental-docs/std.xml", "Standard Library", 5);
+	projectSearchers ~= new ProjectSearcher("experimental-docs/arsd.xml", "arsd", 4);
+	projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
+	projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
 }
 
 void searcher(Cgi cgi) {
@@ -198,6 +223,8 @@ void searcher(Cgi cgi) {
 		alreadyPresent[fqn] = true;
 		auto dt = ml.addChild("dt");
 		dt.addClass("search-result");
+		dt.addChild("span", item.searcher.projectName).addClass("project-name");
+		dt.addChild("br");
 		dt.addChild("a", fqn.replace(".", ".\u200B"), link);
 		dt.dataset.score = to!string(item.score);
 		auto html = decl.requireSelector("desc").innerText;

@@ -125,6 +125,8 @@ struct LinkReferenceInfo {
 	string link; // or src
 
 	string toHtml(string fun, string rt) {
+		if(rt is null)
+			rt = fun;
 		if(rt is fun && text !is null && type != Type.text)
 			rt = text;
 
@@ -269,12 +271,11 @@ struct DocComment {
 		output.putTag("</div>");
 	}
 
-	import std.typecons : Tuple;
 	void writeDetails(T = FunctionDeclaration)(MyOutputRange output) {
 		writeDetails!T(output, cast(T) null, null);
 	}
 
-	void writeDetails(T = FunctionDeclaration)(MyOutputRange output, const T functionDec = null, Tuple!(string, string)[] utInfo = null) {
+	void writeDetails(T = FunctionDeclaration)(MyOutputRange output, const T functionDec = null, Decl.ProcessedUnittest[] utInfo = null) {
 		auto f = new MyFormatter!(typeof(output))(output, decl);
 
 		if(params.length) {
@@ -394,20 +395,18 @@ struct DocComment {
 			output.putTag("</div>");
 		}
 
+		bool hasUt;
+		foreach(ut; utInfo) if(ut.embedded == false){hasUt = true; break;}
 
-		if(examples.length || utInfo.length) {
+		if(examples.length || hasUt) {
 			output.putTag("<h2 id=\"examples\"><a href=\"#examples\" class=\"header-anchor\">Examples</a></h2>");
-			output.putTag("<div class=\"documentation-comment unittest-description\">");
+			output.putTag("<div class=\"documentation-comment\">");
 			output.putTag(formatDocumentationComment(examples, decl));
 			output.putTag("</div>");
 
 			foreach(example; utInfo) {
-				output.putTag("<div class=\"documentation-comment unittest-example-holder\">");
-				output.putTag(formatDocumentationComment(preprocessComment(example[1]), decl));
-				output.putTag("</div>");
-				output.putTag("<pre class=\"d_code highlighted\">");
-				output.putTag(highlight(outdent(example[0])));
-				output.putTag("</pre>");
+				if(example.embedded) continue;
+				output.putTag(formatUnittestDocTuple(example, decl).toString());
 			}
 		}
 
@@ -431,6 +430,16 @@ struct DocComment {
 			output.putTag("</div>");
 		}
 	}
+}
+
+Element formatUnittestDocTuple(Decl.ProcessedUnittest example, Decl decl) {
+	auto holder = Element.make("div").addClass("unittest-example-holder");
+
+	holder.addChild(formatDocumentationComment2(preprocessComment(example.comment), decl).addClass("documentation-comment"));
+	auto pre = holder.addChild("pre").addClass("d_code highlighted");
+	pre.innerHTML = highlight(outdent(example.code));
+
+	return holder;
 }
 
 string preprocessComment(string comment) {
@@ -737,6 +746,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				case "standards":
 				case "copyright":
 				case "version":
+				case "date":
 					c.otherSections[section] ~= line ~ "\n";
 				break;
 				case "examples":
@@ -816,18 +826,28 @@ bool isIdentifierOrUrl(string text) {
 }
 
 Element getReferenceLink(string text, Decl decl, string realText = null) {
-	if(realText is null)
-		realText = text;
-
 	import std.uri;
 	auto l = uriLength(text);
 	string hash;
 
 	string className;
 
-	if(l != -1 || text.length && text[0] == '#')
+	if(l != -1) { // a url
 		text = text;
-	else {
+		if(realText is null)
+			realText = text;
+	} else if(text.length && text[0] == '#') {
+		// an anchor. add the link so it works when this is copy/pasted on other pages too (such as in search results)
+		hash = text;
+		text = decl.link;
+
+		if(realText is null) {
+			realText = hash[1 .. $].replace("-", " ");
+		}
+	} else {
+		if(realText is null)
+			realText = text;
+
 		auto hashIdx = text.indexOf("#");
 		if(hashIdx != -1) {
 			hash = text[hashIdx .. $];
@@ -1105,7 +1125,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					goto ordinary;
 
 				auto fun = txt[1 .. $-1];
-				auto rt = fun;
+				string rt;
 				auto idx2 = fun.indexOf("|");
 				if(idx2 != -1) {
 					rt = fun[idx2 + 1 .. $].strip;
@@ -1339,6 +1359,7 @@ static this() {
 		"NUMBERED_LIST": 1,
 		"SMALL_TABLE" : 1,
 		"TABLE_ROWS" : 1,
+		"EMBED_UNITTEST": 1,
 
 		"TIP":1,
 		"NOTE":1,
@@ -1528,6 +1549,7 @@ static this() {
 	];
 
 	ddocMacroInfo = [ // number of arguments expected, if needed
+		"EMBED_UNITTEST": 1,
 		"BOOKTABLE" : 1,
 		"T2" : 1,
 		"LEADINGROWN" : 2,
@@ -1642,6 +1664,16 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			return Element.make("magic-command").setAttribute("id", stuff);
 		if(name == "CLASS")
 			return Element.make("magic-command").setAttribute("class", stuff);
+
+		if(name == "EMBED_UNITTEST") {
+			auto id = stuff.strip;
+			foreach(ref ut; decl.getProcessedUnittests()) {
+				if(ut.comment.canFind("$(ID " ~ id ~ ")")) {
+					ut.embedded = true;
+					return formatUnittestDocTuple(ut, decl);
+				}
+			}
+		}
 
 		if(name == "SMALL_TABLE") {
 			return translateSmallTable(stuff, decl);
