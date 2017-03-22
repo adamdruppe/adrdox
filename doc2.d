@@ -2417,6 +2417,13 @@ void main(string[] args) {
 
 				annotatedSourceDocument.title = mod.name ~ " source code";
 
+				if(!exists(outputDirectory ~ "source"))
+					mkdir(outputDirectory ~ "source");
+				foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
+					if(ele.tagName == "link")
+						ele.attrs.href = "../" ~ ele.attrs.href;
+					else
+						ele.attrs.src = "../" ~ ele.attrs.src;
 				std.file.write(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString());
 			}
 
