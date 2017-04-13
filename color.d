@@ -154,11 +154,7 @@ struct Color {
 	/// Construct a color with the given values. They should be in range 0 <= x <= 255, where 255 is maximum intensity and 0 is minimum intensity.
 	nothrow pure @nogc
 	this(int red, int green, int blue, int alpha = 255) {
-		// workaround dmd bug 10937
-		if(__ctfe)
-			this.components[0] = cast(ubyte) red;
-		else
-			this.r = cast(ubyte) red;
+		this.r = cast(ubyte) red;
 		this.g = cast(ubyte) green;
 		this.b = cast(ubyte) blue;
 		this.a = cast(ubyte) alpha;
@@ -170,6 +166,9 @@ struct Color {
 	/// Ditto
 	nothrow pure @nogc
 	static Color white() { return Color(255, 255, 255); }
+	/// Ditto
+	nothrow pure @nogc
+	static Color gray() { return Color(128, 128, 128); }
 	/// Ditto
 	nothrow pure @nogc
 	static Color black() { return Color(0, 0, 0); }
@@ -191,6 +190,9 @@ struct Color {
 	/// Ditto
 	nothrow pure @nogc
 	static Color purple() { return Color(255, 0, 255); }
+	/// Ditto
+	nothrow pure @nogc
+	static Color brown() { return Color(128, 64, 0); }
 
 	/*
 	ubyte[4] toRgbaArray() {
@@ -198,7 +200,7 @@ struct Color {
 	}
 	*/
 
-  /// Return black-and-white color
+	/// Return black-and-white color
 	Color toBW() () {
 		int intens = cast(int)(0.2126*r+0.7152*g+0.0722*b);
 		if (intens < 0) intens = 0; else if (intens > 255) intens = 255;
@@ -1256,6 +1258,16 @@ void floydSteinbergDither(IndexedImage img, in TrueColorImage original) {
 struct Point {
 	int x; ///
 	int y; ///
+
+	pure const nothrow @safe:
+
+	Point opBinary(string op)(in Point rhs) {
+		return Point(mixin("x" ~ op ~ "rhs.x"), mixin("y" ~ op ~ "rhs.y"));
+	}
+
+	Point opBinary(string op)(int rhs) {
+		return Point(mixin("x" ~ op ~ "rhs"), mixin("y" ~ op ~ "rhs"));
+	}
 }
 
 ///
@@ -1270,6 +1282,67 @@ struct Rectangle {
 	int top; ///
 	int right; ///
 	int bottom; ///
+
+	pure const nothrow @safe:
+
+	///
+	this(int left, int top, int right, int bottom) {
+		this.left = left;
+		this.top = top;
+		this.right = right;
+		this.bottom = bottom;
+	}
+
+	///
+	this(in Point upperLeft, in Point lowerRight) {
+		this(upperLeft.x, upperLeft.y, lowerRight.x, lowerRight.y);
+	}
+
+	///
+	this(in Point upperLeft, in Size size) {
+		this(upperLeft.x, upperLeft.y, upperLeft.x + size.width, upperLeft.y + size.height);
+	}
+
+	///
+	@property Point upperLeft() {
+		return Point(left, top);
+	}
+
+	///
+	@property Point lowerRight() {
+		return Point(right, bottom);
+	}
+
+	///
+	@property Size size() {
+		return Size(width, height);
+	}
+
+	///
+	@property int width() {
+		return right - left;
+	}
+
+	///
+	@property int height() {
+		return bottom - top;
+	}
+
+	/// Returns true if this rectangle entirely contains the other
+	bool contains(in Rectangle r) {
+		return contains(r.upperLeft) && contains(r.lowerRight);
+	}
+
+	/// ditto
+	bool contains(in Point p) {
+		return (p.x >= left && p.y < right && p.y >= top && p.y < bottom);
+	}
+
+	/// Returns true of the two rectangles at any point overlap
+	bool overlaps(in Rectangle r) {
+		// the -1 in here are because right and top are exclusive
+		return !((right-1) < r.left || (r.right-1) < left || (bottom-1) < r.top || (r.bottom-1) < top);
+	}
 }
 
 /++
@@ -1289,13 +1362,16 @@ struct Rectangle {
 void floodFill(T)(
 	T[] what, int width, int height, // the canvas to inspect
 	T target, T replacement, // fill params
-	int x, int y, bool delegate(int x, int y) additionalCheck) // the node
+	int x, int y, bool delegate(int x, int y) @safe additionalCheck) // the node
 {
 	T node = what[y * width + x];
 
 	if(target == replacement) return;
 
 	if(node != target) return;
+
+	if(additionalCheck is null)
+		additionalCheck = (int, int) => true;
 
 	if(!additionalCheck(x, y))
 		return;
@@ -1319,3 +1395,5 @@ void floodFill(T)(
 			x, y + 1, additionalCheck);
 }
 
+// for scripting, so you can tag it without strictly needing to import arsd.jsvar
+enum arsd_jsvar_compatible = "arsd_jsvar_compatible";

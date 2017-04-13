@@ -1496,7 +1496,7 @@ static this() {
 		"SCRIPT" : "",
 
 		// Useless crap that should just be replaced
-		"SUBMODULE" : `<a href="$(FULLY_QUALIFIED_NAME).$0.html">$0</a>`,
+		"SUBMODULE" : `<a href="$(FULLY_QUALIFIED_NAME).$2.html">$1</a>`,
 		"SHORTXREF" : `<a href="std.$1.$2.html">$2</a>`,
 		"SHORTXREF_PACK" : `<a href="std.$1.$2.$3.html">$3</a>`,
 		"XREF" : `<a href="std.$1.$2.html">std.$1.$2</a>`,
@@ -1565,6 +1565,7 @@ static this() {
 		"XREF" : 2,
 		"CXREF" : 2,
 		"SHORTXREF" : 2,
+		"SUBMODULE" : 2,
 		"SHORTXREF_PACK" : 3,
 		"XREF_PACK" : 3,
 		"MREF" : 1,

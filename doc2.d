@@ -1075,6 +1075,9 @@ abstract class Decl {
 		return protection == tok!"private";
 	}
 
+	// FIXME: isFinal and isVirtual
+	// FIXME: it would be nice to inherit documentation from interfaces too.
+
 	bool isProperty() {
 		foreach (a; attributes) {
 			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.identifier.text == "property")
