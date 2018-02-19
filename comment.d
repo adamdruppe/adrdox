@@ -1,3 +1,4 @@
+// <details> html tag
 module arsd.docgen.comment;
 
 import adrdox.main;
@@ -633,6 +634,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				line = line[line.indexOf(":")+1 .. $];
 				section = "version";
 			} else if(maybe.startsWith("standards:")) {
+				line = line[line.indexOf(":")+1 .. $];
 				inSynopsis = false;
 				section = "standards";
 			} else if(maybe.startsWith("deprecated:")) {
@@ -1035,13 +1037,16 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					string code = outdent(stripRight(remaining[0 .. sliceEnding]));
 					Element ele;
 					// all these languages are close enough for hack good enough.
-					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php" || language == "c#" || language == "d")
+					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php" || language == "c#" || language == "d" || language == "adrscript")
 						ele = div.addChild("pre", syntaxHighlightCFamily(code, language));
 					else if(language == "css")
 						ele = div.addChild("pre", syntaxHighlightCss(code));
-
 					else if(language == "html" || language == "xml")
 						ele = div.addChild("pre", syntaxHighlightHtml(code));
+					else if(language == "python")
+						ele = div.addChild("pre", syntaxHighlightPython(code));
+					else if(language == "ruby")
+						ele = div.addChild("pre", syntaxHighlightRuby(code));
 					else
 						ele = div.addChild("pre", code);
 					ele.addClass("block-code");
@@ -1477,6 +1482,7 @@ static this() {
 		"I" : "<i>$0</i>",
 		"TT" : "<tt>$0</tt>",
 		"B" : "<b>$0</b>",
+		"STRIKE" : "<s>$0</s>",
 		"P" : "<p>$0</p>",
 		"PRE" : "<pre>$0</pre>",
 		"BLOCKQUOTE" : "<blockquote>$0</blockquote>", // FIXME?
@@ -2889,7 +2895,7 @@ string htmlEntitiesHighlight(string code) {
 			} else {
 				i++;
 				highlighted ~=
-					"<abbr class=\"highlighted-entity\" title=\"Attribute: "~code[0 .. i].replace("\"", "&quot;")~"\">" ~
+					"<abbr class=\"highlighted-entity\" title=\"Entity: "~code[0 .. i].replace("\"", "&quot;")~"\">" ~
 						htmlEntitiesEncode(code[0 .. i]) ~
 					"</abbr>";
 				code = code[i .. $];
@@ -2913,6 +2919,318 @@ string htmlEntitiesHighlight(string code) {
 	}
 
 	return highlighted;
+}
+
+Html syntaxHighlightRuby(string code) {
+	// FIXME
+	return Html(htmlEntitiesEncode(code));
+}
+
+Html syntaxHighlightPython(string code) {
+	/*
+		I just want to support:
+			numbers
+				anything starting with 0, then going alphanumeric
+			keywords
+				from and import are "preprocessor"
+				None, True, and False are number literal colored
+			name
+				an identifier after the "def" keyword, possibly including : if in there. my vim does it light blue
+			comments
+				only # .. \n is allowed.
+			strings
+				single quote must end on the same line
+				triple quote span multiple line.
+
+
+			Extracting python definitions:
+				class foo:
+					# method baz, arg: bar, doc string attached
+					def baz(bar):
+						""" this is the doc string """
+
+				will just have to follow indentation (BARF)
+
+			Note: python has default arguments.
+
+
+			Python implicitly does line continuation if parens, brackets, or braces open
+			you can also explicitly extend with \ at the end
+			in these cases, the indentation doesn't count.
+
+			If there's only comments on a line, the indentation is also exempt.
+	*/
+	static immutable string[] pythonKeywords = [
+		"and", "del", "not", "while",
+		"as", "elif", "global", "or", "with",
+		"assert", "else", "if", "pass", "yield",
+		"break", "except", "print",
+		"exec", "in", "raise",
+		"continue", "finally", "is", "return",
+		"for", "lambda", "try",
+	];
+
+	static immutable string[] pythonPreprocessors = [
+		"from", "import"
+	];
+
+	static immutable string[] pythonTypes = [
+		"class", "def"
+	];
+
+	static immutable string[] pythonConstants = [
+		"True", "False", "None"
+	];
+
+	string[] indentStack;
+	int openParenCount = 0;
+	int openBraceCount = 0;
+	int openBracketCount = 0;
+	char lastChar;
+	bool lastWasType;
+
+	string highlighted;
+
+	// ensure there is one and exactly one new line at the end
+	// the highlighter uses the final \n as a chance to clean up the
+	// indent divs
+	code = code.stripRight;
+	code ~= "\n";
+
+	int lineCountSpace = 5; // if python is > 1000 lines it can slightly throw off the indent highlight... but meh.
+
+	while(code.length) {
+		bool thisIterWasType = false;
+		auto ch = code[0];
+		switch(ch) {
+			case '#':
+				size_t i;
+				while(i < code.length && code[i] != '\n')
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '(':
+				openParenCount++;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case '[':
+				openBracketCount++;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case '{':
+				openBraceCount++;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case ')':
+				openParenCount--;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case ']':
+				openBracketCount--;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case '}':
+				openBraceCount--;
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case '<':
+				highlighted ~= "&lt;";
+				code = code[1 .. $];
+			break;
+			case '>':
+				highlighted ~= "&gt;";
+				code = code[1 .. $];
+			break;
+			case '&':
+				highlighted ~= "&amp;";
+				code = code[1 .. $];
+			break;
+			case '0': .. case '9':
+				// number literal
+				size_t i;
+				while(i < code.length && (
+					(code[i] >= '0' && code[i] <= '9')
+					||
+					(code[i] >= 'a' && code[i] <= 'z')
+					||
+					(code[i] >= 'A' && code[i] <= 'Z')
+					||
+					code[i] == '.' || code[i] == '_'
+				))
+				{
+					i++;
+				}
+
+				highlighted ~= "<span class=\"highlighted-number\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '"', '\'':
+				// string
+				// check for triple-quoted string
+				if(ch == '"' && code.length > 2 && code[1] == '"' && code[2] == '"') {
+					int end = 3;
+					bool escaped;
+					while(end + 3 < code.length && !escaped && code[end .. end+ 3] != `"""`) {
+						escaped = (code[end] == '\\');
+						end++;
+					}
+
+					if(end < code.length)
+						end+= 3;
+
+					highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. end]) ~ "</span>";
+					code = code[end .. $];
+				} else {
+					// otherwise these are limited to one line, though since we
+					// assume the program is well-formed, I'm not going to bother;
+					// no need to check for Python errors here, just highlight
+					int end = 1;
+					bool escaped;
+					while(end < code.length && !escaped && code[end] != ch) {
+						escaped = (code[end] == '\\');
+						end++;
+					}
+
+					if(end < code.length)
+						end++;
+
+					highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. end]) ~ "</span>";
+					code = code[end .. $];
+				}
+			break;
+			case '\n':
+				string thisIndent = null;
+				int thisIndentLength = lineCountSpace;
+				// figure out indentation and stuff...
+				if(lastChar == '\\' || openParenCount || openBracketCount || openBraceCount) {
+					// line continuation, no special processing
+				} else {
+					if(code.length == 1) {
+						// last line in the file, clean up the indentation
+						int remove;
+						foreach_reverse(i; indentStack) {
+							// this isn't actually following the python rule which
+							// is more like .startsWith but meh
+							if(i.length <= thisIndent.length)
+								break;
+							highlighted ~= "</div>";
+							remove++;
+						}
+						indentStack = indentStack[0 .. $ - remove];
+						// NOT appending the final \n cuz that leads dead space in rendered doc
+
+						code = code[1 .. $];
+						break;
+					} else
+					foreach(idx, cha; code[1 .. $]) {
+						if(cha == '\n')
+							break;
+						if(cha == '#') // comments exempt from indent processing too
+							break;
+						if(cha == ' ')
+							thisIndentLength++;
+						if(cha == '\t')
+							thisIndentLength += 8 - (thisIndentLength % 8);
+						if(cha != ' ' && cha != '\t') {
+							thisIndent = code[1 .. idx + 1];
+							break;
+						}
+					}
+				}
+
+				bool changedDiv = false;
+
+				if(thisIndent !is null) { // !is null rather than .length is important here. null means skip, "" may need processing
+					// close open indents if necessary
+					int remove;
+					foreach_reverse(i; indentStack) {
+						// this isn't actually following the python rule which
+						// is more like .startsWith but meh
+						if(i.length <= thisIndent.length)
+							break;
+						highlighted ~= "</div>";
+						changedDiv = true;
+						remove++;
+					}
+					indentStack = indentStack[0 .. $ - remove];
+				}
+
+				if(thisIndent.length) { // but we only ever open a new one if there was non-zero indent
+					// open a new one if appropriate
+					if(indentStack.length == 0 || thisIndent.length > indentStack[$-1].length) {
+						changedDiv = true;
+						highlighted ~= "<div class=\"highlighted-python-indent\" style=\"background-position: calc("~to!string(thisIndentLength)~"ch - 2px);\">";
+						indentStack ~= thisIndent;
+					}
+				}
+
+				if(changedDiv)
+					highlighted ~= "<span style=\"white-space: normal;\">";
+
+				highlighted ~= ch;
+
+				if(changedDiv)
+					highlighted ~= "</span>";
+
+				code = code[1 .. $];
+			break;
+			case ' ', '\t':
+				thisIterWasType = lastWasType; // don't change the last counter on just whitespace
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			default:
+				// check for names
+				int nameEnd = 0;
+				while(nameEnd < code.length && (
+					(code[nameEnd] >= 'a' && code[nameEnd] <= 'z') ||
+					(code[nameEnd] >= 'A' && code[nameEnd] <= 'Z') ||
+					(code[nameEnd] >= '0' && code[nameEnd] <= '0') ||
+					code[nameEnd] == '_'
+				))
+				{
+					nameEnd++;
+				}
+
+				if(nameEnd) {
+					auto name = code[0 .. nameEnd];
+					code = code[nameEnd .. $];
+
+					if(pythonTypes.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-type\">" ~ name ~ "</span>";
+						thisIterWasType = true;
+					} else if(pythonConstants.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-number\">" ~ name ~ "</span>";
+					} else if(pythonPreprocessors.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ name ~ "</span>";
+					} else if(pythonKeywords.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-keyword\">" ~ name ~ "</span>";
+					} else {
+						if(lastWasType) {
+							highlighted ~= "<span class=\"highlighted-identifier\">" ~ name ~ "</span>";
+						} else {
+							highlighted ~= name;
+						}
+					}
+				} else {
+					highlighted ~= ch;
+					code = code[1 .. $];
+				}
+			break;
+		}
+		lastChar = ch;
+		lastWasType = thisIterWasType;
+	}
+
+	return Html(highlighted);
 }
 
 Html syntaxHighlightHtml(string code) {
@@ -3021,7 +3339,19 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 				highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
 				jsCode = jsCode[i .. $];
 			break;
-			// FIXME: preprocessor directive / PHP # comment
+			case '#':
+				// preprocessor directive / PHP # comment
+				size_t i;
+				while(i < jsCode.length && jsCode[i] != '\n')
+					i++;
+
+				if(language == "php")
+					highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+				else
+					highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+				jsCode = jsCode[i .. $];
+
+			break;
 			case '/':
 				// check for comment
 				// javascript also has that stupid regex literal, but screw it
@@ -3074,8 +3404,26 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 				highlighted ~= jsCode[0];
 				jsCode = jsCode[1 .. $];
 			break;
-			// escape html
+			case '?':
+				if(language == "php") {
+					if(jsCode.length >= 2 && jsCode[0 .. 2] == "?>") {
+						highlighted ~= "<span class=\"highlighted-preprocessor-directive\">?&gt;</span>";
+						jsCode = jsCode[2 .. $];
+						break;
+					}
+				}
+				highlighted ~= jsCode[0];
+				jsCode = jsCode[1 .. $];
+			break;
+			// escape html chars
 			case '<':
+				if(language == "php") {
+					if(jsCode.length > 5 && jsCode[0 .. 5] == "<?php") {
+						highlighted ~= "<span class=\"highlighted-preprocessor-directive\">&lt;?php</span>";
+						jsCode = jsCode[5 .. $];
+						break;
+					}
+				}
 				highlighted ~= "&lt;";
 				jsCode = jsCode[1 .. $];
 			break;

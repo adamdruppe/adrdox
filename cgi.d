@@ -129,37 +129,95 @@
 	Guide_for_PHP_users:
 		If you are coming from PHP, here's a quick guide to help you get started:
 
-		```
-		$_GET["var"] == cgi.get["var"]
-		$_POST["var"] == cgi.post["var"]
-		$_COOKIE["var"] == cgi.cookies["var"]
-		```
+		$(SIDE_BY_SIDE
+			$(COLUMN
+				```php
+				<?php
+					$foo = $_POST["foo"];
+					$bar = $_GET["bar"];
+					$baz = $_COOKIE["baz"];
+
+					$user_ip = $_SERVER["REMOTE_ADDR"];
+					$host = $_SERVER["HTTP_HOST"];
+					$path = $_SERVER["PATH_INFO"];
+
+					setcookie("baz", "some value");
+
+					echo "hello!";
+				?>
+				```
+			)
+			$(COLUMN
+				---
+				import arsd.cgi;
+				void app(Cgi cgi) {
+					string foo = cgi.post["foo"];
+					string bar = cgi.get["bar"];
+					string baz = cgi.cookies["baz"];
+
+					string user_ip = cgi.remoteAddress;
+					string host = cgi.host;
+					string path = cgi.pathInfo;
+
+					cgi.setCookie("baz", "some value");
+
+					cgi.write("hello!");
+				}
+
+				mixin GenericMain!app
+				---
+			)
+		)
+
+		$(H3 Array elements)
+
 
 		In PHP, you can give a form element a name like `"something[]"`, and then
 		`$_POST["something"]` gives an array. In D, you can use whatever name
 		you want, and access an array of values with the `cgi.getArray["name"]` and
 		`cgi.postArray["name"]` members.
 
-		```
-		echo("hello"); == cgi.write("hello");
+		$(H3 Databases)
 
-		$_SERVER["REMOTE_ADDR"] == cgi.remoteAddress
-		$_SERVER["HTTP_HOST"] == cgi.host
-		```
+		PHP has a lot of stuff in its standard library. cgi.d doesn't include most
+		of these, but the rest of my arsd repository has much of it. For example,
+		to access a MySQL database, download `database.d` and `mysql.d` from my
+		github repo, and try this code (assuming, of course, your database is
+		set up):
+
+		---
+		import arsd.cgi;
+		import arsd.mysql;
+
+		void app(Cgi cgi) {
+			auto database = new MySql("localhost", "username", "password", "database_name");
+			foreach(row; mysql.query("SELECT count(id) FROM people"))
+				cgi.write(row[0] ~ " people in database");
+		}
+
+		mixin GenericMain!app;
+		---
+
+		Similar modules are available for PostgreSQL, Microsoft SQL Server, and SQLite databases,
+		implementing the same basic interface.
 
 	See_Also:
 
-	You may also want to see dom.d, web.d, and html.d for more code for making
-	web applications. database.d, mysql.d, postgres.d, and sqlite.d can help in
+	You may also want to see [arsd.dom], [arsd.web], and [arsd.html] for more code for making
+	web applications.
+
+	For working with json, try [arsd.jsvar].
+	
+	[arsd.database], [arsd.mysql], [arsd.postgres], [arsd.mssql], and [arsd.sqlite] can help in
 	accessing databases.
 
-	If you are looking to access a web application via HTTP, try curl.d.
+	If you are looking to access a web application via HTTP, try [std.net.curl], [arsd.curl], or [arsd.http2].
 
 	Copyright:
 
-	cgi.d copyright 2008-2016, Adam D. Ruppe. Provided under the Boost Software License.
+	cgi.d copyright 2008-2018, Adam D. Ruppe. Provided under the Boost Software License.
 
-	Yes, this file is almost eight years old, and yes, it is still actively maintained and used.
+	Yes, this file is almost ten years old, and yes, it is still actively maintained and used.
 +/
 module arsd.cgi;
 
@@ -342,6 +400,26 @@ class Cgi {
 		// this is an extension for when the method is not specified and you want to assume
 		CommandLine }
 
+
+	/+
+	/++
+		Cgi provides a per-request memory pool
+
+	+/
+	void[] allocateMemory(size_t nBytes) {
+
+	}
+
+	/// ditto
+	void[] reallocateMemory(void[] old, size_t nBytes) {
+
+	}
+
+	/// ditto
+	void freeMemory(void[] memory) {
+
+	}
+	+/
 
 
 /*
@@ -564,6 +642,7 @@ class Cgi {
 		this.requestUri = requestUri;
 		this.pathInfo = pathInfo;
 		this.queryString = queryString;
+		this.postJson = null;
 	}
 
 	/** Initializes it using a CGI or CGI-like interface */
@@ -772,6 +851,7 @@ class Cgi {
 				filesArray = assumeUnique(pps._files);
 				files = keepLastOf(filesArray);
 				post = keepLastOf(postArray);
+				this.postJson = pps.postJson;
 				cleanUpPostDataState();
 			}
 
@@ -816,6 +896,7 @@ class Cgi {
 			string boundary;
 			string localBoundary; // the ones used at the end or something lol
 			bool isMultipart;
+			bool isJson;
 
 			ulong expectedLength;
 			ulong contentConsumed;
@@ -826,6 +907,8 @@ class Cgi {
 			bool weHaveAPart;
 			string[] thisOnesHeaders;
 			immutable(ubyte)[] thisOnesData;
+
+			string postJson;
 
 			UploadedFile piece;
 			bool isFile = false;
@@ -928,6 +1011,11 @@ class Cgi {
 		} else if(pps.contentType == "multipart/form-data") {
 			pps.isMultipart = true;
 			enforce(pps.boundary.length, "no boundary");
+		} else if(pps.contentType == "application/json") {
+			pps.isJson = true;
+			pps.isMultipart = false;
+		//} else if(pps.contentType == "application/json") {
+			//pps.isJson = true;
 		} else {
 			// FIXME: should set a http error code too
 			throw new Exception("unknown request content type: " ~ pps.contentType);
@@ -1235,7 +1323,7 @@ class Cgi {
 
 			// btw all boundaries except the first should have a \r\n before them
 		} else {
-			// application/x-www-form-urlencoded
+			// application/x-www-form-urlencoded and application/json
 
 				// not using maxContentLength because that might be cranked up to allow
 				// large file uploads. We can handle them, but a huge post[] isn't any good.
@@ -1245,9 +1333,14 @@ class Cgi {
 			pps.buffer ~= chunk;
 
 			// simple handling, but it works... until someone bombs us with gigabytes of crap at least...
-			if(pps.buffer.length == pps.expectedLength)
-				pps._post = decodeVariables(cast(string) pps.buffer);
-			else {
+			if(pps.buffer.length == pps.expectedLength) {
+				if(pps.isJson)
+					pps.postJson = cast(string) pps.buffer;
+				else
+					pps._post = decodeVariables(cast(string) pps.buffer);
+				version(preserveData)
+					originalPostData = pps.buffer;
+			} else {
 				// just for debugging
 			}
 		}
@@ -1292,7 +1385,7 @@ class Cgi {
 	/**
 		Initializes it from raw HTTP request data. GenericMain uses this when you compile with -version=embedded_httpd.
 
-		NOTE: If you are behind a reverse proxy, the values here might not be what you expect.... FIXME somehow.
+		NOTE: If you are behind a reverse proxy, the values here might not be what you expect.... it will use X-Forwarded-For for remote IP and X-Forwarded-Host for host
 
 		Params:
 			inputData = the incoming data, including headers and other raw http data.
@@ -1458,6 +1551,10 @@ class Cgi {
 					case "content-length":
 						contentLength = to!size_t(value);
 					break;
+					case "x-forwarded-for":
+						remoteAddress = value;
+					break;
+					case "x-forwarded-host":
 					case "host":
 						host = value;
 					break;
@@ -1514,6 +1611,7 @@ class Cgi {
 			filesArray = assumeUnique(pps._files);
 			files = keepLastOf(filesArray);
 			post = keepLastOf(postArray);
+			postJson = pps.postJson;
 			cleanUpPostDataState();
 		}
 
@@ -2056,6 +2154,8 @@ class Cgi {
 
 	version(preserveData) // note: this can eat lots of memory; don't use unless you're sure you need it.
 	immutable(ubyte)[] originalPostData;
+
+	public immutable string postJson;
 
 	/* Internal state flags */
 	private bool outputtedResponseData;
@@ -2649,56 +2749,64 @@ mixin template CustomCgiMainImpl(CustomCgi, alias fun, long maxContentLength = d
 						i = addr.sizeof;
 						int s = accept(sock, &addr, &i);
 
-						if(s == -1)
-							throw new Exception("accept");
-						//ubyte[__traits(classInstanceSize, BufferedInputRange)] bufferedRangeContainer;
-						auto ir = new BufferedInputRange(s);
-						//auto ir = emplace!BufferedInputRange(bufferedRangeContainer, s, backingBuffer);
+						try {
 
-						while(!ir.empty) {
-							ubyte[__traits(classInstanceSize, CustomCgi)] cgiContainer;
+							if(s == -1)
+								throw new Exception("accept");
 
-							Cgi cgi;
-							try {
-								cgi = new CustomCgi(ir, &closeConnection);
-								//cgi = emplace!CustomCgi(cgiContainer, ir, &closeConnection);
-							} catch(Throwable t) {
-								// a construction error is either bad code or bad request; bad request is what it should be since this is bug free :P
-								// anyway let's kill the connection
-								stderr.writeln(t.toString());
-								sendAll(ir.source, plainHttpError(false, "400 Bad Request", t));
-								closeConnection = true;
-								break;
-							}
-							assert(cgi !is null);
-							scope(exit)
-								cgi.dispose();
+							scope(failure) close(s);
+							//ubyte[__traits(classInstanceSize, BufferedInputRange)] bufferedRangeContainer;
+							auto ir = new BufferedInputRange(s);
+							//auto ir = emplace!BufferedInputRange(bufferedRangeContainer, s, backingBuffer);
 
-							try {
-								fun(cgi);
-								cgi.close();
-							} catch(ConnectionException ce) {
-								closeConnection = true;
-							} catch(Throwable t) {
-								// a processing error can be recovered from
-								stderr.writeln(t.toString);
-								if(!handleException(cgi, t))
+							while(!ir.empty) {
+								ubyte[__traits(classInstanceSize, CustomCgi)] cgiContainer;
+
+								Cgi cgi;
+								try {
+									cgi = new CustomCgi(ir, &closeConnection);
+									//cgi = emplace!CustomCgi(cgiContainer, ir, &closeConnection);
+								} catch(Throwable t) {
+									// a construction error is either bad code or bad request; bad request is what it should be since this is bug free :P
+									// anyway let's kill the connection
+									stderr.writeln(t.toString());
+									sendAll(ir.source, plainHttpError(false, "400 Bad Request", t));
 									closeConnection = true;
-							}
+									break;
+								}
+								assert(cgi !is null);
+								scope(exit)
+									cgi.dispose();
 
-							if(closeConnection) {
-								ir.source.close();
-								break;
-							} else {
-								if(!ir.empty)
-									ir.popFront(); // get the next
-								else if(ir.sourceClosed) {
+								try {
+									fun(cgi);
+									cgi.close();
+								} catch(ConnectionException ce) {
+									closeConnection = true;
+								} catch(Throwable t) {
+									// a processing error can be recovered from
+									stderr.writeln(t.toString);
+									if(!handleException(cgi, t))
+										closeConnection = true;
+								}
+
+								if(closeConnection) {
 									ir.source.close();
+									break;
+								} else {
+									if(!ir.empty)
+										ir.popFront(); // get the next
+									else if(ir.sourceClosed) {
+										ir.source.close();
+									}
 								}
 							}
-						}
 
-						ir.source.close();
+							ir.source.close();
+						} catch(Throwable t) {
+							debug writeln(t);
+							// most likely cause is a timeout
+						}
 					}
 				} else {
 					processCount++;
@@ -3138,6 +3246,9 @@ class BufferedInputRange {
 	}
 
 	this(Socket source, ubyte[] buffer = null) {
+		// if they connect but never send stuff to us, we don't want it wasting the process
+		// so setting a time out
+		source.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(3));
 		this.source = source;
 		if(buffer is null) {
 			underlyingBuffer = new ubyte[4096];
@@ -3194,10 +3305,11 @@ class BufferedInputRange {
 			if(ret == Socket.ERROR) {
 				version(Posix) {
 					import core.stdc.errno;
-					if(errno == EINTR)
+					if(errno == EINTR || errno == EAGAIN) {
 						goto try_again;
+					}
 				}
-				throw new Exception("uh oh " ~ lastSocketError); // FIXME
+				throw new Exception(lastSocketError); // FIXME
 			}
 			if(ret == 0) {
 				sourceClosed = true;

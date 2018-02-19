@@ -16,7 +16,6 @@ Glossary feature: little short links that lead somewhere else.
 		* search
 		* package index without needing to build everything at once
 		* version specifiers
-		* fix spurious extern(C) etc (see std.stdio.write)
 		* prettified constraints
 */
 
@@ -966,7 +965,7 @@ void addLineNumbering(Element pre, bool id = false) {
 		html ~= "\n";
 		count++;
 	}
-	pre.innerHTML = html;
+	pre.innerHTML = html.stripRight;
 	pre.addClass("with-line-wrappers");
 
 	if(count >= 10000)
@@ -1040,16 +1039,25 @@ abstract class Decl {
 	}
 
 	bool isDocumented() {
+		if(this.isModule)
+			return true; // allow undocumented modules because then it will at least descend into documented children
+
 		if(comment.length) // hack
 		return comment.length > 0; // cool, not a hack
+
+		// if it has any documented children, we want to pretend this is documented too
+		// since then it will be possible to navigate to it
+		foreach(child; children)
+			if(!child.isPrivate && child.isDocumented)
+				return true;
 
 		// what follows is all filthy hack
 		// the C bindings in druntime are not documented, but
 		// we want them to show up. So I'm gonna hack it.
 
 		auto mod = this.parentModule.name;
-		//if(mod.startsWith("core.sys") || mod.startsWith("core.stdc"))
-		//	return true;
+		if(mod.startsWith("core"))
+			return true;
 		return false;
 	}
 
@@ -1935,7 +1943,9 @@ mixin template CtorFrom(T) {
 		else static if(__traits(compiles, astNode.declarators[0].name.line)) {
 			if(astNode.declarators.length)
 				return cast(int) astNode.declarators[0].name.line;
-		}
+		} else static if(is(typeof(astNode) == const(Module))) {
+			return 0;
+		} else static assert(0, typeof(astNode).stringof);
 		return 0;
 	}
 
@@ -2173,6 +2183,7 @@ class Looker : ASTVisitor {
 	}
 
 	override void visit(const Unittest ut) {
+		//import std.stdio; writeln(fileBytes.length, " ", ut.blockStatement.startLocation, " ", ut.blockStatement.endLocation);
 		previousSibling.addUnittest(
 			ut,
 			fileBytes[ut.blockStatement.startLocation + 1 .. ut.blockStatement.endLocation], // trim off the opening and closing {}
@@ -2316,6 +2327,8 @@ void main(string[] args) {
 	string[] linkReferences;
 
 	bool annotateSource = false;
+
+	string locateSymbol = null;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -2324,6 +2337,7 @@ void main(string[] args) {
 		"link-references", "A file defining global link references", &linkReferences,
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
+		"locate-symbol", "Locate a symbol in the passed file", &locateSymbol,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
@@ -2337,7 +2351,7 @@ void main(string[] args) {
 		return;
 	}
 
-	{
+	if(locateSymbol is null) {
 		import std.file;
 
 		if(!exists(skeletonFile) && exists("skeleton-default.html"))
@@ -2357,9 +2371,16 @@ void main(string[] args) {
 
 	void process(string arg, bool generate) {
 		try {
+			if(locateSymbol is null)
 			writeln("First pass processing ", arg);
 			import std.file;
-			auto b = cast(ubyte[]) read(arg);
+			ubyte[] b;
+
+			if(arg == "-") {
+				foreach(chunk; stdin.byChunk(4096))
+					b ~= chunk;
+			} else
+				b = cast(ubyte[]) read(arg);
 
 			config.fileName = arg;
 			auto tokens = getTokensForParser(b, config, &stringCache);
@@ -2395,7 +2416,7 @@ void main(string[] args) {
 			if(generate && annotateSource) {
 				auto annotatedSourceDocument = new Document();
 				annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
-				auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root))).addClass("d_code highlighted");
+				auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root, "../", true))).addClass("d_code highlighted");
 				addLineNumbering(code.requireSelector("pre"), true);
 				auto content = annotatedSourceDocument.requireElementById("page-content");
 				content.addChild(code);
@@ -2445,7 +2466,7 @@ void main(string[] args) {
 
 	string[] generateFiles;
 	foreach(argIdx, arg; args) {
-		if(std.file.isDir(arg))
+		if(arg != "-" && std.file.isDir(arg))
 			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth))
 				generateFiles ~= name;
 		else
@@ -2459,6 +2480,7 @@ void main(string[] args) {
 		if(std.file.isDir(arg)) {
 			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth)) {
 				bool g = false;
+				if(locateSymbol is null)
 				foreach(idx, a; args) {
 					if(a == name) {
 						g = true;
@@ -2473,6 +2495,7 @@ void main(string[] args) {
 		} else {
 			bool g = false;
 
+			if(locateSymbol is null)
 			foreach(idx, a; args) {
 				if(a == arg) {
 					g = true;
@@ -2487,7 +2510,16 @@ void main(string[] args) {
 	}
 
 	foreach(argIdx, arg; args) {
-		process(arg, true);
+		process(arg, locateSymbol is null ? true : false);
+	}
+
+	if(locateSymbol !is null) {
+		auto decl = moduleDecls[0].lookupName(locateSymbol);
+		if(decl is null)
+			writeln("not found ", locateSymbol);
+		else
+			writeln(decl.lineNumber);
+		return;
 	}
 
 	// create dummy packages for those not found in the source
@@ -2938,7 +2970,7 @@ Html toLinkedHtml(T)(const T t, Decl decl) {
 	return Html(linkUpHtml(s, decl));
 }
 
-string linkUpHtml(string s, Decl decl) {
+string linkUpHtml(string s, Decl decl, string base = "", bool linkToSource = false) {
 	auto document = new Document("<root>" ~ s ~ "</root>", true, true);
 
 	// additional cross referencing we weren't able to do at lower level
@@ -2987,10 +3019,22 @@ string linkUpHtml(string s, Decl decl) {
 				found = overloads[0];
 		}
 
-		if(found && found.isDocumented && !found.isPrivate) {
-			ident.attrs.title = found.fullyQualifiedName;
-			ident.tagName = "a";
-			ident.href = found.link ~ hash;
+		void linkToDoc() {
+			if(found && found.isDocumented && !found.isPrivate) {
+				ident.attrs.title = found.fullyQualifiedName;
+				ident.tagName = "a";
+				ident.href = base ~ found.link ~ hash;
+			}
+		}
+
+		if(linkToSource) {
+			if(found && linkToSource && found.parentModule) {
+				ident.attrs.title = found.fullyQualifiedName;
+				ident.tagName = "a";
+				ident.href = found.parentModule.name ~ ".d.html#L" ~ to!string(found.lineNumber);
+			}
+		} else {
+			linkToDoc();
 		}
 	}
 
@@ -3029,8 +3073,24 @@ string toText(T)(const T t) {
 }
 
 string toId(string txt) {
-	auto id = txt.toLower.strip.squeeze(" ").replace(" ", "-");
-	return id;
+	string id;
+	bool justSawSpace;
+	foreach(ch; txt) {
+		if(ch < 127) {
+			if(ch >= 'A' && ch <= 'Z') {
+				id ~= ch + 32;
+			} else if(ch == ' ') {
+				if(!justSawSpace)
+					id ~= '-';
+			} else {
+				id ~= ch;
+			}
+		} else {
+			id ~= ch;
+		}
+		justSawSpace = ch == ' ';
+	}
+	return id.strip;
 }
 
 

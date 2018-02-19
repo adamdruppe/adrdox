@@ -449,6 +449,7 @@ public:
     /** */ IdentifierList identifierList;
     /** */ AliasInitializer[] initializers;
     /** */ string comment;
+    size_t line;
 }
 
 ///
@@ -524,6 +525,7 @@ final class AnonymousEnumDeclaration : ASTNode
     }
     mixin OpEquals;
     string comment;
+    size_t line;
     /** */ Type baseType;
     /** */ AnonymousEnumMember[] members;
 }
@@ -539,6 +541,7 @@ final class AnonymousEnumMember : ASTNode
     /** */ Token name;
     /** */ ExpressionNode assignExpression;
     /** */ string comment;
+    size_t line;
 }
 
 ///
@@ -1329,7 +1332,7 @@ public:
     mixin(generateProperty("VersionSpecification", "versionSpecification"));
 
 
-    bool opEquals(const Object other) const
+    override bool opEquals(const Object other) const
     {
         auto otherDeclaration = cast(Declaration) other;
         if (otherDeclaration is null)
@@ -2396,6 +2399,7 @@ public:
     /** */ FunctionBody functionBody;
     /** */ MemberFunctionAttribute[] memberFunctionAttributes;
     /** */ string comment;
+    size_t line;
     mixin OpEquals;
 }
 
@@ -2903,6 +2907,7 @@ public:
     /** */ TemplateArguments templateArguments;
     /** */ MixinTemplateName mixinTemplateName;
     /** */ string comment;
+    size_t line;
     mixin OpEquals;
 }
 

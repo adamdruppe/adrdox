@@ -110,6 +110,7 @@ $(ADRDOX_SAMPLE
 
 	```c
 	/* Highlighted C */
+	#include<stdio.h>
 	typedef struct {
 		int a;
 	} test;
@@ -119,9 +120,21 @@ $(ADRDOX_SAMPLE
 	<?php
 		# highlighted PHP
 		function foo($a) {
+			$a = 'hello';
 			return $a;
 		}
 	?>
+	```
+
+	```python
+	# highlighted python
+	class test:
+		""" docstring """
+		def myfunc():
+			if True or 1 > 0:
+				print "hello"
+			else
+				print test
 	```
 
 	```html
@@ -139,7 +152,9 @@ $(ADRDOX_SAMPLE
 	```
 )
 
-Currently supported languages for highlighting include: C, C++, Javascript, PHP, Java, C#, CSS, HTML, XML, and D. Though, for D, you should use ddoc style `---` delimiters to get the full-featured D highlighter instead of using the simpler one here. This simple highlighter aims for good enough to help visually on simple examples rather than being perfect on each target language.
+Currently supported languages for highlighting include: C, C++, Javascript, PHP, Java, C#, CSS, HTML, XML, Ruby, Python, [arsd.script|adrscript] and D. Though, for D, you should use ddoc style `---` delimiters to get the full-featured D highlighter instead of using the simpler one here. This simple highlighter aims for good enough to help visually on simple examples rather than being perfect on each target language.
+
+Use the language name in all lower case when tagging the language, like `php` or `c++`.
 
 $(TIP If you ever want to document the syntax of a Markdown code block itself, I added a magic $(BACKTICK)$(BACKTICK)$(BACKTICK){ code }$(BACKTICK)$(BACKTICK)$(BACKTICK) syntax. As long as the braces are nested, everything inside will be considered part of the literal code block, including other code blocks.)
 

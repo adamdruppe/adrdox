@@ -1,3 +1,16 @@
+/*
+	REPL plan:
+		easy movement to/from a real editor
+		can edit a specific function
+		repl is a different set of globals
+		maybe ctrl+enter to execute vs insert another line
+
+		write state to file
+		read state from file
+			state consists of all variables and source to functions
+
+	Steal Ruby's [regex, capture] maybe
+*/
 /++
 	A small script interpreter that builds on [arsd.jsvar] to be easily embedded inside and to have has easy
 	two-way interop with the host D program.  The script language it implements is based on a hybrid of D and Javascript.
@@ -34,7 +47,7 @@
 
 	SPECIFICS
 	$(LIST
-	* Allows identifiers-with-dashes. To do subtraction, put spaces around the minus sign.
+	// * Allows identifiers-with-dashes. To do subtraction, put spaces around the minus sign.
 	* Allows identifiers starting with a dollar sign.
 	* string literals come in "foo" or 'foo', like Javascript, or `raw string` like D. Also come as “nested “double quotes” are an option!”
 	* double quoted string literals can do Ruby-style interpolation: "Hello, #{name}".
@@ -406,7 +419,7 @@ class TokenStream(TextStream) {
 			token.lineNumber = lineNumber;
 			token.scriptFilename = scriptFilename;
 
-			if(text[0] == ' ' || text[0] == '\t' || text[0] == '\n') {
+			if(text[0] == ' ' || text[0] == '\t' || text[0] == '\n' || text[0] == '\r') {
 				advance(1);
 				continue;
 			} else if(text[0] >= '0' && text[0] <= '9') {
@@ -476,7 +489,7 @@ class TokenStream(TextStream) {
 					while(pos < text.length
 						&& ((text[pos] >= 'a' && text[pos] <= 'z') ||
 							(text[pos] == '_') ||
-							(pos != 0 && text[pos] == '-') || // allow mid-identifier dashes for this-kind-of-name. For subtraction, add a space.
+							//(pos != 0 && text[pos] == '-') || // allow mid-identifier dashes for this-kind-of-name. For subtraction, add a space.
 							(text[pos] >= 'A' && text[pos] <= 'Z') ||
 							(text[pos] >= '0' && text[pos] <= '9')))
 					{
@@ -600,7 +613,7 @@ class TokenStream(TextStream) {
 						if(symbol == "//") {
 							// one line comment
 							int pos = 0;
-							while(pos < text.length && text[pos] != '\n')
+							while(pos < text.length && text[pos] != '\n' && text[0] != '\r')
 								pos++;
 							advance(pos);
 							continue mainLoop;
@@ -618,6 +631,7 @@ class TokenStream(TextStream) {
 						} else if(symbol == "/+") {
 							// FIXME: nesting comment
 						}
+						// FIXME: documentation comments
 
 						found = true;
 						token.type = ScriptToken.Type.symbol;
@@ -1308,6 +1322,10 @@ class IndexExpression : VariableExpression {
 			*v = e1.interpret(sc).value;
 			return this.getVarFrom(sc, *v);
 		}
+	}
+
+	override ref var setVar(PrototypeObject sc, var t, bool recurse = true, bool suppressOverloading = false) {
+        	return getVar(sc,recurse) = t;
 	}
 }
 

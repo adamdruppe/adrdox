@@ -83,6 +83,7 @@ class Parser
         mixin (nullCheck!`expect(tok!"alias")`);
         node.comment = comment;
         comment = null;
+	node.line = current.line;
 
         if (startsWith(tok!"identifier", tok!"=") || startsWith(tok!"identifier", tok!"("))
         {
@@ -112,7 +113,17 @@ class Parser
                 ~ " to the  old \"'alias' type identifier ';'\" syntax");
 	*/
             mixin (nullCheck!`node.type = parseType()`);
-            mixin (nullCheck!`node.identifierList = parseIdentifierList()`);
+	    if(startsWith(tok!"identifier", tok!"(")) {
+	    	// this is the insane
+		// alias int GetterType() @property;
+		// stuff... I just want to skip that shit.
+            	mixin (nullCheck!`node.identifierList = parseIdentifierList()`);
+		while(!currentIs(tok!";"))
+			advance;
+		//parseFunctionDeclaration();
+
+	    } else
+            	mixin (nullCheck!`node.identifierList = parseIdentifierList()`);
         }
         mixin (nullCheck!`expect(tok!";")`);
         return node;
@@ -1120,6 +1131,8 @@ class Parser
             node.endLocation = closeBrace.index;
         else
         {
+	//import std.stdio; writeln(node.startLocation);
+	//assert(0);
             trace("Could not find end of block statement.");
             node.endLocation = size_t.max;
         }
@@ -2402,6 +2415,8 @@ class Parser
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!AnonymousEnumMember;
 
+	node.line = current.line;
+
         if (currentIs(tok!"identifier") && peekIsOneOf(tok!",", tok!"=", tok!"}"))
         {
             node.comment = current.comment;
@@ -2439,6 +2454,7 @@ class Parser
     {
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!AnonymousEnumDeclaration;
+	node.line = current.line;
 	node.comment = comment;
         mixin (nullCheck!`expect(tok!"enum")`);
         immutable bool hasBaseType = currentIs(tok!":");
@@ -4323,6 +4339,7 @@ class Parser
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!Postblit;
 	node.comment = comment;
+	node.line = current.line;
 	comment = null;
         expect(tok!"this");
         expect(tok!"(");
@@ -5535,6 +5552,7 @@ class Parser
         mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!TemplateMixinExpression;
         node.comment = comment;
+	node.line = current.line;
         comment = null;
         if (expect(tok!"mixin") is null) { deallocate(node); return null; }
         mixin (nullCheck!`node.mixinTemplateName = parseMixinTemplateName()`);

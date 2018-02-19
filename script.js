@@ -1,4 +1,33 @@
-window.onload = function() {
+window.addEventListener("load", function() {
+
+	var lineWrappers = document.querySelectorAll(".with-line-wrappers");
+	for(var i = 0; i < lineWrappers.length; i++) {
+		var l = lineWrappers[i];
+		var btn = document.createElement("button");
+		btn.setAttribute("type", "button");
+		btn.addEventListener("click", (function(l) { return function() {
+			document.body.classList.add("hide-line-numbers");
+			window.getSelection().selectAllChildren(l);
+		};})(l));
+		btn.textContent = "Select All";
+		l.parentNode.insertBefore(btn, l);
+
+		var btn = document.createElement("button");
+		btn.setAttribute("type", "button");
+		btn.addEventListener("click", function() {
+			document.body.classList.toggle("hide-line-numbers");
+		});
+		btn.textContent = "Toggle Line Numbers";
+		l.parentNode.insertBefore(btn, l);
+
+	}
+
+	/* // still sucks in firefox!
+	document.addEventListener("copy", function(event) {
+		document.body.classList.add("hide-line-numbers");
+	});
+	*/
+
 	document.body.addEventListener("mouseover", function(event) {
 		if(event.target.hasAttribute("data-ident")) {
 			var all = document.querySelectorAll("[data-ident=\""+event.target.getAttribute("data-ident")+"\"]");
@@ -117,4 +146,4 @@ window.onload = function() {
 			items[a].className = items[a].className.replace("with-line-wrappers", "");
 	}
 
-};
+});
