@@ -1042,7 +1042,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					else if(language == "css")
 						ele = div.addChild("pre", syntaxHighlightCss(code));
 					else if(language == "html" || language == "xml")
-						ele = div.addChild("pre", syntaxHighlightHtml(code));
+						ele = div.addChild("pre", syntaxHighlightHtml(code, language));
 					else if(language == "python")
 						ele = div.addChild("pre", syntaxHighlightPython(code));
 					else if(language == "ruby")
@@ -2753,6 +2753,26 @@ Element translateList(string text, Decl decl, string tagName) {
 Html syntaxHighlightCss(string code) {
 	string highlighted;
 
+
+	int pullPiece(string code, bool includeDot) {
+		int i;
+		while(i < code.length && (
+			(code[i] >= '0' && code[i] <= '9')
+			||
+			(code[i] >= 'a' && code[i] <= 'z')
+			||
+			(code[i] >= 'A' && code[i] <= 'Z')
+			||
+			(includeDot && code[i] == '.') || code[i] == '_' || code[i] == '-' || code[i] == ':' // for css i want to match like :first-letter
+		))
+		{
+			i++;
+		}
+		return i;
+	}
+
+
+
 	while(code.length) {
 		switch(code[0]) {
 			case '\'':
@@ -2800,8 +2820,88 @@ Html syntaxHighlightCss(string code) {
 				highlighted ~= "&amp;";
 				code = code[1 .. $];
 			break;
+			case '@':
+				// @media, @import, @font-face, etc
+				auto i = pullPiece(code[1 .. $], false);
+				if(i)
+					i++;
+				else
+					goto plain;
+				highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '\n', ';':
+				// check for a new rule (imprecise since we don't actually parse, but meh
+				// will ignore indent, then see if there is a word-like-this followed by :
+				int i = 1;
+				while(i < code.length && (code[i] == ' ' || code[i] == '\t'))
+					i++;
+				int start = i;
+				while(i < code.length && (code[i] == '-' || (code[i] >= 'a' && code[i] <= 'z')))
+					i++;
+				if(start == i || i == code.length || code[i] != ':')
+					goto plain;
 
+				highlighted ~= code[0 .. start];
+				highlighted ~= "<span class=\"highlighted-named-constant\">" ~ htmlEntitiesEncode(code[start .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '[':
+				// attribute match rule
+				auto i = pullPiece(code[1 .. $], false);
+				if(i)
+					i++;
+				else
+					goto plain;
+				highlighted ~= "<span class=\"highlighted-attribute-name\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '#', '.': // id or class selector
+				auto i = pullPiece(code[1 .. $], false);
+				if(i)
+					i++;
+				else
+					goto plain;
+				highlighted ~= "<span class=\"highlighted-identifier\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case ':':
+				// pseudoclass
+				auto i = pullPiece(code, false);
+				highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '(':
+				// just skipping stuff in parens...
+				int parenCount = 0;
+				int pos = 0;
+				bool inQuote;
+				bool escaped;
+				while(pos < code.length) {
+					if(code[pos] == '\\')
+						escaped = true;
+					if(!escaped && code[pos] == '"')
+						inQuote = !inQuote;
+					if(!inQuote && code[pos] == '(')
+						parenCount++;
+					if(!inQuote && code[pos] == ')')
+						parenCount--;
+					pos++;
+					if(parenCount == 0)
+						break;
+				}
+
+				highlighted ~= "<span class=\"highlighted-identifier\">" ~ htmlEntitiesEncode(code[0 .. pos]) ~ "</span>";
+				code = code[pos .. $];
+			break;
+			case '0': .. case '9':
+				// number. including text at the end cuz it is probably a unit
+				auto i = pullPiece(code, true);
+				highlighted ~= "<span class=\"highlighted-number\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
 			default:
+			plain:
 				highlighted ~= code[0];
 				code = code[1 .. $];
 		}
@@ -2922,8 +3022,222 @@ string htmlEntitiesHighlight(string code) {
 }
 
 Html syntaxHighlightRuby(string code) {
-	// FIXME
-	return Html(htmlEntitiesEncode(code));
+	// FIXME this is quite minimal and crappy
+	// ruby just needs to be parsed to be lexed!
+	// and i didn't implement its myriad of strings
+
+	static immutable string[] rubyKeywords = [
+		"BEGIN", "ensure", "self", "when",
+		"END", "not", "super", "while",
+		"alias", "defined", "for", "or", "then", "yield",
+		"and", "do", "if", "redo",
+		"begin", "else", "in", "rescue", "undef",
+		"break", "elsif", "retry", "unless",
+		"case", "end", "next", "return", "until",
+	];
+
+	static immutable string[] rubyPreprocessors = [
+		"require", "include"
+	];
+
+	static immutable string[] rubyTypes = [
+		"class", "def", "module"
+	];
+
+	static immutable string[] rubyConstants = [
+		"nil", "false", "true",
+	];
+
+	bool lastWasType;
+	char lastChar;
+	int indentLevel;
+	int[] declarationIndentLevels;
+
+	string highlighted;
+
+	while(code.length) {
+		bool thisIterWasType = false;
+		auto ch = code[0];
+		switch(ch) {
+			case '#':
+				size_t i;
+				while(i < code.length && code[i] != '\n')
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '<':
+				highlighted ~= "&lt;";
+				code = code[1 .. $];
+			break;
+			case '>':
+				highlighted ~= "&gt;";
+				code = code[1 .. $];
+			break;
+			case '&':
+				highlighted ~= "&amp;";
+				code = code[1 .. $];
+			break;
+			case '0': .. case '9':
+				// number literal
+				size_t i;
+				while(i < code.length && (
+					(code[i] >= '0' && code[i] <= '9')
+					||
+					(code[i] >= 'a' && code[i] <= 'z')
+					||
+					(code[i] >= 'A' && code[i] <= 'Z')
+					||
+					code[i] == '.' || code[i] == '_'
+				))
+				{
+					i++;
+				}
+
+				highlighted ~= "<span class=\"highlighted-number\">" ~ htmlEntitiesEncode(code[0 .. i]) ~ "</span>";
+				code = code[i .. $];
+			break;
+			case '"', '\'':
+				// string
+				// check for triple-quoted string
+				if(ch == '"') {
+
+					// double quote string
+					auto idx = 1;
+					bool escaped = false;
+					int nestedCount = 0;
+					bool justSawHash = false;
+					while(!escaped && nestedCount == 0 && code[idx] != '"') {
+						if(justSawHash && code[idx] == '{')
+							nestedCount++;
+						if(nestedCount && code[idx] == '}')
+							nestedCount--;
+
+						if(!escaped && code[idx] == '#')
+							justSawHash = true;
+
+						if(code[idx] == '\\')
+							escaped = true;
+						else {
+							escaped = false;
+						}
+
+						idx++;
+					}
+					idx++;
+
+					highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. idx]) ~ "</span>";
+					code = code[idx .. $];
+				} else {
+					int end = 1;
+					bool escaped;
+					while(end < code.length && !escaped && code[end] != ch) {
+						escaped = (code[end] == '\\');
+						end++;
+					}
+
+					if(end < code.length)
+						end++;
+
+					highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. end]) ~ "</span>";
+					code = code[end .. $];
+				}
+			break;
+			case '\n':
+				indentLevel = 0;
+				int i = 1;
+				while(i < code.length && (code[i] == ' ' || code[i] == '\t')) {
+					i++;
+					indentLevel++;
+				}
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case ' ', '\t':
+				thisIterWasType = lastWasType; // don't change the last counter on just whitespace
+				highlighted ~= ch;
+				code = code[1 .. $];
+			break;
+			case ':':
+				// check for ruby symbol
+				int nameEnd = 1;
+				while(nameEnd < code.length && (
+					(code[nameEnd] >= 'a' && code[nameEnd] <= 'z') ||
+					(code[nameEnd] >= 'A' && code[nameEnd] <= 'Z') ||
+					(code[nameEnd] >= '0' && code[nameEnd] <= '0') ||
+					code[nameEnd] == '_'
+				))
+				{
+					nameEnd++;
+				}
+
+				if(nameEnd > 1) {
+					highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(code[0 .. nameEnd]) ~ "</span>";
+					code = code[nameEnd .. $];
+				} else {
+					highlighted ~= ch;
+					code = code[1 .. $];
+				}
+			break;
+			default:
+				// check for names
+				int nameEnd = 0;
+				while(nameEnd < code.length && (
+					(code[nameEnd] >= 'a' && code[nameEnd] <= 'z') ||
+					(code[nameEnd] >= 'A' && code[nameEnd] <= 'Z') ||
+					(code[nameEnd] >= '0' && code[nameEnd] <= '0') ||
+					code[nameEnd] == '_'
+				))
+				{
+					nameEnd++;
+				}
+
+				if(nameEnd) {
+					auto name = code[0 .. nameEnd];
+					code = code[nameEnd .. $];
+
+					if(rubyTypes.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-type\">" ~ name ~ "</span>";
+						thisIterWasType = true;
+						declarationIndentLevels ~= indentLevel;
+					} else if(rubyConstants.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-number\">" ~ name ~ "</span>";
+					} else if(rubyPreprocessors.canFind(name)) {
+						highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ name ~ "</span>";
+					} else if(rubyKeywords.canFind(name)) {
+						if(name == "end") {
+							if(declarationIndentLevels.length && indentLevel == declarationIndentLevels[$-1]) {
+								// cheating on matching ends with declarations: if indentation matches...
+								highlighted ~= "<span class=\"highlighted-type\">" ~ name ~ "</span>";
+								declarationIndentLevels = declarationIndentLevels[0 .. $-1];
+							} else {
+								highlighted ~= "<span class=\"highlighted-keyword\">" ~ name ~ "</span>";
+							}
+						} else {
+							highlighted ~= "<span class=\"highlighted-keyword\">" ~ name ~ "</span>";
+						}
+					} else {
+						if(lastWasType) {
+							highlighted ~= "<span class=\"highlighted-identifier\">" ~ name ~ "</span>";
+						} else {
+							if(name.length && name[0] >= 'A' && name[0] <= 'Z')
+								highlighted ~= "<span class=\"highlighted-named-constant\">" ~ name ~ "</span>";
+							else
+								highlighted ~= name;
+						}
+					}
+				} else {
+					highlighted ~= ch;
+					code = code[1 .. $];
+				}
+			break;
+		}
+		lastChar = ch;
+		lastWasType = thisIterWasType;
+	}
+
+	return Html(highlighted);
 }
 
 Html syntaxHighlightPython(string code) {
@@ -3233,7 +3547,7 @@ Html syntaxHighlightPython(string code) {
 	return Html(highlighted);
 }
 
-Html syntaxHighlightHtml(string code) {
+Html syntaxHighlightHtml(string code, string language) {
 	string highlighted;
 
 	bool isWhite(char c) {
@@ -3265,10 +3579,27 @@ Html syntaxHighlightHtml(string code) {
 						goto plain_lt;
 
 					auto tag = code[0 .. i + 1];
+					code = code[i + 1 .. $];
 
 					highlighted ~= "<span class=\"highlighted-tag\">" ~ highlightHtmlTag(tag) ~ "</span>";
 
-					code = code[i + 1 .. $];
+					if(language == "html" && tag.startsWith("<script")) {
+						auto end = code.indexOf("</script>");
+						if(end == -1)
+							continue;
+
+						auto sCode = code[0 .. end];
+						highlighted ~= syntaxHighlightCFamily(sCode, "javascript").source;
+						code = code[end .. $];
+					} else if(language == "html" && tag.startsWith("<style")) {
+						auto end = code.indexOf("</style>");
+						if(end == -1)
+							continue;
+						auto sCode = code[0 .. end];
+						highlighted ~= syntaxHighlightCss(sCode).source;
+						code = code[end .. $];
+					}
+
 					continue;
 				}
 
@@ -3447,8 +3778,10 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 						highlighted ~= "<span class=\"highlighted-keyword\">" ~ ident ~ "</span>";
 					else if(["enum", "final", "virtual", "explicit", "var", "void", "const", "let", "int", "short", "unsigned", "char", "class", "struct", "float", "double", "typedef", "public", "protected", "private", "static"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
+					else if(ident[0] == '$')
+						highlighted ~= "<span class=\"highlighted-identifier\">" ~ ident ~ "</span>";
 					else
-						highlighted ~= "<span>" ~ ident ~ "</span>";
+						highlighted ~= ident; // "<span>" ~ ident ~ "</span>";
 
 				} else {
 					highlighted ~= jsCode[0];

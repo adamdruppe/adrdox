@@ -1073,6 +1073,7 @@ pre.d_code,
 	text-decoration: none;
 	cursor: help;
 }
+.highlighted-named-constant,
 .highlighted-attribute-name {
 	color: green;
 }

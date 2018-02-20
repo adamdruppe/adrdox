@@ -152,7 +152,7 @@ $(ADRDOX_SAMPLE
 	```
 )
 
-Currently supported languages for highlighting include: C, C++, Javascript, PHP, Java, C#, CSS, HTML, XML, Ruby, Python, [arsd.script|adrscript] and D. Though, for D, you should use ddoc style `---` delimiters to get the full-featured D highlighter instead of using the simpler one here. This simple highlighter aims for good enough to help visually on simple examples rather than being perfect on each target language.
+Currently supported languages for highlighting include: C, C++, Javascript, PHP, Java, C#, CSS, HTML, XML, Python, Ruby, [arsd.script|adrscript] and D. Though, for D, you should use ddoc style `---` delimiters to get the full-featured D highlighter instead of using the simpler one here. This simple highlighter aims for good enough to help visually on simple examples rather than being perfect on each target language.
 
 Use the language name in all lower case when tagging the language, like `php` or `c++`.
 
