@@ -438,7 +438,15 @@ Element formatUnittestDocTuple(Decl.ProcessedUnittest example, Decl decl) {
 
 	holder.addChild(formatDocumentationComment2(preprocessComment(example.comment), decl).addClass("documentation-comment"));
 	auto pre = holder.addChild("pre").addClass("d_code highlighted");
-	pre.innerHTML = highlight(outdent(example.code));
+
+	// trim off leading/trailing newlines since they just clutter output
+	auto codeToWrite = example.code;
+	while(codeToWrite.length && (codeToWrite[0] == '\n' || codeToWrite[0] == '\r'))
+		codeToWrite = codeToWrite[1 .. $];
+	while(codeToWrite.length && (codeToWrite[$-1] == '\n' || codeToWrite[$-1] == '\r'))
+		codeToWrite = codeToWrite[0 .. $ - 1];
+
+	pre.innerHTML = highlight(outdent(codeToWrite));
 
 	return holder;
 }
