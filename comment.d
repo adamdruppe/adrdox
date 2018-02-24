@@ -1271,17 +1271,57 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 				} else
 					goto ordinary;
 			break;
+			case '!':
+				// possible markdown-style image
+				if(remaining.length > 1 && remaining[1] == '[') {
+					auto inside = remaining[1 .. $];
+					auto txt = extractBalanceOnSingleLine(inside);
+					if(txt is null)
+						goto ordinary;
+					if(txt.length < inside.length && inside[txt.length] == '(') {
+						// possible markdown image
+						auto parens = extractBalanceOnSingleLine(inside[txt.length .. $]);
+						if(parens.length) {
+							auto a = Element.make("img");
+							a.alt = txt[1 .. $-1];
+							a.src = parens[1 .. $-1];
+							put(a.toString());
+
+							idx ++; // skip the !
+							idx += parens.length;
+							idx += txt.length;
+							idx --; // so the ++ in the for loop brings us back to i
+							break;
+						}
+					}
+				}
+				goto ordinary;
+			break;
 			case '[':
-				// wiki-style reference iff [[text]] or [[text|other text]]
+				// wiki-style reference iff [text] or [text|other text]
+				// or possibly markdown style link: [text](url)
 				// text MUST be either a valid D identifier chain, optionally with a section hash,
 				// or a fully-encoded http url.
 				// text may never include ']' or '|' or whitespace or ',' and must always start with '_' or alphabetic (like a D identifier or http url)
-				// other text may include anything except the string ']]'
+				// other text may include anything except the string ']'
 				// it balances [] inside it.
 
-				auto txt = extractBalance(remaining);
+				auto txt = extractBalanceOnSingleLine(remaining);
 				if(txt is null)
 					goto ordinary;
+				if(txt.length < remaining.length && remaining[txt.length] == '(') {
+					// possible markdown link
+					auto parens = extractBalanceOnSingleLine(remaining[txt.length .. $]);
+					if(parens.length) {
+						auto a = Element.make("a", txt[1 .. $-1], parens[1 .. $-1]);
+						put(a.toString());
+
+						idx += parens.length;
+						idx += txt.length;
+						idx --; // so the ++ in the for loop brings us back to i
+						break;
+					}
+				}
 
 				auto fun = txt[1 .. $-1];
 				string rt;
@@ -1417,7 +1457,7 @@ bool checkStupidDdocIsm(string remaining, Decl decl) {
 	return false;
 }
 
-string extractBalance(string txt) {
+string extractBalanceOnSingleLine(string txt) {
 	if(txt.length == 0) return null;
 	char starter = txt[0];
 	char terminator;
@@ -1437,6 +1477,8 @@ string extractBalance(string txt) {
 
 	int count;
 	foreach(idx, ch; txt) {
+		if(ch == '\n')
+			return null;
 		if(ch == starter)
 			count++;
 		else if(ch == terminator)

@@ -283,6 +283,10 @@ You can also change the display name by putting a pipe after the link, followed 
 
 Local sections can be referenced with `[#cross-referencing]`: [#cross-referencing].
 
+$(H3 Markdown-style links)
+
+Markdown-style `[text](url)` links are also supported. There must be no space between the `]` and `(` and it must all appear on the same line. [My link here](http://dpldocs.info). Markdown-style links do $(B not) attempt name lookups like adrdox native `[links]`.
+
 $(H2 Paragraph detection)
 
 The generator will automatically handle paragraph tags by looking for blank lines and other separators. Just write and trust it to do the right thing. (If it doesn't, email me a bug report, please.)
@@ -296,6 +300,10 @@ The image will typically be hosted elsewhere, `IMG` simply takes a URL (though i
 FIXME: implement and document `$(LEFT )`, `$(RIGHT )`, and `$(CENTERED )`.
 
 You may also use inline `$(SVG )` or `$(RAW_HTML)`. FIXME
+
+Markdown-style `![alt text](url)` images are also supported, iff there are no spaces between the symbols and all appear on the same line. ![d logo](/d-logo.png).
+
+Note that if the parens are not there, it is normal![1] (code there: `normal![1]`)
 
 $(H2 Headers)
 
