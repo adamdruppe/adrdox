@@ -68,13 +68,77 @@ $(ADRDOX_SAMPLE
 	blocks, are ignored. You can format your comments however you like.
 )
 
+$(H3 Symbol grouping)
+
+You can optionally group symbols together by defining groups in a special section in your module definition comment, then tagging the doc comments on the items.
+
+---
+/++
+	This demos symbol grouping.
+
+	Symbol_groups:
+
+	group_name =
+		Introductory and explanatory text for the group. It may
+		include any kind of 
+
+	drawing =
+		## Drawing
+
+		This library supports several drawing functions. You
+		draw them all on a "surface" of sorts, derived from
+		[Drawable].
++/
+module test;
+
+/++ Group: group_name
+	Introductory text
+
+	and paragraphs like normal.
+
+
+	This goes below the fold.
++/
+void foo() {}
+
+/++
+	This is in the [drawing] group.
+
+	Group: drawing
++/
+interface Drawable {
+	/// Group: group_name
+	void whatever() {}
+}
+---
+
+The `Symbol_groups:` section should only appear on the module commment. The `Group: name` line MUST be the first thing to appear in a comment, or be on the very last line of the comment. It can only appear once. Putting a function in multiple groups is not current supported.
+
+If there is no header at the start of the group definition, one will be automatically inserted based on the group name.
+
+For cross referencing purposes, the groups are considered pseudo-symbols at module scope. This means you can refer to them with the shortcut `[symbol]` syntax from anywhere in the module, or from outside the module if used with a fully-qualified name.
+
+However, for best results, it should not conflict with any real names in the module, nor with any [#footnotes|link references], which also introduce pseudo-symbols. If there is a conflict, the reference result is currently undefined (it may be any one of them, in no particular order). I will define that precedence order at some other time - so for now, avoid name conflicts!
+
+$(H2 Macros)
+
+adrdox inherits ddoc's macro syntax, but uses it differently than ddoc: it does not support user-defined macros, and sometimes uses them to bracket special syntax.
+
+Any time you see me show ddoc macro syntax, `$(NAME )`, be aware that you can also use `${NAME }`. For example, if you have unbalanced parenthesis inside the thing, you may prefer to use `${}`.
+
+${ADRDOX_SAMPLE
+	$(B this is bold)
+	${B so is this}
+	${I this has unbalanced paren :) }
+}
+
 $(H2 Code snippets)
 
 $(H3 Inline code)
 
-Inline code can be marked with Markdown (and Ddoc) style $(BACKTICK)code here $(BACKTICK), which will render as `code here`. Text inside the backticks suppress all other documentation generator processing - it will just be escaped for literal output.
+Inline code can be marked with Markdown (and Ddoc) style ``code here ``, which will render as `code here`. Text inside the backticks suppress all other documentation generator processing - it will just be escaped for literal output.
 
-$(TIP If you need to display a literal $(BACKTICK), use the `$(BACKTICK)` macro.)
+$(TIP If you need to display a literal ``, use the `$(BACKTICK)` macro or a doubled backtick: ````.)
 
 Code inside backticks may only span one line. If a line has an unmatched backtick, it is not processed as code.
 
@@ -235,7 +299,52 @@ You may also use inline `$(SVG )` or `$(RAW_HTML)`. FIXME
 
 $(H2 Headers)
 
-You use ddoc-style macros for headers: `$(H1 Name of header)`, `$(H2 Subheader)`, and so on through `$(H6)`. Linking will be added automatically by the generator.
+You can use ddoc-style macros for headers: `$(H1 Name of header)`, `$(H2 Subheader)`, and so on through `$(H6)`. Linking will be added automatically by the generator.
+
+Custom ddoc sections (see below) are translated into `<h3>` headers.
+
+You can also use a markdown style `====` under a line to trigger a header. These will render as `<h3>` if at top level, and `<h4>` if under a custom ddoc section (FIXME: that details is not yet implemented). For this to work:
+
+$(LIST
+	* The header must be preceded by a blank line
+	* The `====` must be directly below the header
+	* The `====` must be followed by a blank line
+	* There must be at least 4 `=` on the line, and no other text (excluding whitespace).
+)
+
+$(ADRDOX_SAMPLE
+
+	This is some text preceding the header.
+
+	This is the header
+	==================
+
+	This is a paragraph under that header.
+)
+
+Moreover, markdown style `## Header` are also supported. The number of `#` characters indicate the header level (1-6). Similar restrictions apply:
+
+$(LIST
+	* The header must be preceded by and followed by a blank line
+	* The `#` must be the first non-whitespace character on the line
+	* There must be a space following the `#` characters.
+)
+
+$(ADRDOX_SAMPLE
+
+	# H1
+
+	## H2
+
+	### H3
+
+	#not a header, missing space
+
+	a # is not a header
+
+	Nor is the following a header
+	# because it is not preceded by a blank line
+)
 
 $(H3 Ddoc sections)
 

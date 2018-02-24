@@ -173,6 +173,17 @@ void loadGlobalLinkReferences(string text) {
 	}
 }
 
+Element getSymbolGroupReference(string name, Decl decl, string rt) {
+	auto pm = decl.isModule() ? decl : decl.parentModule;
+	if(pm is null)
+		return null;
+	if(name in pm.parsedDocComment.symbolGroups) {
+		return Element.make("a", rt.length ? rt : name, pm.fullyQualifiedName ~ ".html#group-" ~ name);
+	}
+
+	return null;
+}
+
 LinkReferenceInfo getLinkReference(string name, Decl decl) {
 	bool numeric = (name.all!((ch) => ch >= '0' && ch <= '9'));
 
@@ -255,6 +266,10 @@ struct DocComment {
 	string throws;
 	string bugs;
 	string see_alsos;
+
+	string[string] symbolGroups; // stored as "name" : "raw text"
+	string[] symbolGroupsOrder;
+	string group; // the group this belongs to, if any
 
 	string[string] otherSections;
 
@@ -411,6 +426,9 @@ struct DocComment {
 			}
 		}
 
+		if(group)
+			see_alsos ~= "\n\n[" ~ group ~ "]";
+
 		if(see_alsos.length) {
 			output.putTag("<h2 id=\"see-also\">See Also</h2>");
 			output.putTag("<div class=\"documentation-comment see-also-section\">");
@@ -539,7 +557,35 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 		bool hasAnySynopsis = false;
 		bool inDdocSummary = true;
 		bool synopsisEndedOnDoubleBlank = false;
+
+		// for symbol_groups
+		string* currentValue;
+
+		bool maybeGroupLine = true;
+
+
+		auto lastLineHelper = comment.strip;
+		auto lastLine = lastLineHelper.lastIndexOf("\n");
+		if(lastLine != -1) {
+			auto lastLineText = lastLineHelper[lastLine .. $].strip;
+			if(lastLineText.startsWith("Group: ") || lastLineText.startsWith("group: ")) {
+				c.group = lastLineText["Group: ".length .. $];
+				maybeGroupLine = false;
+
+				comment = lastLineHelper[0 .. lastLine].strip;
+			}
+		}
+
 		foreach(line; comment.splitter("\n")) {
+
+			if(maybeGroupLine) {
+				maybeGroupLine = false;
+				if(line.strip.startsWith("Group: ") || line.strip.startsWith("group: ")) {
+					c.group = line.strip["Group: ".length .. $]; // cut off closing paren
+					continue;
+				}
+			}
+
 			auto maybe = line.strip.toLower;
 
 			if(maybe.startsWith("---") || maybe.startsWith("```")) {
@@ -658,6 +704,10 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			} else if(maybe.startsWith("macros:")) {
 				inSynopsis = false;
 				section = "macros";
+			} else if(maybe.startsWith("symbol_groups:")) {
+				section = "symbol_groups";
+				line = line[line.indexOf(":")+1 .. $];
+				inSynopsis = false;
 			} else if(maybe.startsWith("link_references:")) {
 				inSynopsis = false;
 				section = "link_references";
@@ -677,6 +727,55 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 
 
 			ss: switch(section) {
+				case "symbol_groups":
+					// basically a copy/paste of Params but it is coincidental
+					// they might not always share syntax.
+					bool lookingForIdent = true;
+					bool inIdent;
+					bool skippingSpace;
+					size_t space_at;
+
+					auto lol = line.strip;
+					foreach(idx, ch; lol) {
+						import std.uni, std.ascii : isAlphaNum;
+						if(lookingForIdent && !inIdent) {
+							if(!isAlpha(ch) && ch != '_')
+								continue;
+							inIdent = true;
+							lookingForIdent = false;
+						}
+
+						if(inIdent) {
+							if(ch == '_' || isAlphaNum(ch) || isAlpha(ch))
+								continue;
+							else {
+								skippingSpace = true;
+								inIdent = false;
+								space_at = idx;
+							}
+						}
+						if(skippingSpace) {
+							if(!isWhite(ch)) {
+								if(ch == '=') {
+									// we finally hit a thingy
+									auto currentName = lol[0 .. space_at];
+
+									c.symbolGroups[currentName] = lol[idx + 1 .. $] ~ "\n";
+									c.symbolGroupsOrder ~= currentName;
+									currentValue = currentName in c.symbolGroups;
+									break ss;
+								} else
+									// we are expecting whitespace or = and hit
+									// neither.. this can't be ident = desc!
+									break;
+							}
+						}
+					}
+
+					if(currentValue !is null) {
+						*currentValue ~= line ~ "\n";
+					}
+				break;
 				case "params":
 					bool lookingForIdent = true;
 					bool inIdent;
@@ -919,8 +1018,49 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 		if(cp.length) {
 			if(currentTag is null)
 				div.appendHtml(cp);
-			else
+			else {
+				if(currentTag == "p") {
+					// check for a markdown style header
+					auto test = cp.strip;
+					auto lines = test.splitLines();
+					if(lines.length == 2) {
+						auto hdr = lines[0].strip;
+						auto equals = lines[1].strip;
+						if(equals.length >= 4) {
+							foreach(ch; equals)
+								if(ch != '=')
+									goto not_special;
+						} else {
+							goto not_special;
+						}
+
+						if(hdr.length == 0)
+							goto not_special;
+
+						// passed tests, I'll allow it:
+						currentTag = "h3";
+						cp = hdr;
+					} else if(lines.length == 1) {
+						int hashCount = 0;
+						foreach(idx, ch; test) {
+							if(ch == '#')
+								hashCount++;
+							else if(ch == ' ' && hashCount > 0) {
+								// it was special!
+								// there must be text after btw or else strip would have cut the space too
+								currentTag = "h" ~ to!string(hashCount);
+								cp = test[idx + 1 .. $];
+
+								break;
+							} else
+								break; // not special
+						}
+					}
+				}
+
+				not_special:
 				div.addChild(currentTag, Html(cp));
+			}
 		}
 		currentTag = "p";
 		currentParagraph = null;
@@ -1081,9 +1221,15 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					auto slice = remaining[1 .. foundItWhere + 1];
 					idx += 1 + foundItWhere;
 
-					auto ele = Element.make("tt").addClass("inline-code");
-					ele.innerText = slice;
-					put(ele.toString());
+					if(slice.length == 0) {
+						// empty code block is `` - doubled backtick. Just
+						// treat that as a literal (escaped) backtick.
+						putch('`');
+					} else {
+						auto ele = Element.make("tt").addClass("inline-code");
+						ele.innerText = slice;
+						put(ele.toString());
+					}
 				}
 			break;
 			case '$':
@@ -1155,9 +1301,13 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					goto ordinary;
 				} else {
 					auto lri = getLinkReference(fun, decl);
-					if(lri.type == LinkReferenceInfo.Type.none)
-						put(getReferenceLink(fun, decl, rt).toString);
-					else
+					if(lri.type == LinkReferenceInfo.Type.none) {
+						if(auto l = getSymbolGroupReference(fun, decl, rt)) {
+							put(l.toString());
+						} else {
+							put(getReferenceLink(fun, decl, rt).toString);
+						}
+					} else
 						put(lri.toHtml(fun, rt));
 				}
 
@@ -1881,8 +2031,11 @@ MacroInformation macroInformation(in char[] str) {
 	MacroInformation info;
 	info.terminatingOffset = str.length;
 
-	if (str.length < 2 || str[1] != '(')
+	if (str.length < 2 || (str[1] != '(' && str[1] != '{'))
 		return info;
+
+	auto open = str[1];
+	auto close = str[1] == '(' ? ')' : '}';
 
 	bool readingMacroName = true;
 	bool readingLeadingWhitespace;
@@ -1905,11 +2058,14 @@ MacroInformation macroInformation(in char[] str) {
 			info.textBeginningOffset = idx;
 		}
 
+		// so i want :) and :( not to count
+		// also prolly 1) and 2) etc.
+
 		if (ch == '\n')
 			info.linesSpanned++;
-		if (ch == '(')
+		if (ch == open)
 			parensCount++;
-		if (ch == ')')
+		if (ch == close)
 		{
 			parensCount--;
 			if (parensCount == 0)

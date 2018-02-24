@@ -1208,9 +1208,20 @@ pre.d_code,
 }
 
 #members + h3,
-.member-list + h3 {
+.member-list + h3,
+h3.member-list-header {
 	border-bottom: solid 1px #333;
+	text-transform: capitalize;
 }
+
+#members + h4,
+.member-list + h4,
+h4.member-list-header {
+	font-weight: normal;
+	text-transform: capitalize;
+	text-decoration: underline;
+}
+
 
 tr.leading-row th {
 	border-bottom: solid 2px black;

@@ -709,18 +709,59 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 	if(members.length) {
 		content.addChild("h2", "Members").id = "members";
-		Element dl;
-		string lastType;
-		foreach(child; members.sort!sorter) {
-			if(child.declarationType != lastType) {
-				content.addChild("h3", pluralize(child.declarationType).capitalize);
-				dl = content.addChild("dl").addClass("member-list native");
-				lastType = child.declarationType;
+
+		void outputMemberList(Decl[] members, string header, string idPrefix, string headerPrefix) {
+			Element dl;
+			string lastType;
+			foreach(child; members.sort!sorter) {
+				if(child.declarationType != lastType) {
+					auto hdr = content.addChild(header, headerPrefix ~ pluralize(child.declarationType).capitalize, "member-list-header");
+					hdr.id = idPrefix ~ child.declarationType;
+					dl = content.addChild("dl").addClass("member-list native");
+					lastType = child.declarationType;
+				}
+
+				handleChildDecl(dl, child);
+
+				writeHtml(child);
+			}
+		}
+
+		foreach(section; comment.symbolGroupsOrder) {
+			auto memberComment = formatDocumentationComment(preprocessComment(comment.symbolGroups[section]), decl);
+			string sectionPrintable = section.replace("_", " ").capitalize;
+			auto hdr = content.addChild("h3", sectionPrintable, "member-list-header");
+			hdr.id = "group-" ~ section;
+			auto dc = content.addChild("div").addClass("documentation-comment");
+			dc.innerHTML = memberComment;
+
+			if(auto hdr2 = dc.querySelector("> div:only-child > h2:first-child, > div:only-child > h3:first-child")) {
+				hdr.innerHTML = hdr2.innerHTML;
+				hdr2.removeFromTree;
 			}
 
-			handleChildDecl(dl, child);
+			Decl[] subList;
+			for(int i = 0; i < members.length; i++) {
+				auto member = members[i];
+				if(member.parsedDocComment.group == section) {
+					subList ~= member;
+					members[i] = members[$-1];
+					members = members[0 .. $-1];
+					i--;
+				}
+			}
 
-			writeHtml(child);
+			outputMemberList(subList, "h4", section ~ "-", sectionPrintable ~ " ");
+		}
+
+		if(members.length) {
+			if(comment.symbolGroupsOrder.length) {
+				auto hdr = content.addChild("h3", "Other", "member-list-header");
+				hdr.id = "group-other";
+				outputMemberList(members, "h4", "other-", "Other ");
+			} else {
+				outputMemberList(members, "h3", "", "");
+			}
 		}
 	}
 
