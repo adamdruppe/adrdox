@@ -5,11 +5,16 @@ window.addEventListener("load", function() {
 		var l = lineWrappers[i];
 		var btn = document.createElement("button");
 		btn.setAttribute("type", "button");
+		var canCopyToClipboard = document.queryCommandSupported("copy");
 		btn.addEventListener("click", (function(l) { return function() {
 			document.body.classList.add("hide-line-numbers");
 			window.getSelection().selectAllChildren(l);
+			if(canCopyToClipboard)
+				if(!document.execCommand("copy")) {
+					alert("copy failed, try ctrl+c manually");
+				}
 		};})(l));
-		btn.textContent = "Select All";
+		btn.textContent = canCopyToClipboard ? "Copy to Clipboard" : "Select All";
 		l.parentNode.insertBefore(btn, l);
 
 		var btn = document.createElement("button");
