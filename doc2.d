@@ -7,6 +7,10 @@ string outputDirectory = "generated-docs";
 
 Glossary feature: little short links that lead somewhere else.
 
+	FIXME:
+		skip any *.internal.* packages, unless specifically requested.
+
+
 
 	FIXME: it should be able to handle bom. consider core/thread.d the unittest example is offset.
 
@@ -528,6 +532,70 @@ void putSimplfiedArgs(T)(MyOutputRange output, const T decl) {
 
 }
 
+string specialPreprocess(string comment) {
+	switch(specialPreprocessor) {
+		case "gtk":
+			import std.regex : regex, replaceAll, Captures;
+			// gtk references to adrdox reference; punt it to the search engine
+			string magic(Captures!string m) {
+				string s = m.hit;
+				s = s[1 .. $]; // trim off #
+				auto name = s;
+
+				string additional;
+
+				auto idx = s.indexOf(":");
+				if(idx != -1) {
+					// colon means it is an attribute
+					auto property = s[idx + 1 .. $];
+					s = s[0 .. idx];
+					additional = ".get";
+					bool justSawDash = true;
+					foreach(ch; property) {
+						if(justSawDash && ch >= 'a' && ch <= 'z') {
+							additional ~= cast(char) (cast(int) ch - 32);
+						} else if(ch == '-') {
+							// intentionally blank
+						} else {
+							additional ~= ch;
+						}
+
+						if(ch == '-') {
+							justSawDash = true;
+						} else {
+							justSawDash = false;
+						}
+					}
+				}
+
+				// translate C names to D names
+				if(s.startsWith("Gtk")) {
+					s = "gtk." ~ s[3 .. $] ~ "." ~ s[3 .. $];
+					name = name[3 .. $];
+				}
+
+				s ~= additional;
+
+				return "[" ~ s ~ "|"~name~"]";
+			}
+			comment = replaceAll!magic(comment, regex(r"#[A-Za-z0-9_:\-\.]+", "g"));
+			// gtk params to inline code
+			comment = replaceAll(comment, regex(r"@([A-Za-z0-9_:]+)", "g"), "`$1`");
+			// constants too
+			comment = replaceAll(comment, regex(r"%([A-Za-z0-9_:]+)", "g"), "`$1`");
+			// and functions FIXME
+			comment = replaceAll(comment, regex(r"([A-Za-z0-9_]+)\(\)", "g"), "[$1]");
+
+			// their code blocks
+			comment = replace(comment, `|[<!-- language="C" -->`, "```c\n");
+			comment = replace(comment, `]|`, "\n```");
+		break;
+		default:
+			return comment;
+	}
+
+	return comment;
+}
 
 Document writeHtml(Decl decl, bool forReal = true) {
 	if(decl.isPrivate() || !decl.isDocumented())
@@ -2344,6 +2412,8 @@ import std.string : strip;
 //Decl[][string] packages;
 ModuleDecl[string] modulesByName;
 
+string specialPreprocessor;
+
 void main(string[] args) {
 	import std.stdio;
 	import std.path : buildPath;
@@ -2356,9 +2426,9 @@ void main(string[] args) {
 	config.stringBehavior = StringBehavior.source;
 	config.whitespaceBehavior = WhitespaceBehavior.include;
 
-	Module[] modules;
 	ModuleDecl[] moduleDecls;
 	ModuleDecl[] moduleDeclsGenerate;
+	ModuleDecl[string] moduleDeclsGenerateByName;
 
 	bool makeHtml = true;
 	bool makeSearchIndex = false;
@@ -2381,7 +2451,8 @@ void main(string[] args) {
 		"locate-symbol", "Locate a symbol in the passed file", &locateSymbol,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
-		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex);
+		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
+		"special-preprocessor", "Run a special preprocessor on comments. Only one supported right now is gtk", &specialPreprocessor);
 	
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
@@ -2432,65 +2503,74 @@ void main(string[] args) {
 			auto sweet = new Looker(b, baseName(arg));
 			sweet.visit(m);
 
-			auto mod = cast(ModuleDecl) sweet.root;
-			if(mod.astNode.moduleDeclaration is null)
-				throw new Exception("you must have a module declaration for this to work on it");
+			ModuleDecl existingDecl;
 
-			modules ~= m;
+			{
+				auto mod = cast(ModuleDecl) sweet.root;
+				if(mod.astNode.moduleDeclaration is null)
+					throw new Exception("you must have a module declaration for this to work on it");
 
-			if(b.startsWith(cast(ubyte[])"// just docs:"))
-				sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
+				if(b.startsWith(cast(ubyte[])"// just docs:"))
+					sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
 
-			if(sweet.root.name in modulesByName)
-				return; // it is here twice for some reason, do not double process
+				if(sweet.root.name !in modulesByName) {
+					moduleDecls ~= mod;
+					existingDecl = mod;
 
-			moduleDecls ~= sweet.root;
-			if(generate)
-				moduleDeclsGenerate ~= sweet.root;
+					assert(mod !is null);
+					modulesByName[sweet.root.name] = mod;
+				} else {
+					existingDecl = modulesByName[sweet.root.name];
+				}
+			}
 
-			assert(mod !is null);
-			modulesByName[sweet.root.name] = mod;
+
+			if(generate) {
+				if(sweet.root.name !in moduleDeclsGenerateByName) {
+					moduleDeclsGenerateByName[sweet.root.name] = existingDecl;
+					moduleDeclsGenerate ~= existingDecl;
+
+					if(annotateSource) {
+						auto annotatedSourceDocument = new Document();
+						annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
+						auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root, "../", true))).addClass("d_code highlighted");
+						addLineNumbering(code.requireSelector("pre"), true);
+						auto content = annotatedSourceDocument.requireElementById("page-content");
+						content.addChild(code);
+
+						auto nav = annotatedSourceDocument.requireElementById("page-nav");
+
+						void addDeclNav(Element nav, Decl decl) {
+							auto li = nav.addChild("li");
+							if(decl.isDocumented && !decl.isPrivate)
+								li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
+							li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
+							if(decl.children.length)
+								nav = li.addChild("ul");
+							foreach(child; decl.children)
+								addDeclNav(nav, child);
+
+						}
+
+						auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
+
+						addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), existingDecl);
+
+						annotatedSourceDocument.title = existingDecl.name ~ " source code";
+
+						if(!exists(outputDirectory ~ "source"))
+							mkdir(outputDirectory ~ "source");
+						foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
+							if(ele.tagName == "link")
+								ele.attrs.href = "../" ~ ele.attrs.href;
+							else
+								ele.attrs.src = "../" ~ ele.attrs.src;
+						std.file.write(outputDirectory ~ "source/" ~ existingDecl.name ~ ".d.html", annotatedSourceDocument.toString());
+					}
+				}
+			}
 
 			//packages[sweet.root.packageName] ~= sweet.root;
-
-
-			if(generate && annotateSource) {
-				auto annotatedSourceDocument = new Document();
-				annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
-				auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root, "../", true))).addClass("d_code highlighted");
-				addLineNumbering(code.requireSelector("pre"), true);
-				auto content = annotatedSourceDocument.requireElementById("page-content");
-				content.addChild(code);
-
-				auto nav = annotatedSourceDocument.requireElementById("page-nav");
-
-				void addDeclNav(Element nav, Decl decl) {
-					auto li = nav.addChild("li");
-					if(decl.isDocumented && !decl.isPrivate)
-						li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
-					li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
-					if(decl.children.length)
-						nav = li.addChild("ul");
-					foreach(child; decl.children)
-						addDeclNav(nav, child);
-
-				}
-
-				auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
-
-				addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), mod);
-
-				annotatedSourceDocument.title = mod.name ~ " source code";
-
-				if(!exists(outputDirectory ~ "source"))
-					mkdir(outputDirectory ~ "source");
-				foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
-					if(ele.tagName == "link")
-						ele.attrs.href = "../" ~ ele.attrs.href;
-					else
-						ele.attrs.src = "../" ~ ele.attrs.src;
-				std.file.write(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString());
-			}
 
 
 		} catch (Throwable t) {
@@ -2599,9 +2679,12 @@ void main(string[] args) {
 	// add modules to their packages, if possible
 	foreach(decl; moduleDecls) {
 		auto pkg = decl.packageName;
+		if(pkg.length == 0) {
+			continue;
+		}
 		if(auto a = pkg in modulesByName) {
 			(*a).addChild(decl);
-		}
+		} else assert(0, pkg ~ " " ~ decl.toString); // it should have make a fake package above
 	}
 
 	if(makeHtml) {
@@ -2688,6 +2771,11 @@ void main(string[] args) {
 		// and close the skeleton
 		index.writeln("</body></html>");
 	}
+
+
+	import std.stdio;
+	writeln("press any key to continue");
+	readln();
 }
 
 struct SearchResult {

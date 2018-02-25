@@ -15,6 +15,8 @@ import std.string : format;
 // Caution: generates 180 megabytes of logging for std.datetime
 //version = std_parser_verbose;
 
+enum minimize_memory = true;
+
 alias ParseAllocator = CAllocatorImpl!(Mallocator);
 
 /**
@@ -1151,6 +1153,13 @@ class Parser
     {
         mixin(traceEnterAndExit!(__FUNCTION__));
         mixin (simpleParse!(BodyStatement, tok!"body",
+            "blockStatement|parseBlockStatement"));
+    }
+
+    BodyStatement parseBodyDoStatement()
+    {
+        mixin(traceEnterAndExit!(__FUNCTION__));
+        mixin (simpleParse!(BodyStatement, tok!"do",
             "blockStatement|parseBlockStatement"));
     }
 
@@ -2875,7 +2884,13 @@ class Parser
             // valid inside of interfaces.
             if (currentIs(tok!"body"))
                 mixin (nullCheck!`node.bodyStatement = parseBodyStatement()`);
+	    else if(currentIs(tok!"do"))
+                mixin (nullCheck!`node.bodyStatement = parseBodyDoStatement()`);
         }
+	if(minimize_memory) {
+		.destroy(node.blockStatement);
+		.destroy(node.bodyStatement);
+	}
         return node;
     }
 
@@ -4559,6 +4574,7 @@ class Parser
         case tok!"in":
         case tok!"out":
         case tok!"body":
+        case tok!"do":
             if ((node.functionLiteralExpression = parseFunctionLiteralExpression()) is null)
             {
                 deallocate(node);

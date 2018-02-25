@@ -533,7 +533,7 @@ string preprocessComment(string comment) {
 	}
 
 	comment = newComment;
-	return comment;
+	return specialPreprocess(comment);
 }
 
 DocComment parseDocumentationComment(string comment, Decl decl) {
