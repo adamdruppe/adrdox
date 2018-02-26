@@ -624,7 +624,7 @@ string specialPreprocess(string comment) {
 	return comment;
 }
 
-Document writeHtml(Decl decl, bool forReal = true) {
+Document writeHtml(Decl decl, bool forReal, bool gzip) {
 	if(decl.isPrivate() || !decl.isDocumented())
 		return null;
 
@@ -749,7 +749,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			if(child is decl.disabledDefaultConstructor)
 				continue;
 			handleChildDecl(dl, child);
-			writeHtml(child);
+			writeHtml(child, forReal, gzip);
 		}
 	}
 
@@ -761,7 +761,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			handleChildDecl(dl, dtor);
 		else
 			content.addChild("p", "A destructor is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor);
+		//writeHtml(dtor, forReal, gzip);
 	}
 
 	if(auto postblit = decl.postblit) {
@@ -775,7 +775,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			handleChildDecl(dl, postblit);
 		else
 			content.addChild("p", "A postblit is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor);
+		//writeHtml(dtor, forReal, gzip);
 	}
 
 
@@ -785,7 +785,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		foreach(child; submodules.sort!((a,b) => a.name < b.name)) {
 			handleChildDecl(dl, child);
 
-			writeHtml(child);
+			writeHtml(child, forReal, gzip);
 		}
 	}
 
@@ -818,7 +818,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 				handleChildDecl(dl, child);
 
-				writeHtml(child);
+				writeHtml(child, forReal, gzip);
 			}
 		}
 
@@ -1085,8 +1085,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			addLineNumbering(pre);
 		}
 
-		import std.file;
-		std.file.write(outputDirectory ~ decl.link, document.toString());
+		writeFile(outputDirectory ~ decl.link, document.toString(), gzip);
 		import std.stdio;
 		writeln("WRITTEN TO ", decl.link);
 	}
@@ -2624,6 +2623,20 @@ string[] scanFiles (string basedir) {
 	return res;
 }
 
+void writeFile(string filename, string content, bool gzip) {
+	import std.zlib;
+	import std.file;
+
+	if(gzip) {
+		auto compress = new Compress(HeaderFormat.gzip);
+		auto data = compress.compress(content);
+		data ~= compress.flush();
+
+		std.file.write(filename ~ ".gz", data);
+	} else {
+		std.file.write(filename, content);
+	}
+}
 
 void main(string[] args) {
 	import std.stdio;
@@ -2789,7 +2802,7 @@ void main(string[] args) {
 								ele.attrs.href = "../" ~ ele.attrs.href;
 							else
 								ele.attrs.src = "../" ~ ele.attrs.src;
-						std.file.write(outputDirectory ~ "source/" ~ existingDecl.name ~ ".d.html", annotatedSourceDocument.toString());
+						writeFile(outputDirectory ~ "source/" ~ existingDecl.name ~ ".d.html", annotatedSourceDocument.toString(), gzip);
 					}
 				}
 			}
@@ -2921,14 +2934,15 @@ void main(string[] args) {
 				continue; // it will be written in the list of children
 			writeln("Generating HTML for ", decl.name);
 
-			writeHtml(decl);
+			// FIXME: make search index in here if we can
+			writeHtml(decl, true, gzip);
 		}
 	}
 
 	if(makeSearchIndex) {
 
 		// we need the listing and the search index
-		File index;
+		FileProxy index;
 		int id;
 
 		static import std.file;
@@ -2936,12 +2950,12 @@ void main(string[] args) {
 		// write out the landing page for JS search,
 		// see the comment in the source of that html
 		// for more details
-		std.file.write(outputDirectory ~ "search-docs.html", import("search-docs.html"));
+		writeFile(outputDirectory ~ "search-docs.html", import("search-docs.html"), gzip);
 
 
 		// the search index is a HTML page containing some script
 		// and the index XML. See the source of search-docs.js for more info.
-		index = File(buildPath(outputDirectory, "search-results.html"), "wt");
+		index = FileProxy(buildPath(outputDirectory, "search-results.html"), gzip);
 
 		auto skeletonDocument = new Document();
 		skeletonDocument.parseUtf8(std.file.readText(skeletonFile), true, true);
@@ -2998,12 +3012,47 @@ void main(string[] args) {
 
 		// and close the skeleton
 		index.writeln("</body></html>");
+		index.close();
 	}
 
 
 	//import std.stdio;
 	//writeln("press any key to continue");
 	//readln();
+}
+
+struct FileProxy {
+	import std.zlib;
+	File f; // it will inherit File's refcounting
+	Compress compress; // and compress is gc'd anyway so copying the ref means same object!
+	bool gzip;
+
+	this(string filename, bool gzip) {
+		f = File(filename ~ (gzip ? ".gz" : ""), gzip ? "wb" : "wt");
+		if(gzip)
+			compress = new Compress(HeaderFormat.gzip);
+		this.gzip = gzip;
+	}
+
+	void writeln(string s) {
+		if(gzip)
+			f.rawWrite(compress.compress(s ~ "\n"));
+		else
+			f.writeln(s);
+	}
+
+	void write(string s) {
+		if(gzip)
+			f.rawWrite(compress.compress(s));
+		else
+			f.write(s);
+	}
+
+	void close() {
+		if(gzip)
+			f.rawWrite(compress.flush());
+		f.close();
+	}
 }
 
 struct SearchResult {
@@ -3101,8 +3150,14 @@ void generateSearchIndex(Decl decl, ref int id) {
 		parent = parent.parent;
 	}
 
-	auto document = writeHtml(decl, false);
+	Document document;
+	//if(decl.fullyQualifiedName in generatedDocuments)
+		//document = generatedDocuments[decl.fullyQualifiedName];
+	//else
+		document = writeHtml(decl, false, false);
 	assert(document !is null);
+
+	// FIXME: pulling this from the generated html is a bit inefficient.
 
 	// tags are worth a lot
 	foreach(tag; document.querySelectorAll(".tag"))
@@ -3269,7 +3324,7 @@ string[] getWords(string text) {
 
 import std.stdio : File;
 
-void writeIndexXml(Decl decl, File index, ref int id) {
+void writeIndexXml(Decl decl, FileProxy index, ref int id) {
 //import std.stdio;writeln(decl.fullyQualifiedName, " ", decl.isPrivate, " ", decl.isDocumented);
 	if(decl.isPrivate() || !decl.isDocumented())
 		return;
