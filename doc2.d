@@ -1691,13 +1691,16 @@ class VariableDecl : Decl {
 
 	const(Token) ident;
 	const(Initializer) initializer;
-	this(const(VariableDeclaration) astNode, const(Token) ident, const(Initializer) initializer, const(VersionOrAttribute)[] attributes) {
+	this(const(VariableDeclaration) astNode, const(Token) ident, const(Initializer) initializer, const(VersionOrAttribute)[] attributes, bool isEnum) {
 		this.declarator = null;
 		this.attributes = attributes;
 		this.astNode = astNode;
 		this.ident = ident;
+		this.isEnum = isEnum;
 		this.initializer = initializer;
 	}
+
+	bool isEnum;
 
 	override string name() {
 		if(declarator)
@@ -1707,7 +1710,10 @@ class VariableDecl : Decl {
 	}
 
 	override string rawComment() {
-		auto it = astNode.comment ~ (declarator ? declarator.comment : astNode.autoDeclaration.comment);
+		string it = astNode.comment;
+		auto additional = (declarator ? declarator.comment : astNode.autoDeclaration.comment);
+		if(additional != it)
+			it ~= additional;
 		return it;
 	}
 
@@ -1750,7 +1756,7 @@ class VariableDecl : Decl {
 				output.putTag(toHtml(astNode.type).source);
 			}
 		} else
-			output.putTag("<span class=\"builtin-type\">auto</span>");
+			output.putTag("<span class=\"builtin-type\">"~(isEnum ? "enum" : "auto")~"</span>");
 
 		output.put(" ");
 
@@ -1760,10 +1766,18 @@ class VariableDecl : Decl {
 
 		if(declarator && declarator.templateParameters)
 			output.putTag(toHtml(declarator.templateParameters).source);
+
+		if(link) {
+			if(initializer !is null) {
+				output.put(" = ");
+				output.putTag(toHtml(initializer).source);
+			}
+		}
+		output.put(";");
 	}
 
 	override string declarationType() {
-		return (isStatic() ? "static variable" : "variable");
+		return (isStatic() ? "static variable" : (isEnum ? "manifest constant" : "variable"));
 	}
 }
 
@@ -2256,7 +2270,7 @@ class Looker : ASTVisitor {
 	override void visit(const VariableDeclaration dec) {
         	if (dec.autoDeclaration) {
 			foreach (idx, ident; dec.autoDeclaration.identifiers) {
-				stack[$-1].addChild(new VariableDecl(dec, ident, dec.autoDeclaration.initializers[idx], attributes[$-1]));
+				stack[$-1].addChild(new VariableDecl(dec, ident, dec.autoDeclaration.initializers[idx], attributes[$-1], dec.isEnum));
 
 			}
 		} else
@@ -2440,6 +2454,7 @@ void main(string[] args) {
 	bool annotateSource = false;
 
 	string locateSymbol = null;
+	bool gzip;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -2452,6 +2467,7 @@ void main(string[] args) {
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
+		"gzip|z", "Gzip generated files as they are created", &gzip,
 		"special-preprocessor", "Run a special preprocessor on comments. Only one supported right now is gtk", &specialPreprocessor);
 	
 	if (outputDirectory[$-1] != '/')
@@ -2773,9 +2789,9 @@ void main(string[] args) {
 	}
 
 
-	import std.stdio;
-	writeln("press any key to continue");
-	readln();
+	//import std.stdio;
+	//writeln("press any key to continue");
+	//readln();
 }
 
 struct SearchResult {

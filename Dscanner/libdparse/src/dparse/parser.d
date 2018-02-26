@@ -1964,14 +1964,14 @@ class Parser
                 {
                     immutable bool eq = currentIs(tok!"=");
                     goToBookmark(b);
-                    mixin (nullCheck!`node.variableDeclaration = parseVariableDeclaration(null, eq)`);
+                    mixin (nullCheck!`node.variableDeclaration = parseVariableDeclaration(null, eq, null, true)`);
                 }
             }
             else
             {
                 immutable bool s = isStorageClass();
                 goToBookmark(b);
-                mixin (nullCheck!`node.variableDeclaration = parseVariableDeclaration(null, s)`);
+                mixin (nullCheck!`node.variableDeclaration = parseVariableDeclaration(null, s, null, true)`);
             }
             break;
         case tok!"import":
@@ -6486,11 +6486,12 @@ class Parser
      *     ;)
      */
     VariableDeclaration parseVariableDeclaration(Type type = null, bool isAuto = false,
-        Attribute[] attributes = null)
+        Attribute[] attributes = null, bool isEnum = false)
     {
         mixin (traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!VariableDeclaration;
         node.attributes = attributes;
+	node.isEnum = isEnum;
         if (isAuto)
         {
             mixin (nullCheck!`node.autoDeclaration = parseAutoDeclaration()`);

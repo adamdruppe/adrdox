@@ -3254,6 +3254,7 @@ public:
     /** */ Attribute[] attributes;
     /** */ AutoDeclaration autoDeclaration;
     /** */ string comment;
+    bool isEnum;
     mixin OpEquals;
 }
 

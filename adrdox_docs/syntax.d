@@ -427,6 +427,20 @@ There are two types of list: `$(LIST)` and `$(NUMBERED_LIST)`. Both work the sam
 
 Inside the magic list macros, a `*` character at the beginning of a line will create a new list item.
 
+$(WARNING
+	Make sure the leading `*` does not line up with your comment marker, or the preprocessor may strip it thinking it is a comment in the style of:
+
+	---
+	/**
+	  * one of these
+	  */
+	---
+
+	Since the preprocessor runs before analyzing brackets, it won't know that the star was intentional.
+
+	I recommend indenting your list stars by at least 4 spaces or one tab for best results.
+)
+
 $(ADRDOX_SAMPLE
 	$(LIST
 		* List item

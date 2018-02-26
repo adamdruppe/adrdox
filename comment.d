@@ -516,6 +516,7 @@ string preprocessComment(string comment) {
 		poop = closingSpam ~ commentType ~ " ";
 
 	string newComment;
+	// FIXME: http://dplug.dpldocs.info/v6.0.22/dplug.graphics.jpegload.html
 	foreach(line; comment.splitter("\n")) {
 		// check for "  * some text"
 		if(line.length >= poop.length && line.startsWith(poop)) {
@@ -527,6 +528,8 @@ string preprocessComment(string comment) {
 		// check for an empty line with just "  *"
 		else if(line.length == poop.length-1 && line[0..poop.length-1] == poop[0..$-1])
 			{} // this space is intentionally left blank; it is an empty line
+		else if(line.length > 1 && commentType != '/' && line[0] == commentType && line[1] == ' ')
+			newComment ~= line[1 .. $]; // cut off stupid leading * with no space before too
 		else
 			newComment ~= line;
 		newComment ~= "\n";
