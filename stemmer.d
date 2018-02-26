@@ -243,12 +243,14 @@ public struct PorterStemmer
 	private void step1ab()
 	{
 		if( m_b[ m_k ] == 's' )
+		{
 			if( ends( "sses" ) )
 				m_k = m_k - 2;
 			else if( ends( "ies" ) )
 				setto( "i" );
 			else if( m_b[ m_k - 1 ] != 's' )
 				m_k--;
+		}
 		if( ends( "eed" ) )
 		{
 			if( m() > 0 )

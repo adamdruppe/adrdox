@@ -33,7 +33,7 @@ static struct MyOutputRange {
 
 	void putTag(in char[] s) {
 		foreach(ch; s) {
-			assert(s);
+			assert(s.length);
 			assert(s.indexOf("</body>") == -1);
 		}
 		(*output) ~= s;

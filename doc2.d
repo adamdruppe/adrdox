@@ -35,6 +35,33 @@ import std.algorithm :sort, canFind;
 import std.string;
 import std.conv : to;
 
+// returns empty string if file not found
+string findStandardFile(bool dofail=true) (string stdfname) {
+	import std.file : exists, thisExePath;
+	import std.path : buildPath, dirName;
+	if (!stdfname.exists) {
+		if (stdfname.length && stdfname[0] != '/') {
+			string newname = buildPath(thisExePath.dirName, stdfname);
+			if (newname.exists) return newname;
+		}
+		static if (dofail) throw new Exception("standard file '" ~stdfname ~ "' not found!");
+	}
+	return stdfname;
+}
+
+void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) {
+	import std.file;
+	if (exists(destname)) {
+		static if (timecheck) {
+			if (timeLastModified(destname) >= timeLastModified(findStandardFile(stdfname))) return;
+		} else {
+			return;
+		}
+	}
+	copy(findStandardFile(stdfname), destname);
+}
+
+
 // FIXME: make See Also automatically list dittos that are not overloads
 
 enum skip_undocumented = true;
@@ -616,7 +643,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 	auto document = new Document();
 	import std.file;
-	document.parseUtf8(readText(skeletonFile), true, true);
+	document.parseUtf8(readText(findStandardFile(skeletonFile)), true, true);
 	document.title = title ~ " (" ~ decl.fullyQualifiedName ~ ")";
 
 	auto content = document.requireElementById("page-content");
@@ -2428,6 +2455,164 @@ ModuleDecl[string] modulesByName;
 
 string specialPreprocessor;
 
+// simplified ".gitignore" processor
+final class GitIgnore {
+	string[] masks; // on each new dir, empty line is added to masks
+
+	void loadGlobalGitIgnore () {
+		import std.path;
+		import std.stdio;
+		try {
+			foreach (string s; File("~/.gitignore_global".expandTilde).byLineCopy) {
+				if (isComment(s)) continue;
+				masks ~= trim(s);
+			}
+		} catch (Exception e) {} // sorry
+		try {
+			foreach (string s; File("~/.adrdoxignore_global".expandTilde).byLineCopy) {
+				if (isComment(s)) continue;
+				masks ~= trim(s);
+			}
+		} catch (Exception e) {} // sorry
+	}
+
+	void loadGitIgnore (const(char)[] dir) {
+		import std.path;
+		import std.stdio;
+		masks ~= null;
+		try {
+			foreach (string s; File(buildPath(dir, ".gitignore").expandTilde).byLineCopy) {
+				if (isComment(s)) continue;
+				masks ~= trim(s);
+			}
+		} catch (Exception e) {} // sorry
+		try {
+			foreach (string s; File(buildPath(dir, ".adrdoxignore").expandTilde).byLineCopy) {
+				if (isComment(s)) continue;
+				masks ~= trim(s);
+			}
+		} catch (Exception e) {} // sorry
+	}
+
+	// unload latest gitignore
+	void unloadGitIgnore () {
+		auto ol = masks.length;
+		while (masks.length > 0 && masks[$-1] !is null) masks = masks[0..$-1];
+		if (masks.length > 0 && masks[$-1] is null) masks = masks[0..$-1];
+		if (masks.length != ol) {
+			//writeln("removed ", ol-masks.length, " lines");
+			masks.assumeSafeAppend; //hack!
+		}
+	}
+
+	bool match (string fname) {
+		import std.path;
+		import std.stdio;
+		if (masks.length == 0) return false;
+		//writeln("gitignore checking: <", fname, ">");
+
+		bool xmatch (string path, string mask) {
+			if (mask.length == 0 || path.length == 0) return false;
+			import std.string : indexOf;
+			if (mask.indexOf('/') < 0) return path.baseName.globMatch(mask);
+			int xpos = cast(int)path.length-1;
+			while (xpos >= 0) {
+				while (xpos >= 0 && path[xpos] != '/') --xpos;
+				if (mask[0] == '/') {
+					if (xpos+1 < path.length && path[xpos+1..$].globMatch(mask)) return true;
+				} else {
+					if (path[xpos..$].globMatch(mask)) return true;
+				}
+				--xpos;
+			}
+			return false;
+		}
+
+		string curname = fname.baseName;
+		int pos = cast(int)masks.length-1;
+		// local dir matching
+		while (pos >= 0 && masks[pos] !is null) {
+			//writeln(" [", masks[pos], "]");
+			if (xmatch(curname, masks[pos])) {
+				//writeln("  LOCAL HIT: [", masks[pos], "]: <", curname, ">");
+				return true;
+			}
+			if (masks[pos][0] == '/' && xmatch(curname, masks[pos][1..$])) return true;
+			--pos;
+		}
+		curname = fname;
+		while (pos >= 0) {
+			if (masks[pos] !is null) {
+				//writeln(" [", masks[pos], "]");
+				if (xmatch(curname, masks[pos])) {
+					//writeln("  HIT: [", masks[pos], "]: <", curname, ">");
+					return true;
+				}
+			}
+			--pos;
+		}
+		return false;
+	}
+
+static:
+	inout(char)[] trim (inout(char)[] s) {
+		while (s.length > 0 && s[0] <= ' ') s = s[1..$];
+		while (s.length > 0 && s[$-1] <= ' ') s = s[0..$-1];
+		return s;
+	}
+
+	bool isComment (const(char)[] s) {
+		s = trim(s);
+		return (s.length == 0 || s[0] == '#');
+	}
+}
+
+
+string[] scanFiles (string basedir) {
+	import std.file : isDir;
+	import std.path;
+
+	string[] res;
+
+	auto gi = new GitIgnore();
+	gi.loadGlobalGitIgnore();
+
+	void scanSubDir(bool checkdir=true) (string dir) {
+		import std.file;
+		static if (checkdir) {
+			string d = dir;
+			if (d.length > 1 && d[$-1] == '/') d = d[0..$-1];
+			if (gi.match(d)) {
+				//writeln("DIR SKIP: <", dir, ">");
+				return;
+			}
+		}
+		gi.loadGitIgnore(dir);
+		scope(exit) gi.unloadGitIgnore();
+		foreach (DirEntry de; dirEntries(dir, SpanMode.shallow)) {
+			try {
+				if (de.isDir) { scanSubDir(de.name); continue; }
+				if (de.baseName.length == 0) continue; // just in case
+				if (de.baseName[0] == '.') continue; // skip hidden files
+				if (!de.baseName.globMatch("*.d")) continue;
+				if (/*de.isFile &&*/ !gi.match(de.name)) {
+					//writeln(de.name);
+					res ~= de.name;
+				}
+			} catch (Exception e) {} // some checks (like `isDir`) can throw
+		}
+	}
+
+	basedir = basedir.expandTilde.absolutePath;
+	if (basedir.isDir) {
+		scanSubDir!false(basedir);
+	} else {
+		res ~= basedir;
+	}
+	return res;
+}
+
+
 void main(string[] args) {
 	import std.stdio;
 	import std.path : buildPath;
@@ -2482,6 +2667,16 @@ void main(string[] args) {
 	if(locateSymbol is null) {
 		import std.file;
 
+		if (!exists(skeletonFile) && findStandardFile!false("skeleton-default.html").length)
+			copyStandardFileTo!false(skeletonFile, "skeleton-default.html");
+
+		if (!exists(outputDirectory))
+			mkdir(outputDirectory);
+
+		copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
+		copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
+
+		/*
 		if(!exists(skeletonFile) && exists("skeleton-default.html"))
 			copy("skeleton-default.html", skeletonFile);
 
@@ -2491,6 +2686,7 @@ void main(string[] args) {
 			copy("style.css", outputDirectory ~ "style.css");
 		if(!exists(outputDirectory ~ "script.js") || (timeLastModified(outputDirectory ~ "script.js") < timeLastModified("script.js")))
 			copy("script.js", outputDirectory ~ "script.js");
+		*/
 	}
 
 	// FIXME: maybe a zeroth path just grepping for a module declaration in located files
@@ -2602,6 +2798,8 @@ void main(string[] args) {
 	}
 
 	string[] generateFiles;
+	foreach (arg; args) generateFiles ~= scanFiles(arg);
+	/*
 	foreach(argIdx, arg; args) {
 		if(arg != "-" && std.file.isDir(arg))
 			foreach(string name; std.file.dirEntries(arg, "*.d", std.file.SpanMode.breadth))
@@ -2609,7 +2807,9 @@ void main(string[] args) {
 		else
 			generateFiles ~= arg;
 	}
+	*/
 	args = generateFiles;
+	//{ import std.stdio; foreach (fn; args) writeln(fn); } assert(0);
 
 
 	// Process them all first so name-lookups have more chance of working
