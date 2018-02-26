@@ -810,7 +810,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 			string lastType;
 			foreach(child; members.sort!sorter) {
 				if(child.declarationType != lastType) {
-					auto hdr = content.addChild(header, headerPrefix ~ pluralize(child.declarationType).capitalize, "member-list-header");
+					auto hdr = content.addChild(header, headerPrefix ~ pluralize(child.declarationType).capitalize, "member-list-header hide-from-toc");
 					hdr.id = idPrefix ~ child.declarationType;
 					dl = content.addChild("dl").addClass("member-list native");
 					lastType = child.declarationType;
@@ -825,7 +825,8 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		foreach(section; comment.symbolGroupsOrder) {
 			auto memberComment = formatDocumentationComment(preprocessComment(comment.symbolGroups[section]), decl);
 			string sectionPrintable = section.replace("_", " ").capitalize;
-			auto hdr = content.addChild("h3", sectionPrintable, "member-list-header");
+			// these count as user headers to move toward TOC - section groups are user defined so it makes sense
+			auto hdr = content.addChild("h3", sectionPrintable, "member-list-header user-header");
 			hdr.id = "group-" ~ section;
 			auto dc = content.addChild("div").addClass("documentation-comment");
 			dc.innerHTML = memberComment;
@@ -994,6 +995,8 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		auto current = toc;
 		int lastLevel;
 		tree: foreach(header; document.root.tree) {
+			if(header.hasClass("hide-from-toc"))
+				continue;
 			int level;
 			switch(header.tagName) {
 				case "h2":
@@ -1054,7 +1057,7 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		}
 
 		if(auto d = document.querySelector("#more-link")) {
-			if(document.querySelectorAll(".user-header").length > 2)
+			if(document.querySelectorAll(".user-header:not(.hide-from-toc)").length > 2)
 				d.replaceWith(toc);
 		}
 
@@ -2181,7 +2184,10 @@ mixin template CtorFrom(T) {
 			return false;
 		else {
 			import std.string;
-			return strip(toLower(preprocessComment(rawComment))) == "ditto";
+			auto l = strip(toLower(preprocessComment(rawComment)));
+			if(l.length && l[$-1] == '.')
+				l = l[0 .. $-1];
+			return l == "ditto";
 		}
 	}
 

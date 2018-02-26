@@ -1015,6 +1015,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 	}
 
 	string currentTag = (tagName is null) ? null : "p";
+	string currentClass = null;
 
 	void commit() {
 		auto cp = currentParagraph.strip;
@@ -1042,6 +1043,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 
 						// passed tests, I'll allow it:
 						currentTag = "h3";
+						currentClass = "user-header";
 						cp = hdr;
 					} else if(lines.length == 1) {
 						int hashCount = 0;
@@ -1052,6 +1054,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 								// it was special!
 								// there must be text after btw or else strip would have cut the space too
 								currentTag = "h" ~ to!string(hashCount);
+								currentClass = "user-header";
 								cp = test[idx + 1 .. $];
 
 								break;
@@ -1062,11 +1065,12 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 				}
 
 				not_special:
-				div.addChild(currentTag, Html(cp));
+				div.addChild(currentTag, Html(cp), currentClass);
 			}
 		}
 		currentTag = "p";
 		currentParagraph = null;
+		currentClass = null;
 	}
 
 	bool atStartOfLine = true;
