@@ -995,8 +995,6 @@ Document writeHtml(Decl decl, bool forReal = true) {
 		auto current = toc;
 		int lastLevel;
 		tree: foreach(header; document.root.tree) {
-			if(header.hasClass("hide-from-toc"))
-				continue;
 			int level;
 			switch(header.tagName) {
 				case "h2":
@@ -1019,31 +1017,38 @@ Document writeHtml(Decl decl, bool forReal = true) {
 
 			if(level == 0) continue;
 
-			auto parentCheck = header;
-			while(parentCheck) {
-				if(parentCheck.hasClass("adrdox-sample"))
-					continue tree;
-				parentCheck = parentCheck.parentNode;
-			}
+			bool addToIt = true;
+			if(header.hasClass("hide-from-toc"))
+				addToIt = false;
 
-			if(level > lastLevel) {
-				current = current.addChild("ol");
-				current.addClass("heading-level-" ~ to!string(level));
-			} else if(level < lastLevel) {
-				while(current && !current.hasClass("heading-level-" ~ to!string(level)))
-					current = current.parentNode;
-				if(current is null) {
-					import std.stdio;
-					writeln("WARNING: TOC broken on " ~ decl.name);
-					goto skip_toc;
+			Element addTo;
+			if(addToIt) {
+				auto parentCheck = header;
+				while(parentCheck) {
+					if(parentCheck.hasClass("adrdox-sample"))
+						continue tree;
+					parentCheck = parentCheck.parentNode;
 				}
-				assert(current !is null);
-			}
 
-			lastLevel = level;
-			auto addTo = current;
-			if(addTo.tagName != "ol")
-				addTo = addTo.parentNode;
+				if(level > lastLevel) {
+					current = current.addChild("ol");
+					current.addClass("heading-level-" ~ to!string(level));
+				} else if(level < lastLevel) {
+					while(current && !current.hasClass("heading-level-" ~ to!string(level)))
+						current = current.parentNode;
+					if(current is null) {
+						import std.stdio;
+						writeln("WARNING: TOC broken on " ~ decl.name);
+						goto skip_toc;
+					}
+					assert(current !is null);
+				}
+
+				lastLevel = level;
+				addTo = current;
+				if(addTo.tagName != "ol")
+					addTo = addTo.parentNode;
+			}
 
 			if(!header.hasAttribute("id"))
 				header.attrs.id = toId(header.innerText);
@@ -1053,7 +1058,8 @@ Document writeHtml(Decl decl, bool forReal = true) {
 				header.innerHTML = selfLink.toString();
 			}
 
-			addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
+			if(addToIt)
+				addTo.addChild("li", Element.make("a", header.innerText, "#" ~ header.attrs.id));
 		}
 
 		if(auto d = document.querySelector("#more-link")) {
