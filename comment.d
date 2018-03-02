@@ -544,6 +544,8 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 
 	if(decl.lineNumber)
 		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", See Implementation)$(BR)";
+	else
+		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html, See Source File)$(BR)";
 	// FIXME: add links to ddoc and ddox iff std.* or core.*
 
 	c.decl = decl;
@@ -1436,13 +1438,14 @@ bool checkStupidDdocIsm(string remaining, Decl decl) {
 	}
 
 	string ident = remaining[0 ..  i];
-	import std.stdio; writeln("stupid ddocism: ", ident);
 	if(ident.length == 0)
 		return false;
 
 	// check this name
-	if(ident == decl.name)
+	if(ident == decl.name) {
+		import std.stdio; writeln("stupid ddocism(1): ", ident);
 		return true;
+	}
 
 	if(decl.isModule) {
 		auto name = decl.name;
@@ -1451,13 +1454,17 @@ bool checkStupidDdocIsm(string remaining, Decl decl) {
 			name = name[idx + 1 .. $];
 		}
 
-		if(ident == name)
+		if(ident == name) {
+			import std.stdio; writeln("stupid ddocism(2): ", ident);
 			return true;
+		}
 	}
 
 	// check the whole scope too, I think dmd does... maybe
-	if(decl.lookupName(ident) !is null)
+	if(decl.parentModule && decl.parentModule.lookupName(ident) !is null) {
+		import std.stdio; writeln("stupid ddocism(3): ", ident);
 		return true;
+	}
 
 	// FIXME: params?
 
@@ -1650,6 +1657,8 @@ static this() {
 		"H5" : "<h5 class=\"user-header\">$0</h5>",
 		"H6" : "<h6 class=\"user-header\">$0</h6>",
 
+		"BLOCKQUOTE" : "<blockquote>$0</blockquote>", // FIXME?
+
 		"HR" : "<hr />",
 
 		// DDoc just expects these.
@@ -1692,11 +1701,11 @@ static this() {
 		"STRIKE" : "<s>$0</s>",
 		"P" : "<p>$0</p>",
 		"PRE" : "<pre>$0</pre>",
-		"BLOCKQUOTE" : "<blockquote>$0</blockquote>", // FIXME?
 		"DL" : "<dl>$0</dl>",
 		"DT" : "<dt>$0</dt>",
 		"DD" : "<dd>$0</dd>",
 		"LINK2" : "<a href=\"$1\">$2</a>",
+		"LINK" : `<a href="$0">$0</a>`,
 
 		"DDLINK": "<a href=\"http://dlang.org/$1\">$3</a>",
 		"DDSUBLINK": "<a href=\"http://dlang.org/$1#$2\">$3</a>",
@@ -1717,11 +1726,17 @@ static this() {
 		"XREF_PACK" : `<a href="std.$1.$2.$3.html">std.$1.$2.$3</a>`,
 		"MYREF" : `<a href="$(FULLY_QUALIFIED_NAME).$0.html">$0</a>`,
 		"LREF" : `<a class="symbol-reference" href="$(MODULE_NAME).$0.html">$0</a>`,
+		"LREF2" : "MAGIC",
 		"MREF" : `MAGIC`,
 		"WEB" : `<a href="http://$1">$2</a>`,
 		"HTTP" : `<a href="http://$1">$2</a>`,
 		"BUGZILLA": `<a href="https://issues.dlang.org/show_bug.cgi?id=$1">https://issues.dlang.org/show_bug.cgi?id=$1</a>`,
 		"XREF_PACK_NAMED" : `<a href="std.$1.$2.$3.html">$4</a>`,
+
+		"D_INLINECODE" : `<tt>$1</tt>`,
+		"D_STRING" : `<tt>$1</tt>`,
+		"D_CODE_STRING" : `<tt>$1</tt>`,
+		"HTTPS" : `<a href="https://$1">$2</a>`,
 
 		"RES": `<i>result</i>`,
 		"POST": `<div class="postcondition">$0</div>`,
@@ -1770,6 +1785,10 @@ static this() {
 		"HTTP" : 2,
 		"BUGZILLA" : 1,
 		"XREF_PACK_NAMED" : 4,
+		"D_INLINECODE" : 1,
+		"D_STRING" : 1,
+		"D_CODE_STRING": 1,
+		"HTTPS": 2,
 		"DIVC" : 1,
 		"LINK2" : 2,
 		"DDLINK" : 3,
@@ -1782,6 +1801,7 @@ static this() {
 		"SHORTXREF_PACK" : 3,
 		"XREF_PACK" : 3,
 		"MREF" : 1,
+		"LREF2" : 2,
 
 		"REG_ROW" : 1,
 		"REG_TITLE" : 2,
@@ -1955,6 +1975,10 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			}
 
 			return getReferenceLink(cool, decl, parts[0].strip);
+		}
+		if(name == "LREF2") {
+			auto parts = split(stuff, ",");
+			return getReferenceLink(parts[1].strip ~ "." ~ parts[0].strip, decl, parts[0].strip);
 		}
 		if(name == "REF_ALTTEXT") {
 			auto parts = split(stuff, ",");

@@ -3,6 +3,8 @@ module adrdox.main;
 string skeletonFile = "skeleton.html";
 string outputDirectory = "generated-docs";
 
+bool writePrivateDocs = false;
+
 /*
 
 Glossary feature: little short links that lead somewhere else.
@@ -132,7 +134,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 		output.put(" {");
 		foreach(child; decl.children) {
-			if(child.isPrivate())
+			if((child.isPrivate() && !writePrivateDocs))
 				continue;
 			// I want to show undocumented plain data members (if not private)
 			// since they might be used as public fields or in ctors for simple
@@ -310,7 +312,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 			output.putTag("<div class=\"function-prototype\">");
 
-			output.putTag(`<a href="http://dpldocs.info/reading-prototypes" id="help-link">?</a>`);
+			//output.putTag(`<a href="http://dpldocs.info/reading-prototypes" id="help-link">?</a>`);
 
 			if(decl.parent !is null && !decl.parent.isModule) {
 				output.putTag("<div class=\"parent-prototype\">");
@@ -624,8 +626,13 @@ string specialPreprocess(string comment) {
 	return comment;
 }
 
-Document writeHtml(Decl decl, bool forReal, bool gzip) {
-	if(decl.isPrivate() || !decl.isDocumented())
+struct HeaderLink {
+	string text;
+	string url;
+}
+
+Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, HeaderLink[] headerLinks) {
+	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
 		return null;
 
 	auto title = decl.name;
@@ -645,6 +652,15 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 	import std.file;
 	document.parseUtf8(readText(findStandardFile(skeletonFile)), true, true);
 	document.title = title ~ " (" ~ decl.fullyQualifiedName ~ ")";
+
+	if(headerTitle.length)
+		document.requireSelector("#logotype span").innerText = headerTitle;
+	if(headerLinks.length) {
+		auto n = document.requireSelector("#page-header nav");
+		foreach(l; headerLinks)
+			if(l.text.length && l.url.length)
+				n.addChild("a", l.text, l.url);
+	}
 
 	auto content = document.requireElementById("page-content");
 
@@ -721,7 +737,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 
 	if(forReal)
 	foreach(child; decl.children) {
-		if(child.isPrivate() || !child.isDocumented())
+		if((child.isPrivate() && !writePrivateDocs) || !child.isDocumented())
 			continue;
 		if(child.isConstructor())
 			ctors ~= child;
@@ -749,7 +765,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 			if(child is decl.disabledDefaultConstructor)
 				continue;
 			handleChildDecl(dl, child);
-			writeHtml(child, forReal, gzip);
+			writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 		}
 	}
 
@@ -761,7 +777,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 			handleChildDecl(dl, dtor);
 		else
 			content.addChild("p", "A destructor is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor, forReal, gzip);
+		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
 	}
 
 	if(auto postblit = decl.postblit) {
@@ -775,7 +791,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 			handleChildDecl(dl, postblit);
 		else
 			content.addChild("p", "A postblit is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor, forReal, gzip);
+		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
 	}
 
 
@@ -785,7 +801,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 		foreach(child; submodules.sort!((a,b) => a.name < b.name)) {
 			handleChildDecl(dl, child);
 
-			writeHtml(child, forReal, gzip);
+			writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 		}
 	}
 
@@ -818,7 +834,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 
 				handleChildDecl(dl, child);
 
-				writeHtml(child, forReal, gzip);
+				writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 			}
 		}
 
@@ -875,7 +891,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 			auto dl = content.addChild("dl").addClass("member-list inherited");
 			bool hadListing = false;
 			foreach(child; ir.decl.children) {
-				if(child.isPrivate() || !child.isDocumented())
+				if((child.isPrivate() && !writePrivateDocs) || !child.isDocumented())
 					continue;
 				if(!child.isConstructor()) {
 					handleChildDecl(dl, child);
@@ -922,7 +938,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip) {
 		string[string] inNavArray;
 		if(decl.parent) {
 			foreach(child; decl.parent.children) {
-				if(!child.isPrivate() && child.isDocumented()) {
+				if((!child.isPrivate() || writePrivateDocs) && child.isDocumented()) {
 					// strip overloads from sidebar
 					if(child.name !in inNavArray) {
 						navArray ~= child;
@@ -1109,6 +1125,8 @@ void addLineNumbering(Element pre, bool id = false) {
 		html ~= "\n";
 		count++;
 	}
+	if(count < 5)
+		return; // no point cluttering the display with the sample is so small you can eyeball it instantly anyway
 	pre.innerHTML = html.stripRight;
 	pre.addClass("with-line-wrappers");
 
@@ -1149,6 +1167,7 @@ abstract class Decl {
 
 	void getAggregatePrototype(MyOutputRange r) {
 		getSimplifiedPrototype(r);
+		r.put(";");
 	}
 
 	/* virtual */ void addSupplementalData(Element) {}
@@ -1183,8 +1202,17 @@ abstract class Decl {
 	}
 
 	bool isDocumented() {
-		if(this.isModule)
-			return true; // allow undocumented modules because then it will at least descend into documented children
+		// this shouldn't be needed anymore cuz the recursive check below does a better job
+		//if(this.isModule)
+			//return true; // allow undocumented modules because then it will at least descend into documented children
+
+		// skip modules with "internal" because they are usually not meant
+		// to be publicly documented anyway
+		{
+		auto mod = this.parentModule.name;
+		if(mod.indexOf(".internal") != -1)
+			return false;
+		}
 
 		if(comment.length) // hack
 		return comment.length > 0; // cool, not a hack
@@ -1192,7 +1220,7 @@ abstract class Decl {
 		// if it has any documented children, we want to pretend this is documented too
 		// since then it will be possible to navigate to it
 		foreach(child; children)
-			if(!child.isPrivate && child.isDocumented)
+			if((!child.isPrivate || writePrivateDocs) && child.isDocumented)
 				return true;
 
 		// what follows is all filthy hack
@@ -1250,7 +1278,7 @@ abstract class Decl {
 
 		if(this.parent !is null) {
 			foreach(child; this.parent.children) {
-				if(child.name == this.name && child.isDocumented() && !child.isPrivate())
+				if(child.name == this.name && child.isDocumented() && (!child.isPrivate() || writePrivateDocs))
 					ret ~= child;
 			}
 			if(auto t = cast(TemplateDecl) this.parent)
@@ -1782,7 +1810,7 @@ class VariableDecl : Decl {
 				auto txt = toText(astNode.type);
 
 				auto typeDecl = lookupName(txt);
-				if(typeDecl is null || typeDecl.isPrivate || !typeDecl.isDocumented)
+				if(typeDecl is null || (typeDecl.isPrivate && !writePrivateDocs) || !typeDecl.isDocumented)
 					goto plain;
 
 				output.putTag("<a title=\""~typeDecl.fullyQualifiedName~"\" href=\""~typeDecl.link~"\">" ~ html ~ "</a>");
@@ -1809,6 +1837,10 @@ class VariableDecl : Decl {
 			}
 		}
 		output.put(";");
+	}
+
+	override void getAggregatePrototype(MyOutputRange output) {
+		getSimplifiedPrototype(output);
 	}
 
 	override string declarationType() {
@@ -1863,10 +1895,10 @@ class FunctionDecl : Decl {
 	override void getAggregatePrototype(MyOutputRange output) {
 		if(isStatic()) {
 			output.putTag("<span class=\"storage-class\">static</span> ");
-			
 		}
 
 		getSimplifiedPrototype(output);
+		output.put(";");
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
@@ -2583,6 +2615,9 @@ string[] scanFiles (string basedir) {
 	import std.file : isDir;
 	import std.path;
 
+	if(basedir == "-")
+		return ["-"];
+
 	string[] res;
 
 	auto gi = new GitIgnore();
@@ -2665,6 +2700,11 @@ void main(string[] args) {
 
 	string locateSymbol = null;
 	bool gzip;
+	bool copyStandardFiles = true;
+	string headerTitle;
+
+	string[] headerLinks;
+	HeaderLink[] headerLinksParsed;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -2673,13 +2713,17 @@ void main(string[] args) {
 		"link-references", "A file defining global link references", &linkReferences,
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
+		"write-private-docs|p", "Include documentation for `private` members (default: false)", &writePrivateDocs,
 		"locate-symbol", "Locate a symbol in the passed file", &locateSymbol,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
 		"gzip|z", "Gzip generated files as they are created", &gzip,
+		"copy-standard-files", "Copy standard JS/CSS files into target directory (default: true)", &copyStandardFiles,
+		"header-title", "Title to put on the page header", &headerTitle,
+		"header-link", "Link to add to the header (text=url)", &headerLinks,
 		"special-preprocessor", "Run a special preprocessor on comments. Only one supported right now is gtk", &specialPreprocessor);
-	
+
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
 
@@ -2687,6 +2731,18 @@ void main(string[] args) {
 		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2017\n" ~
 			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
 		return;
+	}
+
+	foreach(l; headerLinks) {
+		auto idx = l.indexOf("=");
+		if(idx == -1)
+			continue;
+
+		HeaderLink lnk;
+		lnk.text = l[0 .. idx].strip;
+		lnk.url = l[idx + 1 .. $].strip;
+
+		headerLinksParsed ~= lnk;
 	}
 
 	if(locateSymbol is null) {
@@ -2698,8 +2754,10 @@ void main(string[] args) {
 		if (!exists(outputDirectory))
 			mkdir(outputDirectory);
 
-		copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
-		copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
+		if(copyStandardFiles) {
+			copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
+			copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
+		}
 
 		/*
 		if(!exists(skeletonFile) && exists("skeleton-default.html"))
@@ -2779,7 +2837,7 @@ void main(string[] args) {
 
 						void addDeclNav(Element nav, Decl decl) {
 							auto li = nav.addChild("li");
-							if(decl.isDocumented && !decl.isPrivate)
+							if(decl.isDocumented && (!decl.isPrivate || writePrivateDocs))
 								li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
 							li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
 							if(decl.children.length)
@@ -2935,7 +2993,7 @@ void main(string[] args) {
 			writeln("Generating HTML for ", decl.name);
 
 			// FIXME: make search index in here if we can
-			writeHtml(decl, true, gzip);
+			writeHtml(decl, true, gzip, headerTitle, headerLinksParsed);
 		}
 	}
 
@@ -3089,7 +3147,7 @@ string[] splitIdentifier(string name) {
 SearchResult[][string] searchTerms;
 
 void generateSearchIndex(Decl decl, ref int id) {
-	if(decl.isPrivate() || !decl.isDocumented())
+	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
 		return;
 
 	// this needs to match the id in index.xml!
@@ -3154,7 +3212,7 @@ void generateSearchIndex(Decl decl, ref int id) {
 	//if(decl.fullyQualifiedName in generatedDocuments)
 		//document = generatedDocuments[decl.fullyQualifiedName];
 	//else
-		document = writeHtml(decl, false, false);
+		document = writeHtml(decl, false, false, null, null);
 	assert(document !is null);
 
 	// FIXME: pulling this from the generated html is a bit inefficient.
@@ -3326,7 +3384,7 @@ import std.stdio : File;
 
 void writeIndexXml(Decl decl, FileProxy index, ref int id) {
 //import std.stdio;writeln(decl.fullyQualifiedName, " ", decl.isPrivate, " ", decl.isDocumented);
-	if(decl.isPrivate() || !decl.isDocumented())
+	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
 		return;
 
 	auto cc = decl.parsedDocComment;
@@ -3432,7 +3490,7 @@ string linkUpHtml(string s, Decl decl, string base = "", bool linkToSource = fal
 		}
 
 		void linkToDoc() {
-			if(found && found.isDocumented && !found.isPrivate) {
+			if(found && found.isDocumented && (!found.isPrivate || writePrivateDocs)) {
 				ident.attrs.title = found.fullyQualifiedName;
 				ident.tagName = "a";
 				ident.href = base ~ found.link ~ hash;
