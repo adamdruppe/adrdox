@@ -967,7 +967,7 @@ private pure nothrow @safe:
             else
                 type = tok!"longLiteral";
             range.popFront();
-            if (range.bytes[range.index] == 'U' || range.bytes[range.index] == 'u')
+            if (!secondPass && range.index < range.bytes.length && (range.bytes[range.index] == 'U' || range.bytes[range.index] == 'u'))
             {
                 secondPass = true;
                 goto U;

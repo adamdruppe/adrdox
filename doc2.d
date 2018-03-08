@@ -4,14 +4,13 @@ string skeletonFile = "skeleton.html";
 string outputDirectory = "generated-docs";
 
 bool writePrivateDocs = false;
+bool documentInternal = false;
+bool documentUndocumented = false;
+
 
 /*
 
 Glossary feature: little short links that lead somewhere else.
-
-	FIXME:
-		skip any *.internal.* packages, unless specifically requested.
-
 
 
 	FIXME: it should be able to handle bom. consider core/thread.d the unittest example is offset.
@@ -120,7 +119,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			else
 				output.put(", ");
 			if(ir.decl is null)
-				f.format(ir.ast);
+				output.put(ir.plainText);
 			else
 				output.putTag(`<a class="xref parent-class" href=`~ir.decl.link~`>`~ir.decl.name~`</a> `);
 		}
@@ -215,7 +214,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		table.appendHtml("<tr><th>Value</th><th>Meaning</th></tr>");
 
 		foreach(member; members) {
-			auto memberComment = formatDocumentationComment(preprocessComment(member.comment), decl);
+			auto memberComment = formatDocumentationComment(preprocessComment(member.comment, decl), decl);
 			auto tr = table.addChild("tr");
 			tr.addClass("enum-member");
 			tr.attrs.id = member.name.text;
@@ -561,24 +560,210 @@ void putSimplfiedArgs(T)(MyOutputRange output, const T decl) {
 
 }
 
-string specialPreprocess(string comment) {
+string specialPreprocess(string comment, Decl decl) {
 	switch(specialPreprocessor) {
+		case "dwt":
+			// translate Javadoc to adrdox
+			// @see, @exception/@throws, @param, @return
+			// @author, @version, @since, @deprecated
+			// {@link thing}
+			// one line desc is until the first <p>
+			// html tags are allowed in javadoc
+
+			// links go class#member(args)
+			// the (args) and class are optional
+
+			string parseIdentifier(ref string s, bool allowHash = false) {
+				int end = 0;
+				while(end < s.length && (
+					(s[end] >= 'A' && s[end] <= 'Z') ||
+					(s[end] >= 'a' && s[end] <= 'z') ||
+					(s[end] >= '0' && s[end] <= '9') ||
+					s[end] == '_' ||
+					s[end] == '.' ||
+					(allowHash && s[end] == '#')
+				))
+				{
+					end++;
+				}
+
+				auto i = s[0 .. end];
+				s = s[end .. $];
+				return i;
+			}
+
+
+
+			// javadoc is basically html with @ stuff, so start by parsing that (presumed) tag soup
+			auto document = new Document("<root>" ~ comment ~ "</root>");
+
+			string newComment;
+
+			string fixupJavaReference(string r) {
+				if(r.length == 0)
+					return r;
+				if(r[0] == '#')
+					r = r[1 .. $]; // local refs in adrdox need no special sigil
+				r = r.replace("#", ".");
+				auto idx = r.indexOf("(");
+				if(idx != -1)
+					r = r[0 .. idx];
+				return r;
+			}
+
+			void translate(Element element) {
+				if(element.nodeType == NodeType.Text) {
+					foreach(line; element.nodeValue.splitLines(KeepTerminator.yes)) {
+						auto s = line.strip;
+						if(s.length && s[0] == '@') {
+							s = s[1 .. $];
+							auto ident = parseIdentifier(s);
+							switch(ident) {
+								case "author":
+								case "deprecated":
+								case "version":
+								case "since":
+									line = ident ~ ": " ~ s ~ "\n";
+								break;
+								case "return":
+								case "returns":
+									line = "Returns: " ~ s ~ "\n";
+								break;
+								case "exception":
+								case "throws":
+									while(s.length && s[0] == ' ')
+										s = s[1 .. $];
+									auto p = parseIdentifier(s);
+
+									line = "Throws: [" ~ p ~ "]" ~ s ~ "\n";
+								break;
+								case "param":
+									while(s.length && s[0] == ' ')
+										s = s[1 .. $];
+									auto p = parseIdentifier(s);
+									line  = "Params:\n" ~ p ~ " = " ~ s ~ "\n";
+								break;
+								case "see":
+									while(s.length && s[0] == ' ')
+										s = s[1 .. $];
+									auto p = parseIdentifier(s, true);
+									if(p.length)
+									line = "See_Also: [" ~ fixupJavaReference(p) ~ "]" ~ "\n";
+									else
+									line = "See_Also: " ~ s ~ "\n";
+								break;
+								default:
+									// idk, leave it alone.
+							}
+
+						}
+
+						newComment ~= line;
+					}
+				} else {
+					if(element.tagName == "code") {
+						newComment ~= "`";
+						// FIXME: what about ` inside code?
+						newComment ~= element.innerText; // .replace("`", "``");
+						newComment ~= "`";
+					} else if(element.tagName == "p") {
+						newComment ~= "\n\n";
+						foreach(child; element.children)
+							translate(child);
+						newComment ~= "\n\n";
+					} else if(element.tagName == "a") {
+						newComment ~= "${LINK2 " ~ element.href ~ ", " ~ element.innerText ~ "}";
+					} else {
+						newComment ~= "${" ~ element.tagName.toUpper ~ " ";
+						foreach(child; element.children)
+							translate(child);
+						newComment ~= "}";
+					}
+				}
+			}
+
+			foreach(child; document.root.children)
+				translate(child);
+
+			comment = newComment;
+		break;
 		case "gtk":
+			// translate gtk syntax and names to our own
+
+			string gtkObjectToDClass(string name) {
+				if(name.length == 0)
+					return null;
+				int pkgEnd = 1;
+				while(pkgEnd < name.length && !(name[pkgEnd] >= 'A'  && name[pkgEnd] <= 'Z'))
+					pkgEnd++;
+
+				auto pkg = name[0 .. pkgEnd].toLower;
+				auto mod = name[pkgEnd .. $];
+
+				auto t = pkg ~ "." ~ mod;
+
+				if(t in modulesByName)
+					return t ~ "." ~ mod;
+				if(auto c = mod in allClasses)
+					return c.fullyQualifiedName;
+
+				return null;
+			}
+
+			string trimFirstThing(string name) {
+				if(name.length == 0)
+					return null;
+				int pkgEnd = 1;
+				while(pkgEnd < name.length && !(name[pkgEnd] >= 'A'  && name[pkgEnd] <= 'Z'))
+					pkgEnd++;
+				return name[pkgEnd .. $];
+			}
+
+			string formatForDisplay(string name) {
+				auto parts = name.split(".");
+				// gtk.Application.Application.member
+				// we want to take out the repeated one - slot [1]
+				string disp;
+				if(parts.length > 2)
+					foreach(idx, part; parts) {
+						if(idx == 1) continue;
+						if(idx) {
+							disp ~= ".";
+						}
+						disp ~= part;
+					}
+				else
+					disp = name;
+				return disp;
+			}
+
 			import std.regex : regex, replaceAll, Captures;
 			// gtk references to adrdox reference; punt it to the search engine
 			string magic(Captures!string m) {
 				string s = m.hit;
 				s = s[1 .. $]; // trim off #
+				auto orig = s;
 				auto name = s;
+
+				string displayOverride;
 
 				string additional;
 
 				auto idx = s.indexOf(":");
 				if(idx != -1) {
-					// colon means it is an attribute
+					// colon means it is an attribute or a signal
 					auto property = s[idx + 1 .. $];
 					s = s[0 .. idx];
-					additional = ".get";
+					if(property.length && property[0] == ':') {
+						// is a signal
+						property = property[1 .. $];
+						additional = ".addOn";
+						displayOverride = property;
+					} else {
+						// is a property
+						additional = ".get";
+						displayOverride = property;
+					}
 					bool justSawDash = true;
 					foreach(ch; property) {
 						if(justSawDash && ch >= 'a' && ch <= 'z') {
@@ -595,25 +780,111 @@ string specialPreprocess(string comment) {
 							justSawDash = false;
 						}
 					}
+				} else {
+					idx = s.indexOf(".");
+					if(idx != -1) {
+						// dot is either a tailing period or a Struct.field
+						if(idx == s.length - 1)
+							s = s[0 .. $ - 1]; // tailing period
+						else {
+							auto structField = s[idx + 1 .. $];
+							s = s[0 .. idx];
+
+							additional = "." ~ structField; // FIXME?
+						}
+					}
 				}
 
-				// translate C names to D names
-				if(s.startsWith("Gtk")) {
-					s = "gtk." ~ s[3 .. $] ~ "." ~ s[3 .. $];
-					name = name[3 .. $];
+				auto dClass = gtkObjectToDClass(s);
+				bool plural = false;
+				if(dClass is null && s.length && s[$-1] == 's') {
+					s = s[0 .. $-1];
+					dClass = gtkObjectToDClass(s);
+					plural = true;
 				}
+
+				if(dClass !is null)
+					s = dClass;
 
 				s ~= additional;
 
-				return "[" ~ s ~ "|"~name~"]";
+				if(displayOverride.length)
+					return "[" ~ s ~ "|"~displayOverride~"]";
+				else
+					return "[" ~ s ~ "|"~formatForDisplay(s)~(plural ? "s" : "") ~ "]";
 			}
+
+			// gtk function to adrdox d ref
+			string magic2(Captures!string m) {
+				if(m.hit == "main()")
+					return "`"~m.hit~"`"; // special case
+				string s = m.hit[0 .. $-2]; // trim off the ()
+				auto orig = m.hit;
+				// these tend to go package_class_method_snake
+				string gtkType;
+				gtkType ~= s[0] | 32;
+				s = s[1 .. $];
+				bool justSawUnderscore = false;
+				string dType;
+				bool firstUnderscore = true;
+				while(s.length) {
+					if(s[0] == '_') {
+						justSawUnderscore = true;
+						if(!firstUnderscore) {
+							auto dc = gtkObjectToDClass(gtkType);
+							if(dc !is null) {
+								dType = dc;
+								s = s[1 .. $];
+								break;
+							}
+						}
+						firstUnderscore = false;
+					} else if(justSawUnderscore) {
+						gtkType ~= s[0] & ~32;
+						justSawUnderscore = false;
+					} else
+						gtkType ~= s[0];
+
+					s = s[1 .. $];
+				}
+
+				if(dType.length) {
+					justSawUnderscore = false;
+					string gtkMethod = "";
+					while(s.length) {
+						if(s[0] == '_') {
+							justSawUnderscore = true;
+						} else if(justSawUnderscore) {
+							gtkMethod ~= s[0] & ~32;
+							justSawUnderscore = false;
+						} else
+							gtkMethod ~= s[0];
+
+						s = s[1 .. $];
+					}
+
+					auto dispName = dType[dType.lastIndexOf(".") + 1 .. $] ~ "." ~ gtkMethod;
+
+					return "[" ~ dType ~ "." ~ gtkMethod ~ "|" ~ dispName ~ "]";
+				}
+
+				return "`" ~ orig ~ "`";
+			}
+
+			// cut off spam at the end of headers
+			comment = replaceAll(comment, regex(r"(## [A-Za-z0-9 ]+)##.*$", "gm"), "$1");
+
+			// translate see also header into ddoc style as a special case
+			comment = replaceAll(comment, regex(r"## See Also.*$", "gm"), "See_Also:\n");
+
+			// name lookup
 			comment = replaceAll!magic(comment, regex(r"#[A-Za-z0-9_:\-\.]+", "g"));
 			// gtk params to inline code
 			comment = replaceAll(comment, regex(r"@([A-Za-z0-9_:]+)", "g"), "`$1`");
 			// constants too
 			comment = replaceAll(comment, regex(r"%([A-Za-z0-9_:]+)", "g"), "`$1`");
-			// and functions FIXME
-			comment = replaceAll(comment, regex(r"([A-Za-z0-9_]+)\(\)", "g"), "[$1]");
+			// and functions
+			comment = replaceAll!magic2(comment, regex(r"([A-Za-z0-9_]+)\(\)", "g"));
 
 			// their code blocks
 			comment = replace(comment, `|[<!-- language="C" -->`, "```c\n");
@@ -630,6 +901,9 @@ struct HeaderLink {
 	string text;
 	string url;
 }
+
+string[string] pseudoFiles;
+bool usePseudoFiles = false;
 
 Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, HeaderLink[] headerLinks) {
 	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
@@ -675,9 +949,11 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	{
 		auto p = decl.parent;
 		while(p) {
+			if(p.fakeDecl && p.name == "index")
+				break;
 			// cut off package names that would be repeated
 			auto name = (p.isModule && p.parent) ? lastDotOnly(p.name) : p.name;
-			breadcrumbs.prependChild(Element.make("a", name, p.link).addClass("breadcrumb"));
+			breadcrumbs.prependChild(Element.make("a", name, p.link(true)).addClass("breadcrumb"));
 			p = p.parent;
 		}
 	}
@@ -801,7 +1077,9 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		foreach(child; submodules.sort!((a,b) => a.name < b.name)) {
 			handleChildDecl(dl, child);
 
-			writeHtml(child, forReal, gzip, headerTitle, headerLinks);
+			// i actually want submodules to be controlled on the command line too.
+			//if(!usePseudoFiles) // with pseudofiles, we can generate child modules on demand too, so avoid recursive everything on root request
+				//writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 		}
 	}
 
@@ -812,7 +1090,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		div.addChild("a", at.name, at.link);
 
 		if(decl.aliasThisComment.length) {
-			auto memberComment = formatDocumentationComment(preprocessComment(decl.aliasThisComment), decl);
+			auto memberComment = formatDocumentationComment(preprocessComment(decl.aliasThisComment, decl), decl);
 			auto dc = div.addChild("div").addClass("documentation-comment");
 			dc.innerHTML = memberComment;
 		}
@@ -839,7 +1117,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		}
 
 		foreach(section; comment.symbolGroupsOrder) {
-			auto memberComment = formatDocumentationComment(preprocessComment(comment.symbolGroups[section]), decl);
+			auto memberComment = formatDocumentationComment(preprocessComment(comment.symbolGroups[section], decl), decl);
 			string sectionPrintable = section.replace("_", " ").capitalize;
 			// these count as user headers to move toward TOC - section groups are user defined so it makes sense
 			auto hdr = content.addChild("h3", sectionPrintable, "member-list-header user-header");
@@ -937,7 +1215,15 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		Decl[] navArray;
 		string[string] inNavArray;
 		if(decl.parent) {
-			foreach(child; decl.parent.children) {
+			auto iterate = decl.parent.children;
+
+			if(!decl.isModule && decl.parent.isModule && decl.parent.children.length == 1) {
+				// we are an only child of a module, show the module's nav instead
+				if(decl.parent.parent !is null)
+					iterate = decl.parent.parent.children;
+			}
+
+			foreach(child; iterate) {
 				if((!child.isPrivate() || writePrivateDocs) && child.isDocumented()) {
 					// strip overloads from sidebar
 					if(child.name !in inNavArray) {
@@ -975,7 +1261,9 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			while(p) {
 				// cut off package names that would be repeated
 				auto name = (p.isModule && p.parent) ? lastDotOnly(p.name) : p.name;
-				nav.prependChild(Element.make("a", name, p.link)).addClass("parent");
+				if(name == "index" && p.fakeDecl)
+					break;
+				nav.prependChild(Element.make("a", name, p.link(true))).addClass("parent");
 				p = p.parent;
 			}
 		}
@@ -997,7 +1285,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			// cut off package names that would be repeated
 			auto name = (item.isModule && item.parent) ? lastDotOnly(item.name) : item.name;
 			auto n = list.addChild("li").addChild("a", name, item.link).addClass(item.declarationType.replace(" ", "-"));
-			if(item.name == decl.name)
+			if(item.name == decl.name || name == decl.name)
 				n.addClass("current");
 		}
 
@@ -1101,9 +1389,12 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			addLineNumbering(pre);
 		}
 
-		writeFile(outputDirectory ~ decl.link, document.toString(), gzip);
+		if(usePseudoFiles)
+			pseudoFiles[decl.link(true)] = document.toString();
+		else
+			writeFile(outputDirectory ~ decl.link(true), document.toString(), gzip);
 		import std.stdio;
-		writeln("WRITTEN TO ", decl.link);
+		writeln("WRITTEN TO ", decl.link(true));
 	}
 
 	return document;
@@ -1144,16 +1435,21 @@ string lastDotOnly(string s) {
 
 struct InheritanceResult {
 	Decl decl; // may be null
-	const(BaseClass) ast;
+	string plainText;
+	//const(BaseClass) ast;
 }
 
 abstract class Decl {
+	bool fakeDecl = false;
+	bool alreadyGenerated = false;
 	abstract string name();
 	abstract string comment();
 	abstract string rawComment();
 	abstract string declarationType();
 	abstract const(ASTNode) getAstNode();
 	abstract int lineNumber();
+
+	//abstract string sourceCode();
 
 	abstract void getAnnotatedPrototype(MyOutputRange);
 	abstract void getSimplifiedPrototype(MyOutputRange);
@@ -1210,9 +1506,12 @@ abstract class Decl {
 		// to be publicly documented anyway
 		{
 		auto mod = this.parentModule.name;
-		if(mod.indexOf(".internal") != -1)
+		if(mod.indexOf(".internal") != -1 && !documentInternal)
 			return false;
 		}
+
+		if(documentUndocumented)
+			return true;
 
 		if(comment.length) // hack
 		return comment.length > 0; // cool, not a hack
@@ -1316,17 +1615,30 @@ abstract class Decl {
 		return this.parent.children[lastNonDitto .. stop];
 	}
 
-	string link() {
-		auto n = fullyQualifiedName();
+	string link(bool forFile = false) {
+		auto linkTo = this;
+		if(!forFile && this.isModule && this.children.length == 1) {
+			linkTo = this.children[0];
+		}
 
-		auto overloads = getImmediateDocumentedOverloads();
+		auto n = linkTo.fullyQualifiedName();
+
+		auto overloads = linkTo.getImmediateDocumentedOverloads();
 		if(overloads.length > 1) {
 			int number = 1;
+			int goodNumber;
 			foreach(overload; overloads) {
-				if(overload is this)
+				if(overload is this) {
+					goodNumber = number;
 					break;
+				}
 				number++;
 			}
+
+			if(goodNumber)
+				number = goodNumber;
+			else
+				number = 1;
 
 			import std.conv : text;
 			n ~= text(".", number);
@@ -1361,7 +1673,45 @@ abstract class Decl {
 		return fqn;
 	}
 
-	InheritanceResult[] inheritsFrom() { return null; }
+	final InheritanceResult[] inheritsFrom() {
+		if(!inheritsFromProcessed)
+		foreach(ref i; _inheritsFrom)
+			if(this.parent && i.plainText.length) {
+				i.decl = this.parent.lookupName(i.plainText);
+			}
+		inheritsFromProcessed = true;
+		return _inheritsFrom; 
+	}
+	InheritanceResult[] _inheritsFrom;
+	bool inheritsFromProcessed = false;
+
+	Decl[string] nameTable;
+	bool nameTableBuilt;
+	Decl[string] buildNameTable(string[] excludeModules = null) {
+		if(!nameTableBuilt) {
+			lookup: foreach(mod; this.importedModules) {
+				if(!mod.publicImport)
+					continue;
+				if(auto modDeclPtr = mod.name in modulesByName) {
+					auto modDecl = *modDeclPtr;
+
+					foreach(imod; excludeModules)
+						if(imod == modDeclPtr.name)
+							break lookup;
+
+					auto tbl = modDecl.buildNameTable(excludeModules ~ this.parentModule.name);
+					foreach(k, v; tbl)
+						nameTable[k] = v;
+				}
+			}
+
+			foreach(child; children)
+				nameTable[child.name] = child;
+
+			nameTableBuilt = true;
+		}
+		return nameTable;
+	}
 
 	// the excludeModules is meant to prevent circular lookups
 	Decl lookupName(string name, bool lookUp = true, string[] excludeModules = null) {
@@ -1389,12 +1739,16 @@ abstract class Decl {
 
 		if(subject)
 		while(subject) {
-			foreach(child; subject.children)
-				if(child.name == name)
-					return child;
+
+			auto table = subject.buildNameTable();
+			if(name in table)
+				return table[name];
 
 			if(lookUp)
+			// at the top level, we also need to check private imports
 			lookup: foreach(mod; subject.importedModules) {
+				if(mod.publicImport)
+					continue; // handled by the name table
 				auto lookupInsideModule = originalFullName;
 				if(auto modDeclPtr = mod.name in modulesByName) {
 					auto modDecl = *modDeclPtr;
@@ -1402,7 +1756,8 @@ abstract class Decl {
 					foreach(imod; excludeModules)
 						if(imod == modDeclPtr.name)
 							break lookup;
-					auto located = modDecl.lookupName(lookupInsideModule, mod.publicImport, excludeModules ~ this.parentModule.name);
+					//import std.stdio; writeln(modDecl.name, " ", lookupInsideModule);
+					auto located = modDecl.lookupName(lookupInsideModule, false, excludeModules ~ this.parentModule.name);
 					if(located !is null)
 						return located;
 				}
@@ -1414,8 +1769,15 @@ abstract class Decl {
 				subject = subject.parent;
 		}
 		else {
-					// fully qualified name from this module
+			// FIXME?
+			// fully qualified name from this module
 			subject = this;
+			if(originalFullName.startsWith(this.parentModule.name ~ ".")) {
+				// came from here!
+				auto located = this.parentModule.lookupName(originalFullName[this.parentModule.name.length + 1 .. $]);
+				if(located !is null)
+					return located;
+			} else
 			while(subject !is null) {
 				foreach(mod; subject.importedModules) {
 					if(originalFullName.startsWith(mod.name ~ ".")) {
@@ -1646,6 +2008,8 @@ class ModuleDecl : Decl {
 	override string declarationType() {
 		return justDocsTitle ? "Article" : "module";
 	}
+
+	ubyte[] originalSource;
 
 	string packageName() {
 		auto it = this.name();
@@ -2020,35 +2384,12 @@ class ClassDecl : Decl {
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		annotatedPrototype(this, output);
 	}
-
-	mixin InheritanceSupport;
 }
 
 class InterfaceDecl : Decl {
 	mixin CtorFrom!InterfaceDeclaration;
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		annotatedPrototype(this, output);
-	}
-
-	mixin InheritanceSupport;
-}
-
-mixin template InheritanceSupport() {
-	override InheritanceResult[] inheritsFrom() {
-		InheritanceResult[] ret;
-
-		static if(is(typeof(astNode) == const(ClassDeclaration)) || is(typeof(astNode) == const(InterfaceDeclaration))) {
-			if(astNode.baseClassList)
-			foreach(idx, baseClass; astNode.baseClassList.items) {
-				InheritanceResult ir = InheritanceResult(null, baseClass);
-				if(this.parent && baseClass.type2 && baseClass.type2.symbol) {
-					ir.decl = this.parent.lookupName(baseClass.type2.symbol);
-				}
-				ret ~= ir;
-			}
-		}
-
-		return ret;
 	}
 }
 
@@ -2112,6 +2453,15 @@ mixin template CtorFrom(T) {
 	this(const(T) astNode, const(VersionOrAttribute)[] attributes) {
 		this.astNode = astNode;
 		this.attributes = attributes;
+
+		static if(is(typeof(astNode) == const(ClassDeclaration)) || is(typeof(astNode) == const(InterfaceDeclaration))) {
+			if(astNode.baseClassList)
+			foreach(idx, baseClass; astNode.baseClassList.items) {
+				auto bc = toText(baseClass);
+				InheritanceResult ir = InheritanceResult(null, bc);
+				_inheritsFrom ~= ir;
+			}
+		}
 	}
 
 	static if(is(T == Module)) {
@@ -2221,7 +2571,7 @@ mixin template CtorFrom(T) {
 			return false;
 		else {
 			import std.string;
-			auto l = strip(toLower(preprocessComment(rawComment)));
+			auto l = strip(toLower(preprocessComment(rawComment, this)));
 			if(l.length && l[$-1] == '.')
 				l = l[0 .. $-1];
 			return l == "ditto";
@@ -2250,6 +2600,7 @@ mixin template CtorFrom(T) {
 
 }
 
+ClassDecl[string] allClasses;
 
 class Looker : ASTVisitor {
 	alias visit = ASTVisitor.visit;
@@ -2279,6 +2630,9 @@ class Looker : ASTVisitor {
 		stack ~= d;
 		t.accept(this);
 		stack = stack[0 .. $-1];
+
+		static if(is(D == ClassDecl))
+			allClasses[d.name] = d;
 	}
 
 	override void visit(const Module mod) {
@@ -2560,7 +2914,7 @@ final class GitIgnore {
 			if (mask.indexOf('/') < 0) return path.baseName.globMatch(mask);
 			int xpos = cast(int)path.length-1;
 			while (xpos >= 0) {
-				while (xpos >= 0 && path[xpos] != '/') --xpos;
+				while (xpos > 0 && path[xpos] != '/') --xpos;
 				if (mask[0] == '/') {
 					if (xpos+1 < path.length && path[xpos+1..$].globMatch(mask)) return true;
 				} else {
@@ -2705,6 +3059,8 @@ void main(string[] args) {
 
 	string[] headerLinks;
 	HeaderLink[] headerLinksParsed;
+
+	bool skipExisting = false;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -2714,6 +3070,7 @@ void main(string[] args) {
 		"skeleton|s", "Location of the skeleton file, change to your use case, Default: skeleton.html", &skeletonFile,
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"write-private-docs|p", "Include documentation for `private` members (default: false)", &writePrivateDocs,
+		"write-internal-modules", "Include documentation for modules named `internal` (default: false)", &documentInternal,
 		"locate-symbol", "Locate a symbol in the passed file", &locateSymbol,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
@@ -2722,13 +3079,15 @@ void main(string[] args) {
 		"copy-standard-files", "Copy standard JS/CSS files into target directory (default: true)", &copyStandardFiles,
 		"header-title", "Title to put on the page header", &headerTitle,
 		"header-link", "Link to add to the header (text=url)", &headerLinks,
-		"special-preprocessor", "Run a special preprocessor on comments. Only one supported right now is gtk", &specialPreprocessor);
+		"document-undocumented", "Generate documentation even for undocumented symbols", &documentUndocumented,
+		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
+		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor);
 
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
 
 	if (opt.helpWanted || args.length == 1) {
-		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2017\n" ~
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2018\n" ~
 			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
 		return;
 	}
@@ -2776,6 +3135,48 @@ void main(string[] args) {
 	// and making a mapping of module names, package listing, and files.
 	// cuz reading all of Phobos takes several seconds. Then they can parse it fully lazily.
 
+	static void generateAnnotatedSource(ModuleDecl mod, bool gzip) {
+		import std.file;
+		auto annotatedSourceDocument = new Document();
+		annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
+		auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) mod.originalSource), mod, "../", true))).addClass("d_code highlighted");
+		addLineNumbering(code.requireSelector("pre"), true);
+		auto content = annotatedSourceDocument.requireElementById("page-content");
+		content.addChild(code);
+
+		auto nav = annotatedSourceDocument.requireElementById("page-nav");
+
+		void addDeclNav(Element nav, Decl decl) {
+			auto li = nav.addChild("li");
+			if(decl.isDocumented && (!decl.isPrivate || writePrivateDocs))
+				li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
+			li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
+			if(decl.children.length)
+				nav = li.addChild("ul");
+			foreach(child; decl.children)
+				addDeclNav(nav, child);
+
+		}
+
+		auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
+
+		addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), mod);
+
+		annotatedSourceDocument.title = mod.name ~ " source code";
+
+		if(!usePseudoFiles && !exists(outputDirectory ~ "source"))
+			mkdir(outputDirectory ~ "source");
+		foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
+			if(ele.tagName == "link")
+				ele.attrs.href = "../" ~ ele.attrs.href;
+			else
+				ele.attrs.src = "../" ~ ele.attrs.src;
+		if(usePseudoFiles)
+			pseudoFiles["source/" ~ mod.name ~ ".d.html"] = annotatedSourceDocument.toString();
+		else
+			writeFile(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString(), gzip);
+	}
+
 	void process(string arg, bool generate) {
 		try {
 			if(locateSymbol is null)
@@ -2800,8 +3201,10 @@ void main(string[] args) {
 
 			ModuleDecl existingDecl;
 
+			auto mod = cast(ModuleDecl) sweet.root;
+
 			{
-				auto mod = cast(ModuleDecl) sweet.root;
+				mod.originalSource = b;
 				if(mod.astNode.moduleDeclaration is null)
 					throw new Exception("you must have a module declaration for this to work on it");
 
@@ -2826,41 +3229,7 @@ void main(string[] args) {
 					moduleDeclsGenerate ~= existingDecl;
 
 					if(annotateSource) {
-						auto annotatedSourceDocument = new Document();
-						annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
-						auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) b), sweet.root, "../", true))).addClass("d_code highlighted");
-						addLineNumbering(code.requireSelector("pre"), true);
-						auto content = annotatedSourceDocument.requireElementById("page-content");
-						content.addChild(code);
-
-						auto nav = annotatedSourceDocument.requireElementById("page-nav");
-
-						void addDeclNav(Element nav, Decl decl) {
-							auto li = nav.addChild("li");
-							if(decl.isDocumented && (!decl.isPrivate || writePrivateDocs))
-								li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
-							li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
-							if(decl.children.length)
-								nav = li.addChild("ul");
-							foreach(child; decl.children)
-								addDeclNav(nav, child);
-
-						}
-
-						auto sn = nav.addChild("div").setAttribute("id", "source-navigation");
-
-						addDeclNav(sn.addChild("div").addClass("list-holder").addChild("ul"), existingDecl);
-
-						annotatedSourceDocument.title = existingDecl.name ~ " source code";
-
-						if(!exists(outputDirectory ~ "source"))
-							mkdir(outputDirectory ~ "source");
-						foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
-							if(ele.tagName == "link")
-								ele.attrs.href = "../" ~ ele.attrs.href;
-							else
-								ele.attrs.src = "../" ~ ele.attrs.src;
-						writeFile(outputDirectory ~ "source/" ~ existingDecl.name ~ ".d.html", annotatedSourceDocument.toString(), gzip);
+						generateAnnotatedSource(mod, gzip);
 					}
 				}
 			}
@@ -2950,8 +3319,10 @@ void main(string[] args) {
 	for(size_t i = 0; i < moduleDecls.length; i++ ) {
 		auto decl = moduleDecls[i];
 		auto pkg = decl.packageName;
+		if(decl.name == "index")
+			continue; // avoid infinite recursion
 		if(pkg is null)
-			continue;
+			pkg = "index";//continue; // to create an index.html listing all top level things
 		if(pkg !in modulesByName) {
 			writeln("Making FAKE package for ", pkg);
 			config.fileName = "dummy";
@@ -2963,6 +3334,8 @@ void main(string[] args) {
 			sweet.visit(m);
 
 			auto mod = cast(ModuleDecl) sweet.root;
+
+			mod.fakeDecl = true;
 
 			moduleDecls ~= mod;
 			modulesByName[pkg] = mod;
@@ -2978,22 +3351,121 @@ void main(string[] args) {
 	// add modules to their packages, if possible
 	foreach(decl; moduleDecls) {
 		auto pkg = decl.packageName;
+		if(decl.name == "index") continue; // avoid infinite recursion
 		if(pkg.length == 0) {
-			continue;
+			//continue;
+			pkg = "index";
 		}
 		if(auto a = pkg in modulesByName) {
 			(*a).addChild(decl);
 		} else assert(0, pkg ~ " " ~ decl.toString); // it should have make a fake package above
 	}
 
+
+	version(with_http_server) {
+		import arsd.cgi;
+
+		void serveFiles(Cgi cgi) {
+
+			import std.file;
+
+			string file = cgi.requestUri;
+
+			auto slash = file.lastIndexOf("/");
+			bool wasSource = file.indexOf("source/") != -1;
+
+			if(slash != -1)
+				file = file[slash + 1 .. $];
+
+			if(wasSource)
+				file = "source/" ~ file;
+
+			if(file == "style.css") {
+				cgi.setResponseContentType("text/css");
+				cgi.write(readText(findStandardFile("style.css")), true);
+				return;
+			} else if(file == "script.js") {
+				cgi.setResponseContentType("text/javascript");
+				cgi.write(readText(findStandardFile("script.js")), true);
+				return;
+			} else {
+				if(file.length == 0) {
+					if("index" !in pseudoFiles)
+						writeHtml(modulesByName["index"], true, false, headerTitle, headerLinksParsed);
+					cgi.write(pseudoFiles["index"], true);
+					return;
+				} else {
+					auto of = file;
+
+					if(file !in pseudoFiles) {
+						ModuleDecl* declPtr;
+						file = file[0 .. $-5]; // cut off ".html"
+						if(wasSource) {
+							file = file["source/".length .. $];
+							file = file[0 .. $-2]; // cut off ".d"
+						}
+						while((declPtr = file in modulesByName) is null) {
+							auto idx = file.lastIndexOf(".");
+							if(idx == -1)
+								break;
+							file = file[0 .. idx];
+						}
+
+						if(declPtr !is null) {
+							if(wasSource) {
+								generateAnnotatedSource(*declPtr, false);
+							} else {
+								if(!(*declPtr).alreadyGenerated)
+									writeHtml(*declPtr, true, false, headerTitle, headerLinksParsed);
+								(*declPtr).alreadyGenerated = true;
+							}
+						}
+					}
+
+					file = of;
+
+					if(file in pseudoFiles)
+						cgi.write(pseudoFiles[file], true);
+					else {
+						cgi.setResponseStatus("404 Not Found");
+						cgi.write("404 " ~ file, true);
+					}
+					return;
+				}
+			}
+
+			cgi.setResponseStatus("404 Not Found");
+			cgi.write("404", true);
+		}
+
+		mixin CustomCgiMain!(Cgi, serveFiles);
+
+		processPoolSize = 1;
+
+		usePseudoFiles = true;
+
+		writeln("\n\nListening on http port 8999....");
+
+		cgiMainImpl(["server", "--port", "8999"]);
+		return;
+	}
+
 	if(makeHtml) {
-		foreach(decl; moduleDeclsGenerate) {
-			if(decl.parent && moduleDeclsGenerate.canFind(decl.parent))
-				continue; // it will be written in the list of children
-			writeln("Generating HTML for ", decl.name);
+		bool[string] alreadyTried;
+		foreach(idx, decl; moduleDeclsGenerate) {
+			//if(decl.parent && moduleDeclsGenerate.canFind(decl.parent))
+				//continue; // it will be written in the list of children. actually i want to do it all here.
 
 			// FIXME: make search index in here if we can
-			writeHtml(decl, true, gzip, headerTitle, headerLinksParsed);
+			if(!skipExisting || !std.file.exists(outputDirectory ~ decl.link(true) ~ (gzip ?".gz":""))) {
+				if(decl.name in alreadyTried)
+					continue;
+				alreadyTried[decl.name] = true;
+				writeln("Generating HTML for ", decl.name);
+				writeHtml(decl, true, gzip, headerTitle, headerLinksParsed);
+			}
+
+			writeln(idx, "/", moduleDeclsGenerate.length, " completed");
 		}
 	}
 
@@ -3042,6 +3514,8 @@ void main(string[] args) {
 
 		// also making the search index
 		foreach(decl; moduleDeclsGenerate) {
+			if(decl.fakeDecl)
+				continue;
 			writeln("Generating search for ", decl.name);
 
 			generateSearchIndex(decl, id);

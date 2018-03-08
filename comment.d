@@ -454,7 +454,7 @@ struct DocComment {
 Element formatUnittestDocTuple(Decl.ProcessedUnittest example, Decl decl) {
 	auto holder = Element.make("div").addClass("unittest-example-holder");
 
-	holder.addChild(formatDocumentationComment2(preprocessComment(example.comment), decl).addClass("documentation-comment"));
+	holder.addChild(formatDocumentationComment2(preprocessComment(example.comment, decl), decl).addClass("documentation-comment"));
 	auto pre = holder.addChild("pre").addClass("d_code highlighted");
 
 	// trim off leading/trailing newlines since they just clutter output
@@ -469,7 +469,7 @@ Element formatUnittestDocTuple(Decl.ProcessedUnittest example, Decl decl) {
 	return holder;
 }
 
-string preprocessComment(string comment) {
+string preprocessComment(string comment, Decl decl) {
 	if(comment.length < 3)
 		return comment;
 
@@ -536,7 +536,7 @@ string preprocessComment(string comment) {
 	}
 
 	comment = newComment;
-	return specialPreprocess(comment);
+	return specialPreprocess(comment, decl);
 }
 
 DocComment parseDocumentationComment(string comment, Decl decl) {
@@ -544,13 +544,13 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 
 	if(decl.lineNumber)
 		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", See Implementation)$(BR)";
-	else
+	else if(!decl.fakeDecl)
 		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html, See Source File)$(BR)";
 	// FIXME: add links to ddoc and ddox iff std.* or core.*
 
 	c.decl = decl;
 
-	comment = preprocessComment(comment);
+	comment = preprocessComment(comment, decl);
 
 	void parseSections(string comment) {
 		string remaining;
@@ -664,6 +664,10 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				section = "version";
 				line = line[line.indexOf(":")+1 .. $];
 				inSynopsis = false;
+			} else if(maybe.startsWith("since:")) {
+				section = "since";
+				line = line[line.indexOf(":")+1 .. $];
+				inSynopsis = false;
 			} else if(maybe.startsWith("license:")) {
 				section = "license";
 				line = line[line.indexOf(":")+1 .. $];
@@ -688,10 +692,6 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				inSynopsis = false;
 				line = line[line.indexOf(":")+1 .. $];
 				section = "examples"; // Phobos uses example, the standard is examples.
-			} else if(maybe.startsWith("version:")) {
-				inSynopsis = false;
-				line = line[line.indexOf(":")+1 .. $];
-				section = "version";
 			} else if(maybe.startsWith("standards:")) {
 				line = line[line.indexOf(":")+1 .. $];
 				inSynopsis = false;
@@ -860,6 +860,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				case "standards":
 				case "copyright":
 				case "version":
+				case "since":
 				case "date":
 					c.otherSections[section] ~= line ~ "\n";
 				break;
@@ -983,7 +984,11 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 
 		if(found !is null)
 			text = found.link;
-		else
+		else if(auto c = text in allClasses) {
+			// classes may be thrown and as such can be referenced externally without import
+			// doing this as kinda a hack.
+			text = (*c).link;
+		} else
 			text ~= ".html";
 	}
 
@@ -1696,6 +1701,8 @@ static this() {
 
 		"BR" : "<br />",
 		"I" : "<i>$0</i>",
+		"EM" : "<em>$0</em>",
+		"STRONG" : "<strong>$0</strong>",
 		"TT" : "<tt>$0</tt>",
 		"B" : "<b>$0</b>",
 		"STRIKE" : "<s>$0</s>",

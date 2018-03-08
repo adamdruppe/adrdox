@@ -355,14 +355,14 @@ IAllocator _threadAllocator;
 
 shared static this()
 {
-    assert(!_processAllocator);
+    //assert(!_processAllocator);
     import std.experimental.allocator.gc_allocator : GCAllocator;
     _processAllocator = allocatorObject(GCAllocator.instance);
 }
 
 static this()
 {
-    assert(!_threadAllocator);
+    //assert(!_threadAllocator);
     _threadAllocator = _processAllocator;
 }
 

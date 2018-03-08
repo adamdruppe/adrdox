@@ -4,3 +4,9 @@ all:
 	#dmd diff.d terminal.d $(LIBDPARSE)
 	dmd -m64 doc2.d latex.d cgi.d comment.d stemmer.d dom.d script.d jsvar.d html.d color.d -J. $(LIBDPARSE) -g # -version=std_parser_verbose 
 	#dmd -of/var/www/dpldocs.info/locate locate.d  dom.d stemmer.d  cgi -J. -version=fastcgi -m64 -debug
+
+ldc:
+	ldc2 -oq -O3 -m64 doc2.d latex.d cgi.d comment.d stemmer.d dom.d script.d jsvar.d html.d color.d -J. $(LIBDPARSE) -g # -version=std_parser_verbose 
+
+http:
+	dmd -debug -ofserver -version=embedded_httpd -version=with_http_server -m64 doc2.d latex.d cgi.d comment.d stemmer.d dom.d script.d jsvar.d html.d color.d -J. $(LIBDPARSE) -g # -version=std_parser_verbose 
