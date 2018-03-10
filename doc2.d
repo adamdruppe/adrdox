@@ -3116,6 +3116,7 @@ void main(string[] args) {
 		if(copyStandardFiles) {
 			copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
 			copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
+			copyStandardFileTo(outputDirectory ~ "search-docs.js", "search-docs.js");
 		}
 
 		/*
@@ -3388,6 +3389,10 @@ void main(string[] args) {
 				cgi.setResponseContentType("text/javascript");
 				cgi.write(readText(findStandardFile("script.js")), true);
 				return;
+			} else if(file == "search-docs.js") {
+				cgi.setResponseContentType("text/javascript");
+				cgi.write(readText(findStandardFile("search-docs.js")), true);
+				return;
 			} else {
 				if(file.length == 0) {
 					if("index" !in pseudoFiles)
@@ -3538,9 +3543,7 @@ void main(string[] args) {
 		index.writeln("</script>");
 
 		// write the script that runs the search
-		index.writeln("<script>");
-		index.write(import("search-docs.js"));
-		index.writeln("</script>");
+		index.writeln("<script src=\"search-docs.js\"></script>");
 
 		// and close the skeleton
 		index.writeln("</body></html>");

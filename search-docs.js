@@ -34,6 +34,8 @@ function adrdox_search(searchTerm) {
 	if(searchTerm.length == 0)
 		return;
 
+	searchTerm = searchTerm.replace(/\++/g, ' ');
+
 	if(searchTerm == window.currentSearchTerm)
 		return;
 
@@ -41,11 +43,26 @@ function adrdox_search(searchTerm) {
 
 	location.hash = "#!" + encodeURIComponent(searchTerm);
 
-	var hits = searchDocument.querySelectorAll("adrdox > index > term[value=\""+/*stemmer*/(searchTerm)+"\"] > result");
-	hits = Array.prototype.slice.call(hits);
+	var hitsObj = {};
+
+	var terms = searchTerm.split(" ");
+	for(var i = 0; i < terms.length; i++) {
+		var t = terms[i];
+		var hitschild = searchDocument.querySelectorAll("adrdox > index > term[value=\""+stemmer(t)+"\"] > result");
+		for(var a = 0; a < hitschild.length; a++) {
+			if(hitsObj[hitschild[a].getAttribute("decl")])
+				hitsObj[hitschild[a].getAttribute("decl")] += Number(hitschild[a].getAttribute("score"));
+			else
+				hitsObj[hitschild[a].getAttribute("decl")] = Number(hitschild[a].getAttribute("score"));
+		}
+	}
+
+	var hits = [];
+	for(name in hitsObj)
+		hits.push( { decl: name, score: hitsObj[name] } );
 
 	hits.sort(function(a, b) {
-		return Number(b.getAttribute("score")) - Number(a.getAttribute("score"));
+		return Number(b.score) - Number(a.score);
 	});
 
 	var container = document.getElementById("page-content");
@@ -56,7 +73,7 @@ function adrdox_search(searchTerm) {
 	container.appendChild(resultsElement);
 
 	for(var a = 0; a < hits.length; a++) {
-		var decl = searchDocument.querySelector("adrdox > listing decl[id=\""+hits[a].getAttribute("decl")+"\"]");
+		var decl = searchDocument.querySelector("adrdox > listing decl[id=\""+hits[a].decl+"\"]");
 		if(!decl) continue;
 
 		var dt = document.createElement("dt");
@@ -76,7 +93,7 @@ function adrdox_search(searchTerm) {
 
 		dt.appendChild(link);
 		dt.className = "search-result";
-		dt.setAttribute("data-score", hits[a].getAttribute("score"));
+		dt.setAttribute("data-score", hits[a].score);
 		resultsElement.appendChild(dt);
 
 		var dd = document.createElement("dd");
@@ -90,7 +107,7 @@ function adrdox_search(searchTerm) {
 }
 
 window.onhashchange = function() {
-	adrdox_search(location.hash.substring(2));
+	adrdox_search(decodeURIComponent(location.hash.substring(2)));
 };
 
 window.onload = function() {
@@ -107,7 +124,7 @@ window.onload = function() {
 	if(searchTerm)
 		location.href = location.href.substring(0, location.href.indexOf("?"));
 	searchTerm = location.hash.substring(2);
-	adrdox_search(searchTerm);
+	adrdox_search(decodeURIComponent(searchTerm));
 
 	var search = document.getElementById("search");
 	if(!search)

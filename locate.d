@@ -1,5 +1,7 @@
 // FIXME: add +proj and -proj to adjust project results
 
+module adrdox.locate;
+
 //  # dpldocs: if one request, go right to it. and split camel case and ry rearranging words. File.size returned nothing
 
 import ps = PorterStemmer;
@@ -15,8 +17,20 @@ class ProjectSearcher {
 	this(string path, string name, int projectAdjustment) {
 		this.projectName = name;
 		this.projectAdjustment = projectAdjustment;
+
+		string text;
+		if(path[$ - 3 .. $] == ".gz") {
+			auto com = std.file.read(path);
+			import std.zlib;
+			auto uc = new UnCompress;
+			text = cast(string) uc.uncompress(com);
+			text ~= cast(string) uc.flush();
+		} else {
+			text = readText(path);
+		}
+
 		auto index = new Document();
-		index.parseUtf8(readText(path), true, true);
+		index.parseUtf8(text, true, true);
 
 		if(auto s = index.querySelector("script#search-index-container")) {
 			index = new Document();
@@ -153,18 +167,76 @@ class ProjectSearcher {
 
 }
 
-ProjectSearcher[] projectSearchers;
+__gshared ProjectSearcher[] projectSearchers;
 
-static this() {
-	projectSearchers ~= new ProjectSearcher("experimental-docs/search-results.html", "", 5);
-	//projectSearchers ~= new ProjectSearcher("experimental-docs/std.xml", "Standard Library", 5);
-	//projectSearchers ~= new ProjectSearcher("experimental-docs/arsd.xml", "arsd", 4);
-	projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
-	projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
+shared static this() {
+	version(vps) {
+		version(embedded_httpd)
+			processPoolSize = 2;
+
+		import std.file;
+
+		foreach(dirName; dirEntries("/dpldocs/", SpanMode.shallow)) {
+			string filename;
+			filename = dirName ~ "/master/adrdox-generated/search-results.html.gz";
+			if(!exists(filename)) {
+				filename = null;
+				foreach(fn; dirEntries(dirName, "search-results.html.gz", SpanMode.depth)) {
+					filename = fn;
+					break;
+				}
+			}
+
+			if(filename.length) {
+				projectSearchers ~= new ProjectSearcher(filename, dirName["/dpldocs/".length .. $], 0);
+				import std.stdio; writeln("Loading ", filename);
+			}
+		}
+
+		import std.stdio;
+		writeln("Ready");
+
+	} else {
+		projectSearchers ~= new ProjectSearcher("experimental-docs/search-results.html", "", 5);
+		//projectSearchers ~= new ProjectSearcher("experimental-docs/std.xml", "Standard Library", 5);
+		//projectSearchers ~= new ProjectSearcher("experimental-docs/arsd.xml", "arsd", 4);
+		projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
+		projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
+	}
 }
 
 void searcher(Cgi cgi) {
-	auto search = cgi.request("q", cgi.queryString);
+
+	version(vps) {
+		string path = cgi.requestUri;
+
+		auto q = path.indexOf("?");
+		if(q != -1) {
+			path = path[0 .. q];
+		}
+
+		if(path.length && path[0] == '/')
+			path = path[1 .. $];
+
+
+
+		if(path == "script.js") {
+			import std.file;
+			cgi.setResponseContentType("text/javascript");
+			cgi.write(std.file.read("/dpldocs-build/script.js"), true);
+			return;
+
+		}
+
+		if(path == "style.css") {
+			import std.file;
+			cgi.setResponseContentType("text/css");
+			cgi.write(std.file.read("/dpldocs-build/style.css"), true);
+			return;
+		}
+	}
+
+	auto search = cgi.request("q", cgi.request("searchTerm", cgi.queryString));
 
 	ProjectSearcher.Magic[] magic;
 	foreach(searcher; projectSearchers)
@@ -184,16 +256,25 @@ void searcher(Cgi cgi) {
 	}
 
 	auto document = new Document();
-	document.parseUtf8(import("skeleton.html"), true, true);
+	version(vps) {
+		import std.file;
+		document.parseUtf8(readText("/dpldocs-build/skeleton.html"), true, true);
+		document.title = "Dub Documentation Search";
+	} else
+		document.parseUtf8(import("skeleton.html"), true, true);
 	document.title = "Search Results";
 
 	auto form = document.requireElementById!Form("search");
 	form.setValue("searchTerm", search);
 
-	auto l = document.requireSelector("link");
-	l.href = "/experimental-docs/" ~ l.href;
-	l = document.requireSelector("script[src]");
-	l.src = "/experimental-docs/" ~ l.src;
+	version(vps) {
+		// intentionally blank
+	} else {
+		auto l = document.requireSelector("link");
+		l.href = "/experimental-docs/" ~ l.href;
+		l = document.requireSelector("script[src]");
+		l.src = "/experimental-docs/" ~ l.src;
+	}
 
 	auto pc = document.requireSelector("#page-content");
 	pc.addChild("h1", "Search Results");
@@ -219,7 +300,10 @@ void searcher(Cgi cgi) {
 	foreach(idx, item; magic) {
 		Element decl = item.decl;
 		if(decl is null) continue; // should never happen
-		auto link = "http://dpldocs.info/experimental-docs/" ~ decl.requireSelector("link").innerText;
+		version(vps)
+			auto link = "http://"~item.searcher.projectName~".dpldocs.info/" ~ decl.requireSelector("link").innerText;
+		else
+			auto link = "http://dpldocs.info/experimental-docs/" ~ decl.requireSelector("link").innerText;
 		auto fqn = getFqn(decl);
 		if(fqn in alreadyPresent)
 			continue;
