@@ -487,6 +487,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		{
 			if(auto fakeAttr = cast(FakeAttribute) a) {
 				writer.putTag(fakeAttr.toHTML());
+				writer.put(" ");
 				continue;
 			}
 			// skipping auto because it is already handled as the return value
@@ -906,7 +907,7 @@ string[string] pseudoFiles;
 bool usePseudoFiles = false;
 
 Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, HeaderLink[] headerLinks) {
-	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
+	if(!decl.docsShouldBeOutputted)
 		return null;
 
 	auto title = decl.name;
@@ -1013,7 +1014,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 
 	if(forReal)
 	foreach(child; decl.children) {
-		if((child.isPrivate() && !writePrivateDocs) || !child.isDocumented())
+		if(!child.docsShouldBeOutputted)
 			continue;
 		if(child.isConstructor())
 			ctors ~= child;
@@ -1169,7 +1170,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			auto dl = content.addChild("dl").addClass("member-list inherited");
 			bool hadListing = false;
 			foreach(child; ir.decl.children) {
-				if((child.isPrivate() && !writePrivateDocs) || !child.isDocumented())
+				if(!child.docsShouldBeOutputted)
 					continue;
 				if(!child.isConstructor()) {
 					handleChildDecl(dl, child);
@@ -1224,7 +1225,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			}
 
 			foreach(child; iterate) {
-				if((!child.isPrivate() || writePrivateDocs) && child.isDocumented()) {
+				if(child.docsShouldBeOutputted) {
 					// strip overloads from sidebar
 					if(child.name !in inNavArray) {
 						navArray ~= child;
@@ -1439,6 +1440,23 @@ struct InheritanceResult {
 	//const(BaseClass) ast;
 }
 
+Decl[] declsByUda(string uda, Decl start = null) {
+	if(start is null) {
+		assert(0); // cross-module search not implemented here
+	}
+
+	Decl[] list;
+
+	if(start.hasUda(uda))
+		list ~= start;
+
+	foreach(child; start.children)
+		list ~= declsByUda(uda, child);
+
+	return list;
+	
+}
+
 abstract class Decl {
 	bool fakeDecl = false;
 	bool alreadyGenerated = false;
@@ -1519,7 +1537,7 @@ abstract class Decl {
 		// if it has any documented children, we want to pretend this is documented too
 		// since then it will be possible to navigate to it
 		foreach(child; children)
-			if((!child.isPrivate || writePrivateDocs) && child.isDocumented)
+			if(child.docsShouldBeOutputted())
 				return true;
 
 		// what follows is all filthy hack
@@ -1554,6 +1572,21 @@ abstract class Decl {
 		return protection == tok!"private";
 	}
 
+	bool docsShouldBeOutputted() {
+		if((!this.isPrivate || writePrivateDocs) && this.isDocumented)
+			return true;
+		else if(this.comment.indexOf("$(ALWAYS_DOCUMENT)") != -1)
+			return true;
+		return false;
+	}
+
+	final bool hasUda(string name) {
+		foreach(a; attributes)
+			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.identifier.text == name)
+				return true;
+		return false;
+	}
+
 	// FIXME: isFinal and isVirtual
 	// FIXME: it would be nice to inherit documentation from interfaces too.
 
@@ -1577,7 +1610,7 @@ abstract class Decl {
 
 		if(this.parent !is null) {
 			foreach(child; this.parent.children) {
-				if(child.name == this.name && child.isDocumented() && (!child.isPrivate() || writePrivateDocs))
+				if(child.name == this.name && child.docsShouldBeOutputted())
 					ret ~= child;
 			}
 			if(auto t = cast(TemplateDecl) this.parent)
@@ -2174,7 +2207,7 @@ class VariableDecl : Decl {
 				auto txt = toText(astNode.type);
 
 				auto typeDecl = lookupName(txt);
-				if(typeDecl is null || (typeDecl.isPrivate && !writePrivateDocs) || !typeDecl.isDocumented)
+				if(typeDecl is null || !typeDecl.docsShouldBeOutputted)
 					goto plain;
 
 				output.putTag("<a title=\""~typeDecl.fullyQualifiedName~"\" href=\""~typeDecl.link~"\">" ~ html ~ "</a>");
@@ -3149,7 +3182,7 @@ void main(string[] args) {
 
 		void addDeclNav(Element nav, Decl decl) {
 			auto li = nav.addChild("li");
-			if(decl.isDocumented && (!decl.isPrivate || writePrivateDocs))
+			if(decl.docsShouldBeOutputted)
 				li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
 			li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
 			if(decl.children.length)
@@ -3470,7 +3503,7 @@ void main(string[] args) {
 				writeHtml(decl, true, gzip, headerTitle, headerLinksParsed);
 			}
 
-			writeln(idx, "/", moduleDeclsGenerate.length, " completed");
+			writeln(idx + 1, "/", moduleDeclsGenerate.length, " completed");
 		}
 	}
 
@@ -3624,7 +3657,7 @@ string[] splitIdentifier(string name) {
 SearchResult[][string] searchTerms;
 
 void generateSearchIndex(Decl decl, ref int id) {
-	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
+	if(!decl.docsShouldBeOutputted)
 		return;
 
 	// this needs to match the id in index.xml!
@@ -3861,7 +3894,7 @@ import std.stdio : File;
 
 void writeIndexXml(Decl decl, FileProxy index, ref int id) {
 //import std.stdio;writeln(decl.fullyQualifiedName, " ", decl.isPrivate, " ", decl.isDocumented);
-	if((decl.isPrivate() && !writePrivateDocs) || !decl.isDocumented())
+	if(!decl.docsShouldBeOutputted)
 		return;
 
 	auto cc = decl.parsedDocComment;
@@ -3967,7 +4000,7 @@ string linkUpHtml(string s, Decl decl, string base = "", bool linkToSource = fal
 		}
 
 		void linkToDoc() {
-			if(found && found.isDocumented && (!found.isPrivate || writePrivateDocs)) {
+			if(found && found.docsShouldBeOutputted) {
 				ident.attrs.title = found.fullyQualifiedName;
 				ident.tagName = "a";
 				ident.href = base ~ found.link ~ hash;

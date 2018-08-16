@@ -37,44 +37,71 @@ class ProjectSearcher {
 			index.parseUtf8(s.innerHTML, true, true);
 		}
 
+		declById[0] = DeclElement();
+
 		foreach(element; index.querySelectorAll("adrdox > listing decl[id]"))
-			declById[element.attrs.id] = element;
-		foreach(element; index.querySelectorAll("adrdox > index term[value]"))
-			termByValue[element.attrs.value] = element;
+			declById[to!int(element.attrs.id)] = DeclElement(
+				element.requireSelector("> name").innerText,
+				element.requireSelector("> desc").innerText,
+				element.requireSelector("> link").innerText,
+				to!int(element.attrs.id),
+				element.attrs.type,
+				(element.parentNode && element.parentNode.attrs.id.length) ? to!int(element.parentNode.attrs.id) : 0
+			);
+		foreach(element; index.querySelectorAll("adrdox > index term[value]")) {
+			auto answer = element.querySelectorAll("result");
+			termByValue[element.attrs.value] = new TermElement[](answer.length);
+			foreach(i, res; answer) {
+				termByValue[element.attrs.value][i] = TermElement(to!int(res.attrs.decl), to!int(res.attrs.score));
+			}
+		}
 	}
 
 	string projectName;
 	int projectAdjustment = 0;
 
-	Element[] resultsByTerm(string term) {
+	TermElement[] resultsByTerm(string term) {
 		if(auto t = term in termByValue) {
-			return (*t).querySelectorAll("result");
+			return (*t);
 		} else {
 			return null;
 		}
 	}
 
-	Element getDecl(string i) {
+	DeclElement getDecl(int i) {
 		if(auto a = i in declById)
 			return *a;
-		return null;
+		return DeclElement.init;
 	}
 
+	static struct TermElement {
+		int declId;
+		int score;
+	}
 
-	Element[string] declById;
-	Element[string] termByValue;
+	static struct DeclElement {
+		string name;
+		string description; // actually HTML
+		string link;
+		int id;
+		string type;
+		int parent;
+	}
+
+	DeclElement[int] declById;
+	TermElement[][string] termByValue;
 
 	static struct Magic {
-		string declId;
+		int declId;
 		int score;
-		Element decl;
+		DeclElement decl;
 		ProjectSearcher searcher;
 	}
 
 	Magic[] getPossibilities(string search) {
-		int[string] declScores;
+		int[int] declScores;
 
-		int[string] declHits;
+		int[int] declHits;
 
 		ps.PorterStemmer s;
 
@@ -88,17 +115,17 @@ class ProjectSearcher {
 			}
 		}
 
-		void addHit(Element item, size_t idx) {
+		void addHit(TermElement item, size_t idx) {
 			if(idx == 0) {
-				declScores[item.attrs.decl] += to!int(item.attrs.score);
+				declScores[item.declId] += item.score;
 				return;
 			}
-			if(item.attrs.decl in declScores) {
-				declScores[item.attrs.decl] += 25; // hit both terms
-				declScores[item.attrs.decl] += to!int(item.attrs.score);
+			if(item.declId in declScores) {
+				declScores[item.declId] += 25; // hit both terms
+				declScores[item.declId] += item.score;
 			} else {
 				// only hit one term...
-				declScores[item.attrs.decl] += to!int(item.attrs.score) / 2;
+				declScores[item.declId] += item.score / 2;
 			}
 		}
 
@@ -109,19 +136,19 @@ class ProjectSearcher {
 
 			foreach(item; resultsByTerm(term)) {
 				addHit(item, idx);
-				declHits[item.attrs.decl] |= 1 << idx;
+				declHits[item.declId] |= 1 << idx;
 			}
 			auto l = term.toLower;
 			if(l != term)
 			foreach(item; resultsByTerm(l)) {
 				addHit(item, idx);
-				declHits[item.attrs.decl] |= 1 << idx;
+				declHits[item.declId] |= 1 << idx;
 			}
 			auto st = s.stem(term.toLower).idup;
 			if(st != l)
 			foreach(item; resultsByTerm(st)) {
 				addHit(item, idx);
-				declHits[item.attrs.decl] |= 1 << idx;
+				declHits[item.declId] |= 1 << idx;
 			}
 		}
 
@@ -141,7 +168,7 @@ class ProjectSearcher {
 				term = term.toLower();
 				foreach(id, decl; declById) {
 					import std.algorithm;
-					auto name = decl.requireSelector("> name").innerText.toLower;
+					auto name = decl.name.toLower;
 					auto dist = cast(int) levenshteinDistance(name, term);
 					if(dist <= 2)
 						magic ~= Magic(id, projectAdjustment + (3 - dist), decl, this);
@@ -152,12 +179,12 @@ class ProjectSearcher {
 		// boosts based on topography
 		foreach(ref item; magic) {
 			auto decl = item.decl;
-			if(decl.attrs.type == "module") {
+			if(decl.type == "module") {
 				// if it is a module, give it moar points
 				item.score += 8;
 				continue;
 			}
-			if(decl.parentNode.attrs.type == "module") {
+			if(declById[decl.id].type == "module") {
 				item.score += 5;
 			}
 		}
@@ -188,8 +215,13 @@ shared static this() {
 			}
 
 			if(filename.length) {
+				try {
 				projectSearchers ~= new ProjectSearcher(filename, dirName["/dpldocs/".length .. $], 0);
 				import std.stdio; writeln("Loading ", filename);
+				} catch(Exception e) {
+				import std.stdio; writeln("FAILED ", filename, "\n", e);
+
+				}
 			}
 		}
 
@@ -246,10 +278,10 @@ void searcher(Cgi cgi) {
 
 	// adjustments based on previously showing results
 	{
-		bool[string] alreadyPresent;
+		bool[int] alreadyPresent;
 		foreach(ref item; magic) {
 			auto decl = item.decl;
-			if(decl.parentNode.id in alreadyPresent)
+			if(decl.parent in alreadyPresent)
 				item.score -= 8;
 			alreadyPresent[decl.id] = true;
 		}
@@ -281,15 +313,17 @@ void searcher(Cgi cgi) {
 	auto ml = pc.addChild("dl");
 	ml.className = "member-list";
 
-	string getFqn(Element i) {
+	string getFqn(ProjectSearcher searcher, ProjectSearcher.DeclElement i) {
 		string n;
-		while(i) {
+		while(true) {
 			if(n) n = "." ~ n;
-			n = i.requireSelector("> name").innerText ~ n;
-			if(i.attrs.type == "module")
+			n = i.name ~ n;
+			if(i.type == "module")
 				break;
-			i = i.parentNode;
-			if(i.tagName != "decl")
+			if(i.parent == 0)
+				break;
+			i = searcher.declById[i.parent];
+			if(i.id == 0)
 				break;
 		}
 		return n;
@@ -298,13 +332,13 @@ void searcher(Cgi cgi) {
 	bool[string] alreadyPresent;
 	int count = 0;
 	foreach(idx, item; magic) {
-		Element decl = item.decl;
-		if(decl is null) continue; // should never happen
+		auto decl = item.decl;
+		if(decl.id == 0) continue; // should never happen
 		version(vps)
-			auto link = "http://"~item.searcher.projectName~".dpldocs.info/" ~ decl.requireSelector("link").innerText;
+			auto link = "http://"~item.searcher.projectName~".dpldocs.info/" ~ decl.link;
 		else
-			auto link = "http://dpldocs.info/experimental-docs/" ~ decl.requireSelector("link").innerText;
-		auto fqn = getFqn(decl);
+			auto link = "http://dpldocs.info/experimental-docs/" ~ decl.link;
+		auto fqn = getFqn(item.searcher, decl);
 		if(fqn in alreadyPresent)
 			continue;
 		alreadyPresent[fqn] = true;
@@ -314,11 +348,12 @@ void searcher(Cgi cgi) {
 		dt.addChild("br");
 		dt.addChild("a", fqn.replace(".", ".\u200B"), link);
 		dt.dataset.score = to!string(item.score);
-		auto html = decl.requireSelector("desc").innerText;
+		auto html = decl.description;
 		//auto d = new Document(html);
 		//writeln(d.root.innerText.replace("\n", " "));
 		//writeln();
 
+		// FIXME fix relative links from here
 		ml.addChild("dd", Html(html));
 		count++;
 

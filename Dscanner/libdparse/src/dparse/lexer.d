@@ -955,7 +955,7 @@ private pure nothrow @safe:
             range.popFront();
             if (secondPass)
                 return;
-            if (range.bytes[range.index] == 'L' || range.bytes[range.index] == 'l')
+            if (range.index < range.bytes.length && (range.bytes[range.index] == 'L' || range.bytes[range.index] == 'l'))
                 goto L;
             return;
         }

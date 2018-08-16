@@ -632,6 +632,9 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			if(maybe.startsWith("params:")) {
 				section = "params";
 				inSynopsis = false;
+			} else if(maybe.startsWith("parameters:")) {
+				section = "params";
+				inSynopsis = false;
 			} else if(maybe.startsWith("returns:")) {
 				section = "returns";
 				line = line[line.indexOf(":")+1 .. $];
@@ -1639,6 +1642,8 @@ static this() {
 		"RANGE": 1,
 		"SVH": 1,
 		"SV": 1,
+
+		"UDA_USES" : 1,
 	];
 
 	ddocMacros = [
@@ -1646,6 +1651,10 @@ static this() {
 		"MODULE_NAME" : "MAGIC", // decl.parentModule.fullyQualifiedName,
 		"D" : "<tt class=\"D\">$0</tt>", // this is magical! D is actually handled in code.
 		"REF" : `<a href="$0.html">$0</a>`, // this is magical! Handles ref in code
+
+		"ALWAYS_DOCUMENT" : "",
+
+		"UDA_USES" : "",
 
 		"TIP" : "<div class=\"tip\">$0</div>",
 		"NOTE" : "<div class=\"note\">$0</div>",
@@ -1961,6 +1970,18 @@ Element expandDdocMacros2(string txt, Decl decl) {
 				holder.innerText = stuff;
 			}
 			return holder;
+		}
+
+		if(name == "UDA_USES") {
+			Element div = Element.make("dl");
+			foreach(d; declsByUda(decl.name, decl.parentModule)) {
+				if(!d.docsShouldBeOutputted)
+					continue;
+				auto dt = div.addChild("dt");
+				dt.addChild("a", d.name, d.link);
+				div.addChild("dd", Html(formatDocumentationComment(d.parsedDocComment.ddocSummary, d)));
+			}
+			return div;
 		}
 
 		if(name == "MODULE_NAME") {

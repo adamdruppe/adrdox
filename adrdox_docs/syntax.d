@@ -287,6 +287,21 @@ $(H3 Markdown-style links)
 
 Markdown-style `[text](url)` links are also supported. There must be no space between the `]` and `(` and it must all appear on the same line. [My link here](http://dpldocs.info). Markdown-style links do $(B not) attempt name lookups like adrdox native `[links]`.
 
+$(H3 User-defined attribues)
+
+If you want a UDA to document its uses, you can add the magic macro `$(UDA_USES)` to it somewhere. This will list links to each symbol possessing the uda.
+
+---
+/++
+	This is used on:
+
+	$(UDA_USES)
++/
+enum MyUDA;
+
+@MyUDA void foo() {}
+---
+
 $(H2 Paragraph detection)
 
 The generator will automatically handle paragraph tags by looking for blank lines and other separators. Just write and trust it to do the right thing. (If it doesn't, email me a bug report, please.)
@@ -814,6 +829,10 @@ $(H2 Commenting stuff out in comments)
 The macro `$(COMMENT ...)` is removed from the generated document. You can use it to comment
 stuff out of your comment. Of course, you can also just use regular `/*` comments instead of
 `/**`.
+
+$(H2 Always Documenting Something)
+
+If you want something to always be documented, even if it is private, add `$(ALWAYS_DOCUMENT)` to its comment somewhere.
 
 +/
 module adrdox.syntax;

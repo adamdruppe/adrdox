@@ -638,10 +638,10 @@ struct var {
 			// so prewrapped stuff can be easily passed.
 			this._type = Type.Object;
 			this._payload._object = t;
-		} else static if(is(T == class)) {
+		} else static if(is(T == class) || .isScriptableOpaque!T) {
 			// auto-wrap other classes with reference semantics
 			this._type = Type.Object;
-			this._payload._object = wrapNativeObject(t);
+			this._payload._object = wrapOpaquely(t);
 		} else static if(is(T == struct) || isAssociativeArray!T) {
 			// copy structs and assoc arrays by value into a var object
 			this._type = Type.Object;
@@ -802,6 +802,8 @@ struct var {
 	public T get(T)() if(!is(T == void)) {
 		static if(is(T == var)) {
 			return this;
+		} else static if(__traits(compiles, T.fromJsVar(var.init))) {
+			return T.fromJsVar(this);
 		} else static if(__traits(compiles, T(this))) {
 			return T(this);
 		} else static if(__traits(compiles, new T(this))) {
@@ -828,6 +830,15 @@ struct var {
 				} else static if(is(T : PrototypeObject)) {
 					// they are requesting an implementation object, just give it to them
 					return cast(T) this._payload._object;
+				} else static if(isScriptableOpaque!(Unqual!T)) {
+					if(auto wno = cast(WrappedOpaque!(Unqual!T)) this._payload._object) {
+						return wno.wrapping();
+					}
+					static if(is(T == R*, R))
+					if(auto wno = cast(WrappedOpaque!(Unqual!(R))) this._payload._object) {
+						return wno.wrapping();
+					}
+					throw new DynamicTypeException(this, Type.Object); // FIXME: could be better
 				} else static if(is(T == struct) || is(T == class)) {
 					// first, we'll try to give them back the native object we have, if we have one
 					static if(is(T : Object)) {
@@ -1660,13 +1671,15 @@ class WrappedNativeObject : PrototypeObject {
 
 template helper(alias T) { alias helper = T; }
 
-/// Wraps a class. If you are manually managing the memory, remember the jsvar may keep a reference to the object; don't free it!
-///
-/// To use this: var a = wrapNativeObject(your_d_object); OR var a = your_d_object;
-///
-/// By default, it will wrap all methods and members with a public or greater protection level. The second template parameter can filter things differently. FIXME implement this
-///
-/// That may be done automatically with opAssign in the future.
+/++
+	Wraps a class. If you are manually managing the memory, remember the jsvar may keep a reference to the object; don't free it!
+
+	To use this: `var a = wrapNativeObject(your_d_object);` OR `var a = your_d_object`;
+
+	By default, it will wrap all methods and members with a public or greater protection level. The second template parameter can filter things differently. FIXME implement this
+
+	That may be done automatically with `opAssign` in the future.
++/
 WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
 	import std.meta;
 	return new class WrappedNativeObject {
@@ -1693,8 +1706,70 @@ WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
 					_properties[memberName] = new PropertyPrototype(
 						() => var(__traits(getMember, obj, memberName)),
 						(var v) {
+							// read-only property hack
+							static if(__traits(compiles, __traits(getMember, obj, memberName) = v.get!(type)))
 							__traits(getMember, obj, memberName) = v.get!(type);
 						});
+				}
+			}
+		}
+	};
+}
+
+import std.traits;
+class WrappedOpaque(T) : PrototypeObject if(isPointer!T) {
+	T wrapped;
+	this(T t) {
+		wrapped = t;
+	}
+	T wrapping() {
+		return wrapped;
+	}
+}
+class WrappedOpaque(T) : PrototypeObject if(!isPointer!T) {
+	T* wrapped;
+	this(T t) {
+		wrapped = new T;
+		(cast() *wrapped) = t;
+	}
+	this(T* t) {
+		wrapped = t;
+	}
+	T* wrapping() {
+		return wrapped;
+	}
+}
+
+WrappedOpaque!Obj wrapOpaquely(Obj)(Obj obj) {
+	return new WrappedOpaque!Obj(obj);
+}
+
+/**
+	Wraps an opaque struct pointer in a module with ufcs functions
+*/
+WrappedNativeObject wrapUfcs(alias Module, Type)(Type obj) {
+	import std.meta;
+	return new class WrappedNativeObject {
+		override Object getObject() {
+			return null; // not actually an object! but close to
+		}
+
+		this() {
+			wrappedType = typeid(Type);
+			// wrap the other methods
+			// and wrap members as scriptable properties
+
+			foreach(memberName; __traits(allMembers, Module)) static if(is(typeof(__traits(getMember, Module, memberName)) type)) {
+				static if(is(type == function)) {
+					foreach(idx, overload; AliasSeq!(__traits(getOverloads, Module, memberName))) static if(.isScriptable!(__traits(getAttributes, overload))()) {
+						auto helper = &__traits(getOverloads, Module, memberName)[idx];
+						static if(Parameters!helper.length >= 1 && is(Parameters!helper[0] == Type)) {
+							// this staticMap is a bit of a hack so it can handle `in float`... liable to break with others, i'm sure
+							_properties[memberName] = (staticMap!(Unqual, Parameters!helper[1 .. $]) args) {
+								return __traits(getOverloads, Module, memberName)[idx](obj, args);
+							};
+						}
+					}
 				}
 			}
 		}
@@ -1711,6 +1786,13 @@ bool isScriptable(attributes...)() {
 	}
 	return false;
 }
+
+bool isScriptableOpaque(T)() {
+	static if(is(typeof(T.isOpaqueStruct) == bool))
+		return T.isOpaqueStruct == true;
+	return false;
+}
+
 
 /// Wraps a struct by reference. The pointer is stored - be sure the struct doesn't get freed or go out of scope!
 ///
