@@ -486,7 +486,14 @@ const(Token)[] getTokensForParser(ubyte[] sourceCode, LexerConfig config,
         final switch (commentType(lexer.front.text))
         {
         case CommentType.block:
-            blockComment = lexer.front.text;
+            if (tokenCount > 0 && lexer.front.line == output.data[tokenCount - 1].line)
+            {
+                (cast() output.data[tokenCount - 1]).trailingComment = lexer.front.text;
+            }
+	    else
+	    {
+                blockComment = lexer.front.text;
+	    }
             lexer.popFront();
             break;
         case CommentType.line:
