@@ -225,6 +225,8 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				td.addChild("span", toHtml(member.type)).addClass("enum-type");
 			}
 
+			// FIXME: add enum.atAttributes here
+
 			td.addChild("a", member.name.text, "#" ~ member.name.text).addClass("enum-member-name");
 
 			if(member.assignExpression) {

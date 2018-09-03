@@ -1161,6 +1161,22 @@ class Formatter(Sink)
         with(enumMember)
         {
             newline();
+
+
+	bool hadAtAttribute;
+
+	foreach (count, attribute; enumMember.atAttributes)
+	{
+		hadAtAttribute = true;
+            if (count) space();
+            format(attribute);
+	}
+
+	if(hadAtAttribute)
+		space();
+
+
+
             if (type) format(type);
             format(name);
             if (assignExpression)
@@ -2246,9 +2262,18 @@ class Formatter(Sink)
         TypeSuffix[] cstyle;
         **/
 
+	bool hadAtAttribute;
+
+	foreach (count, attribute; parameter.atAttributes)
+	{
+		hadAtAttribute = true;
+            if (count) space();
+            format(attribute);
+	}
+
         foreach (count, attribute; parameter.parameterAttributes)
         {
-            if (count) space();
+            if (count || hadAtAttribute) space();
             put(tokenRep(attribute));
         }
 

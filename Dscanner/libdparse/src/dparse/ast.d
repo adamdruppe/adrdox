@@ -1519,6 +1519,7 @@ public:
     /** */ Type type;
     /** */ ExpressionNode assignExpression;
     /** */ string comment;
+    AtAttribute[] atAttributes;
     mixin OpEquals;
 }
 
@@ -2375,6 +2376,7 @@ public:
     /** */ bool vararg;
     /** */ ExpressionNode default_;
     /** */ TypeSuffix[] cstyle;
+    AtAttribute[] atAttributes;
 
     mixin OpEquals;
 }

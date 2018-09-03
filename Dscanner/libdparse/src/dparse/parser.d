@@ -2568,6 +2568,21 @@ class Parser
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!EnumMember;
         node.comment = current.comment;
+
+
+        while (moreTokens())
+	{
+		if(currentIs(tok!"@")) {
+			AtAttribute atAttribute;
+			mixin(nullCheck!`atAttribute = parseAtAttribute()`);
+			if (atAttribute is null) { deallocate(node); break; }
+			node.atAttributes ~= atAttribute;
+		} else {
+			break;
+		}
+	}
+
+
         mixin(tokenCheck!(`node.name`, `identifier`));
         if (currentIs(tok!"="))
         {
@@ -4234,6 +4249,19 @@ class Parser
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!Parameter;
+
+        while (moreTokens())
+	{
+		if(currentIs(tok!"@")) {
+			AtAttribute atAttribute;
+			mixin(nullCheck!`atAttribute = parseAtAttribute()`);
+			if (atAttribute is null) { deallocate(node); break; }
+			node.atAttributes ~= atAttribute;
+		} else {
+			break;
+		}
+	}
+
         IdType[] parameterAttributes;
         while (moreTokens())
         {

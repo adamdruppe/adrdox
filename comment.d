@@ -2533,11 +2533,22 @@ class MyFormatter(Sink) : Formatter!Sink {
 
 		putTag("<div class=\"runtime-parameter-item parameter-item\">");
 
+
+	bool hadAtAttribute;
+
+	foreach (count, attribute; parameter.atAttributes)
+	{
+		hadAtAttribute = true;
+            if (count) space();
+            format(attribute);
+	}
+
+
 		putTag("<span class=\"parameter-type-holder\">");
 		putTag("<span class=\"parameter-type\">");
 		foreach (count, attribute; parameter.parameterAttributes)
 		{
-			if (count) space();
+			if (count || hadAtAttribute) space();
 			putTag("<span class=\"storage-class\">");
 			put(tokenRep(attribute));
 			putTag("</span>");
