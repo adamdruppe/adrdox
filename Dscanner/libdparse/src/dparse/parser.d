@@ -2447,6 +2447,30 @@ class Parser
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!AnonymousEnumMember;
 
+
+
+        while (moreTokens())
+	{
+		if(currentIs(tok!"@")) {
+			if(peek() !is null && (*peek()) == tok!"identifier" && (*peek()).text == "disable") {
+				advance();
+				advance();
+				node.isDisabled = true;
+			} else {
+				AtAttribute atAttribute;
+				mixin(nullCheck!`atAttribute = parseAtAttribute()`);
+				if (atAttribute is null) { deallocate(node); break; }
+				node.atAttributes ~= atAttribute;
+			}
+		} else if(currentIs(tok!"deprecated")) {
+            		mixin(nullCheck!`node.deprecated_ = parseDeprecated()`);
+		} else {
+			break;
+		}
+	}
+
+
+
 	node.line = current.line;
 
         if (currentIs(tok!"identifier") && peekIsOneOf(tok!",", tok!"=", tok!"}"))
@@ -2573,10 +2597,18 @@ class Parser
         while (moreTokens())
 	{
 		if(currentIs(tok!"@")) {
-			AtAttribute atAttribute;
-			mixin(nullCheck!`atAttribute = parseAtAttribute()`);
-			if (atAttribute is null) { deallocate(node); break; }
-			node.atAttributes ~= atAttribute;
+			if(peek() !is null && (*peek()) == tok!"identifier" && (*peek()).text == "disable") {
+				advance();
+				advance();
+				node.isDisabled = true;
+			} else {
+				AtAttribute atAttribute;
+				mixin(nullCheck!`atAttribute = parseAtAttribute()`);
+				if (atAttribute is null) { deallocate(node); break; }
+				node.atAttributes ~= atAttribute;
+			}
+		} else if(currentIs(tok!"deprecated")) {
+            		mixin(nullCheck!`node.deprecated_ = parseDeprecated()`);
 		} else {
 			break;
 		}

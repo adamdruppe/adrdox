@@ -434,7 +434,13 @@ class Formatter(Sink)
         {
             put("@");
             format(identifier);
-            if(argumentList) format(argumentList);
+            if(argumentList) {
+	    	if(argumentList.items.length > 0)
+			put("(");
+	    	format(argumentList);
+	    	if(argumentList.items.length > 0)
+			put(")");
+	    }
         }
     }
 

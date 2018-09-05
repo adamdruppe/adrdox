@@ -221,21 +221,36 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 			auto td = tr.addChild("td");
 
+			if(member.isDisabled) {
+				td.addChild("span", "@disable").addClass("enum-disabled");
+				td.addChild("br");
+			}
+
 			if(member.type) {
 				td.addChild("span", toHtml(member.type)).addClass("enum-type");
 			}
-
-			// FIXME: add enum.atAttributes here
 
 			td.addChild("a", member.name.text, "#" ~ member.name.text).addClass("enum-member-name");
 
 			if(member.assignExpression) {
 				td.addChild("span", toHtml(member.assignExpression)).addClass("enum-member-value");
 			}
+
+			auto ea = td.addChild("div", "", "enum-attributes");
+			foreach(attribute; member.atAttributes) {
+				ea.addChild("div", toHtml(attribute));
+			}
+
 			// type
 			// assignExpression
 			td = tr.addChild("td");
 			td.innerHTML = memberComment;
+
+			if(member.deprecated_) {
+				auto p = td.prependChild(Element.make("div", Element.make("span", member.deprecated_.stringLiterals.length ? "Deprecated: " : "Deprecated", "deprecated-label"))).addClass("enum-deprecated");
+				foreach(sl; member.deprecated_.stringLiterals)
+					p.addChild("span", sl.text[1 .. $-1]);
+			}
 
 			// I might write to parent list later if I can do it all semantically inside the anonymous enum
 			// since these names are introduced into the parent scope i think it is justified to list them there

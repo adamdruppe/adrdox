@@ -543,6 +543,13 @@ final class AnonymousEnumMember : ASTNode
     /** */ Token name;
     /** */ ExpressionNode assignExpression;
     /** */ string comment;
+
+
+    AtAttribute[] atAttributes;
+
+    bool isDisabled;
+    Deprecated deprecated_;
+
     size_t line;
 }
 
@@ -1520,6 +1527,10 @@ public:
     /** */ ExpressionNode assignExpression;
     /** */ string comment;
     AtAttribute[] atAttributes;
+
+    bool isDisabled;
+    Deprecated deprecated_;
+
     mixin OpEquals;
 }
 

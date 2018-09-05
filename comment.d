@@ -343,6 +343,21 @@ struct DocComment {
 							output.putTag("</span>");
 							output.putTag("</div>");
 						}
+
+
+						if(paramAst && paramAst.atAttributes.length) {
+							output.putTag("<div class=\"parameter-attributes\">");
+							output.put("Attributes:");
+							foreach (attribute; paramAst.atAttributes) {
+								output.putTag("<div class=\"parameter-attribute\">");
+								f.format(attribute);
+								output.putTag("</div>");
+							}
+
+							output.putTag("</div>");
+						}
+
+
 					}
 
 
@@ -2535,14 +2550,6 @@ class MyFormatter(Sink) : Formatter!Sink {
 
 
 	bool hadAtAttribute;
-
-	foreach (count, attribute; parameter.atAttributes)
-	{
-		hadAtAttribute = true;
-            if (count) space();
-            format(attribute);
-	}
-
 
 		putTag("<span class=\"parameter-type-holder\">");
 		putTag("<span class=\"parameter-type\">");

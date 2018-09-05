@@ -367,6 +367,10 @@ ol.overloads + .function-prototype {
 	content: "";
 }
 
+.parameter-attribute {
+	padding-left: 1em;
+}
+
 .toplevel.parameters-list > .parameter-item .parameter-type-holder,
 .toplevel.parameters-list > .parameter-item .parameter-name,
 .toplevel.parameters-list > .parameter-item .parameter-default-value {
@@ -444,6 +448,22 @@ table.enum-members {
 .enum-members .enum-member-value {
 	display: block;
 	color: #666;
+}
+
+.enum-members .enum-disabled {
+	font-style: italic;
+}
+
+.enum-members .enum-deprecated {
+	margin-bottom: 1em;
+}
+
+.enum-members .enum-deprecated > span.deprecated-label {
+	color: red;
+}
+
+.enum-members .enum-attributes {
+	margin-top: 1em;
 }
 
 *:target {
