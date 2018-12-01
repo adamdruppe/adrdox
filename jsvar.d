@@ -1162,8 +1162,13 @@ struct var {
 	}
 
 	public ref var opIndexAssign(T)(T t, string name, string file = __FILE__, size_t line = __LINE__) {
-		if(name.length && name[0] >= '0' && name[0] <= '9')
-			return opIndexAssign(t, to!size_t(name), file, line);
+		if(name.appearsNumeric()) {
+			try {
+				auto i = to!size_t(name);
+				return opIndexAssign(t, i, file, line);
+			} catch(Exception)
+				{} // ignore bad index, use it as a string instead lol
+		}
 		_requireType(Type.Object); // FIXME?
 		if(_payload._object is null)
 			throw new DynamicTypeException(var(null), Type.Object, file, line);
@@ -1717,7 +1722,7 @@ WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
 }
 
 import std.traits;
-class WrappedOpaque(T) : PrototypeObject if(isPointer!T) {
+class WrappedOpaque(T) : PrototypeObject if(isPointer!T || is(T == class)) {
 	T wrapped;
 	this(T t) {
 		wrapped = t;
@@ -1726,7 +1731,7 @@ class WrappedOpaque(T) : PrototypeObject if(isPointer!T) {
 		return wrapped;
 	}
 }
-class WrappedOpaque(T) : PrototypeObject if(!isPointer!T) {
+class WrappedOpaque(T) : PrototypeObject if(!isPointer!T && !is(T == class)) {
 	T* wrapped;
 	this(T t) {
 		wrapped = new T;
@@ -1791,6 +1796,16 @@ bool isScriptableOpaque(T)() {
 	static if(is(typeof(T.isOpaqueStruct) == bool))
 		return T.isOpaqueStruct == true;
 	return false;
+}
+
+bool appearsNumeric(string n) {
+	if(n.length == 0)
+		return false;
+	foreach(c; n) {
+		if(c < '0' || c > '9')
+			return false;
+	}
+	return true;
 }
 
 

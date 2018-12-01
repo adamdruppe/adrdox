@@ -3441,6 +3441,11 @@ class Parser
     {
         auto node = allocate!ImportDeclaration;
         if (expect(tok!"import") is null) { deallocate(node); return null; }
+
+        node.comment = comment;
+        comment = null;
+	node.line = current.line;
+
         SingleImport si = parseSingleImport();
         if (currentIs(tok!":"))
             node.importBindings = parseImportBindings(si);

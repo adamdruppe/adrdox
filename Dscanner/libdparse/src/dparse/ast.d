@@ -1893,6 +1893,8 @@ public:
     {
         mixin(visitIfNotNull!(singleImports, importBindings));
     }
+    /** */ string comment;
+    size_t line;
     /** */ SingleImport[] singleImports;
     /** */ ImportBindings importBindings;
     mixin OpEquals;

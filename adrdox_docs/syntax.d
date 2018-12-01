@@ -834,6 +834,10 @@ $(H2 Always Documenting Something)
 
 If you want something to always be documented, even if it is private, add `$(ALWAYS_DOCUMENT)` to its comment somewhere.
 
+$(H2 Documentable Constructs)
+
+adrdox allows documenting more language constructs than ddoc. It lets you document public imports, postblits, destructors, anonymous enums, and more. Try putting a doc comment on almost anything and see what happens!
+
 +/
 module adrdox.syntax;
 
@@ -875,4 +879,3 @@ I intend for this to be used to show syntax translations, but any time where a s
 		1 = [a_huge_complex_function#note-1]
 +/
 void a_huge_complex_function() {}
-

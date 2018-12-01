@@ -990,7 +990,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	string dittoedName;
 	string dittoedComment;
 
-	void handleChildDecl(Element dl, Decl child) {
+	void handleChildDecl(Element dl, Decl child, bool enableLinking = true) {
 		auto cc = child.parsedDocComment;
 		string sp;
 		MyOutputRange or = MyOutputRange(&sp);
@@ -1017,7 +1017,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			lastDt.addSibling(newDt);
 		} else {
 			dl.addChild(newDt);
-			dl.addChild("dd", Html(formatDocumentationComment(cc.ddocSummary, child)));
+			dl.addChild("dd", Html(formatDocumentationComment(enableLinking ? cc.ddocSummary : preprocessComment(child.comment, child), child)));
 			dittoedComment = child.comment;
 		}
 
@@ -1028,6 +1028,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	Decl[] ctors;
 	Decl[] members;
 	Decl[] submodules;
+	ImportDecl[] imports;
 
 	if(forReal)
 	foreach(child; decl.children) {
@@ -1041,6 +1042,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			 {} // intentionally blank
 		else if(cast(PostblitDecl) child)
 			 {} // intentionally blank
+		else if(auto c = cast(ImportDecl) child)
+			imports ~= c;
 		else
 			members ~= child;
 	}
@@ -1088,7 +1091,6 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
 	}
 
-
 	if(submodules.length) {
 		content.addChild("h2", "Modules").id = "modules";
 		auto dl = content.addChild("dl").addClass("member-list native");
@@ -1111,6 +1113,16 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			auto memberComment = formatDocumentationComment(preprocessComment(decl.aliasThisComment, decl), decl);
 			auto dc = div.addChild("div").addClass("documentation-comment");
 			dc.innerHTML = memberComment;
+		}
+	}
+
+	if(imports.length) {
+		content.addChild("h2", "Public Imports").id = "public-imports";
+		auto div = content.addChild("div");
+
+		foreach(imp; imports) {
+			auto dl = content.addChild("dl").addClass("member-list native");
+			handleChildDecl(dl, imp, false);
 		}
 	}
 
@@ -2400,7 +2412,39 @@ class PostblitDecl : Decl {
 	}
 }
 
-class MixedInTemmplateDecl : Decl {
+class ImportDecl : Decl {
+	mixin CtorFrom!ImportDeclaration;
+
+	bool isPublic;
+	string newName;
+	string oldName;
+
+	override string link(bool forFile = false) {
+		return oldName ~ ".html";
+	}
+
+	// I also want to document undocumented public imports, since they also spam up the namespace
+	override bool docsShouldBeOutputted() {
+		return isPublic;
+	}
+
+	override string name() {
+		return newName.length ? newName : oldName;
+	}
+
+	override string declarationType() {
+		return "import";
+	}
+
+	override void getSimplifiedPrototype(MyOutputRange output) {
+		if(isPublic)
+			output.putTag("<span class=\"builtin-type\">public</span> ");
+		output.putTag(toHtml(astNode).source);
+	}
+
+}
+
+class MixedInTemplateDecl : Decl {
 	mixin CtorFrom!TemplateMixinExpression;
 
 	override string declarationType() {
@@ -2565,6 +2609,8 @@ mixin template CtorFrom(T) {
 			{ assert(0); } // overridden above
 		else static if(is(T == VariableDeclaration))
 			{assert(0);} // not compiled, overridden above
+		else static if(is(T == ImportDeclaration))
+			{assert(0);} // not compiled, overridden above
 		else static if(is(T == MixinTemplateDeclaration)) {
 			return astNode.templateDeclaration.name.text;
 		} else static if(is(T == StructDeclaration) || is(T == UnionDeclaration))
@@ -2701,7 +2747,7 @@ class Looker : ASTVisitor {
 		stack[$-1].addChild(new ConstructorDecl(dec, attributes[$-1]));
 	}
 	override void visit(const TemplateMixinExpression dec) {
-		stack[$-1].addChild(new MixedInTemmplateDecl(dec, attributes[$-1]));
+		stack[$-1].addChild(new MixedInTemplateDecl(dec, attributes[$-1]));
 	}
 	override void visit(const Postblit dec) {
 		stack[$-1].addChild(new PostblitDecl(dec, attributes[$-1]));
@@ -2789,6 +2835,18 @@ class Looker : ASTVisitor {
 	}
 
 	override void visit(const ImportDeclaration id) {
+
+		bool isPublic = false;
+
+		foreach(a; attributes[$-1]) {
+			if (a.attr && isProtection(a.attr.attribute.type))
+				if(a.attr.attribute.type == tok!"public") {
+					isPublic = true;
+					break;
+				}
+		}
+
+
 		void handleSingleImport(const SingleImport si) {
 			auto newName = si.rename.text;
 			auto oldName = "";
@@ -2797,17 +2855,14 @@ class Looker : ASTVisitor {
 					oldName ~= ".";
 				oldName ~= ident.text;
 			}
-			bool isPublic = false;
-
-			foreach(a; attributes[$-1]) {
-				if (a.attr && isProtection(a.attr.attribute.type))
-					if(a.attr.attribute.type == tok!"public") {
-						isPublic = true;
-						break;
-					}
-			}
 			stack[$-1].addImport(oldName, isPublic);
-			// FIXME: handle the rest like newName
+			// FIXME: handle the rest like newName for the import lookups
+
+			auto nid = new ImportDecl(id, attributes[$-1]);
+			stack[$-1].addChild(nid);
+			nid.isPublic = isPublic;
+			nid.oldName = oldName;
+			nid.newName = newName;
 		}
 
 
