@@ -69,7 +69,7 @@ enum skip_undocumented = true;
 
 static bool sorter(Decl a, Decl b) {
 	if(a.declarationType == b.declarationType)
-		return a.name < b.name;
+		return (blogMode && a.declarationType == "Article") ? (b.name < a.name) : (a.name < b.name);
 	else if(a.declarationType == "module" || b.declarationType == "module") // always put modules up top
 		return 
 			(a.declarationType == "module" ? "aaaaaa" : a.declarationType)
@@ -976,6 +976,13 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		}
 	}
 
+	if(blogMode && decl.isArticle) {
+		// FIXME: kinda a hack there
+		auto mod = cast(ModuleDecl) decl;
+		if(mod.name.startsWith("Blog.Posted_"))
+			content.addChild("span", decl.name.replace("Blog.Posted_", "Posted ").replace("_", "-")).addClass("date-posted");
+	}
+
 	string s;
 	MyOutputRange output = MyOutputRange(&s);
 
@@ -997,9 +1004,15 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		child.getSimplifiedPrototype(or);
 
 		auto printableName = child.name;
-		if(child.isModule && child.parent && child.parent.isModule) {
-			if(printableName.startsWith(child.parent.name))
-				printableName = printableName[child.parent.name.length + 1 .. $];
+
+		if(child.isArticle) {
+			auto mod = cast(ModuleDecl) child;
+			printableName = mod.justDocsTitle;
+		} else {
+			if(child.isModule && child.parent && child.parent.isModule) {
+				if(printableName.startsWith(child.parent.name))
+					printableName = printableName[child.parent.name.length + 1 .. $];
+			}
 		}
 
 		auto newDt = Element.make("dt", Element.make("a", printableName, child.link));
@@ -1027,6 +1040,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 
 	Decl[] ctors;
 	Decl[] members;
+	ModuleDecl[] articles;
 	Decl[] submodules;
 	ImportDecl[] imports;
 
@@ -1036,6 +1050,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			continue;
 		if(child.isConstructor())
 			ctors ~= child;
+		else if(child.isArticle)
+			articles ~= cast(ModuleDecl) child;
 		else if(child.isModule)
 			submodules ~= child;
 		else if(cast(DestructorDecl) child)
@@ -1089,6 +1105,14 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		else
 			content.addChild("p", "A postblit is present on this object, but not explicitly documented in the source.");
 		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
+	}
+
+	if(articles.length) {
+		content.addChild("h2", "Articles").id = "articles";
+		auto dl = content.addChild("dl").addClass("member-list articles");
+		foreach(child; articles.sort!((a,b) => (blogMode ? (b.name < a.name) : (a.name < b.name)))) {
+			handleChildDecl(dl, child);
+		}
 	}
 
 	if(submodules.length) {
@@ -1312,8 +1336,14 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 				lastType = item.declarationType;
 			}
 
-			// cut off package names that would be repeated
-			auto name = (item.isModule && item.parent) ? lastDotOnly(item.name) : item.name;
+			string name;
+			if(item.isArticle) {
+				auto mod = cast(ModuleDecl) item;
+				name = mod.justDocsTitle;
+			} else {
+				// cut off package names that would be repeated
+				name = (item.isModule && item.parent) ? lastDotOnly(item.name) : item.name;
+			}
 			auto n = list.addChild("li").addChild("a", name, item.link).addClass(item.declarationType.replace(" ", "-"));
 			if(item.name == decl.name || name == decl.name)
 				n.addClass("current");
@@ -1946,7 +1976,33 @@ abstract class Decl {
 			}
 		}
 		code = code[slicePoint .. $];
-		unittests ~= Unittest(ut, (cast(char[]) code).idup, comment);
+		unittests ~= Unittest(ut, unittestCodeToString(code), comment);
+	}
+
+	string unittestCodeToString(const(ubyte)[] code) {
+		auto excludeString = cast(const(ubyte[])) "// exclude from docs";
+		bool replacementMade;
+
+		import std.algorithm.searching;
+
+		auto idx = code.countUntil(excludeString);
+		while(idx != -1) {
+			int before = cast(int) idx;
+			int after = cast(int) idx;
+			while(before > 0 && code[before] != '\n')
+				before--;
+			while(after < code.length && code[after] != '\n')
+				after++;
+
+			code = code[0 .. before] ~ code[after .. $];
+			replacementMade = true;
+			idx = code.countUntil(excludeString);
+		}
+
+		if(!replacementMade)
+			return (cast(char[]) code).idup; // needs to be unique
+		else
+			return cast(string) code; // already copied above, so it is unique
 	}
 
 	struct ProcessedUnittest {
@@ -2019,6 +2075,7 @@ abstract class Decl {
 
 	abstract bool isDitto();
 	bool isModule() { return false; }
+	bool isArticle() { return false; }
 	bool isConstructor() { return false; }
 
 	bool aliasThisPresent;
@@ -2061,14 +2118,23 @@ abstract class Decl {
 }
 
 class ModuleDecl : Decl {
-	mixin CtorFrom!Module;
+	mixin CtorFrom!Module defaultMixins;
 
 	string justDocsTitle;
 
 	override bool isModule() { return true; }
+	override bool isArticle() { return justDocsTitle.length > 0; }
 
 	override string declarationType() {
-		return justDocsTitle ? "Article" : "module";
+		return isArticle() ? "Article" : "module";
+	}
+
+	version(none)
+	override void getSimplifiedPrototype(MyOutputRange r) {
+		if(isArticle())
+			r.put(justDocsTitle);
+		else
+			defaultMixins.getSimplifiedPrototype(r);
 	}
 
 	ubyte[] originalSource;
@@ -3132,6 +3198,9 @@ void writeFile(string filename, string content, bool gzip) {
 	}
 }
 
+bool generatingSource;
+bool blogMode = false;
+
 void main(string[] args) {
 	import std.stdio;
 	import std.path : buildPath;
@@ -3182,11 +3251,14 @@ void main(string[] args) {
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
 		"gzip|z", "Gzip generated files as they are created", &gzip,
 		"copy-standard-files", "Copy standard JS/CSS files into target directory (default: true)", &copyStandardFiles,
+		"blog-mode", "Use adrdox as a static site generator for a blog", &blogMode,
 		"header-title", "Title to put on the page header", &headerTitle,
 		"header-link", "Link to add to the header (text=url)", &headerLinks,
 		"document-undocumented", "Generate documentation even for undocumented symbols", &documentUndocumented,
 		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor);
+
+	generatingSource = annotateSource;
 
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';

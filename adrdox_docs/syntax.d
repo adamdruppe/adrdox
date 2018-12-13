@@ -260,6 +260,17 @@ $(SIDEBAR Why does it allow inline examples? I often write full examples that I 
 
 I also implemented the feature from ddoc where unittests with a documentation comment are appended to the examples section of the previous documented declaration. They will appear in an `Examples` section (together with any others you manually write in `Examples:`), or inline in the documentation if you give them an `$(ID some_unique_name)` in the doc comment of the unittest, and write `$(EMBED_UNITTEST some_unique_name)` somewhere in your body text. Both the test and its associated comment will be moved to that location instead of being put in the examples section.
 
+If you have a line that must be in the test to be useful, but should not appear in the documentation, you can simply comment it: `// exclude from docs`. But the line must end with that exact string.
+
+---
+/// The assert inside will not appear in the generated docs
+unittest {
+   int a;
+   assert(a == 2); // exclude from docs
+   writeln(a);
+}
+---
+
 $(H2 Cross-referencing)
 
 Many tasks of cross-referencing are done automatically. Inheritance and function signatures use semantic data from the D source to link themselves. URLs in the raw text, such as http://dpldocs.info/ are detected and hyperlinked automatically. Tables of contents are created, as needed, by scanning for headers.

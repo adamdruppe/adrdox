@@ -773,6 +773,8 @@ pre.console {
 	}
 }
 
+.member-list.articles dt,
+.member-list.articles dd,
 .member-list.constructors dt,
 .member-list.constructors dd {
 	float: none;
@@ -782,6 +784,7 @@ pre.console {
 	border: none;
 }
 
+.member-list.articles dd,
 .member-list.constructors dd {
 	padding-left: 2em;
 }
@@ -1286,4 +1289,9 @@ tt.D.highlighted *:not(a) {
 }
 tt.D.highlighted a {
 	color: #500000;
+}
+
+.date-posted {
+	font-size: 90%;
+	font-style: italic;
 }

@@ -557,10 +557,12 @@ string preprocessComment(string comment, Decl decl) {
 DocComment parseDocumentationComment(string comment, Decl decl) {
 	DocComment c;
 
-	if(decl.lineNumber)
-		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", See Implementation)$(BR)";
-	else if(!decl.fakeDecl)
-		c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html, See Source File)$(BR)";
+	if(generatingSource) {
+		if(decl.lineNumber)
+			c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html#L"~to!string(decl.lineNumber)~", See Implementation)$(BR)";
+		else if(!decl.fakeDecl)
+			c.otherSections["source"] ~= "$(LINK2 source/"~decl.parentModule.name~".d.html, See Source File)$(BR)";
+	}
 	// FIXME: add links to ddoc and ddox iff std.* or core.*
 
 	c.decl = decl;
@@ -2007,7 +2009,8 @@ Element expandDdocMacros2(string txt, Decl decl) {
 		}
 		if(name == "SUBREF") {
 			auto cool = stuff.split(",");
-			return getReferenceLink(decl.fullyQualifiedName ~ "." ~ cool[0].strip ~ "." ~ cool[1].strip, decl, cool[1].strip);
+			if(cool.length == 2)
+				return getReferenceLink(decl.fullyQualifiedName ~ "." ~ cool[0].strip ~ "." ~ cool[1].strip, decl, cool[1].strip);
 		}
 		if(name == "MREF_ALTTEXT") {
 			auto parts = split(stuff, ",");

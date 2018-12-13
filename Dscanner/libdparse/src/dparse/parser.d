@@ -3321,9 +3321,9 @@ class Parser
 
         if (currentIs(tok!"auto") || currentIs(tok!"const") || currentIs(tok!"immutable") || currentIs(tok!"inout") || currentIs(tok!"shared"))
         {
-	/*
         while(currentIs(tok!"auto") || currentIs(tok!"const") || currentIs(tok!"immutable") || currentIs(tok!"inout") || currentIs(tok!"shared"))
             advance();
+	/*
 
             auto b = setBookmark();
             auto t = parseType();
