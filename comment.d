@@ -32,10 +32,12 @@ static struct MyOutputRange {
 	}
 
 	void putTag(in char[] s) {
-		foreach(ch; s) {
+		if(s.length == 0)
+			return;
+		//foreach(ch; s) {
 			assert(s.length);
 			assert(s.indexOf("</body>") == -1);
-		}
+		//}
 		(*output) ~= s;
 	}
 }
@@ -1014,7 +1016,7 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 
 	auto element = Element.make("a");
 	element.className = className;
-	element.href = text ~ hash;
+	element.href = getDirectoryForPackage(text) ~ text ~ hash;
 	element.innerText = realText;
 	return element;
 }
