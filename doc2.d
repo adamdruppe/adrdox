@@ -62,6 +62,33 @@ void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) 
 	copy(findStandardFile(stdfname), destname);
 }
 
+string[string] directoriesForPackage;
+string getDirectoryForPackage(string packageName) {
+
+	if(packageName.indexOf("/") != -1)
+		return ""; // not actually a D package!
+	if(packageName.indexOf("#") != -1)
+		return ""; // not actually a D package!
+
+	string bestMatch = "";
+	int bestMatchDots = -1;
+
+	import std.path;
+	foreach(pkg, dir; directoriesForPackage) {
+		if(globMatch!(CaseSensitive.yes)(packageName, pkg)) {
+			int cnt;
+			foreach(ch; pkg)
+				if(ch == '.')
+					cnt++;
+			if(cnt > bestMatchDots) {
+				bestMatch = dir;
+				bestMatchDots = cnt;
+			}
+		}
+	}
+	return bestMatch;
+}
+
 
 // FIXME: make See Also automatically list dittos that are not overloads
 
@@ -1030,7 +1057,9 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			lastDt.addSibling(newDt);
 		} else {
 			dl.addChild(newDt);
-			dl.addChild("dd", Html(formatDocumentationComment(enableLinking ? cc.ddocSummary : preprocessComment(child.comment, child), child)));
+			auto dd = dl.addChild("dd", Html(formatDocumentationComment(enableLinking ? cc.ddocSummary : preprocessComment(child.comment, child), child)));
+			foreach(e; dd.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+				e.stripOut;
 			dittoedComment = child.comment;
 		}
 
@@ -1737,6 +1766,13 @@ abstract class Decl {
 		}
 
 		n ~= ".html";
+
+		if(!forFile) {
+			string d = getDirectoryForPackage(linkTo.fullyQualifiedName());
+			if(d.length)
+				n = d ~ n;
+		}
+
 		return n;
 	}
 
@@ -3235,6 +3271,10 @@ void main(string[] args) {
 	HeaderLink[] headerLinksParsed;
 
 	bool skipExisting = false;
+
+	string[] globPathInput;
+
+	int jobs = 0;
 	
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
@@ -3256,7 +3296,23 @@ void main(string[] args) {
 		"header-link", "Link to add to the header (text=url)", &headerLinks,
 		"document-undocumented", "Generate documentation even for undocumented symbols", &documentUndocumented,
 		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
-		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor);
+		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
+		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
+		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput);
+
+	foreach(gpi; globPathInput) {
+		auto idx = gpi.indexOf("=");
+		string pathGlob;
+		string dir;
+		if(idx != -1) {
+			pathGlob = gpi[0 .. idx];
+			dir = gpi[idx + 1 .. $];
+		} else {
+			pathGlob = gpi;
+		}
+
+		directoriesForPackage[pathGlob] = dir;
+	}
 
 	generatingSource = annotateSource;
 
@@ -3632,22 +3688,36 @@ void main(string[] args) {
 		return;
 	}
 
+	import std.parallelism;
+	if(jobs > 1)
+	defaultPoolThreads = jobs;
+
 	if(makeHtml) {
 		bool[string] alreadyTried;
-		foreach(idx, decl; moduleDeclsGenerate) {
+
+		void helper(size_t idx, ModuleDecl decl) {
 			//if(decl.parent && moduleDeclsGenerate.canFind(decl.parent))
 				//continue; // it will be written in the list of children. actually i want to do it all here.
 
 			// FIXME: make search index in here if we can
 			if(!skipExisting || !std.file.exists(outputDirectory ~ decl.link(true) ~ (gzip ?".gz":""))) {
 				if(decl.name in alreadyTried)
-					continue;
+					return;
 				alreadyTried[decl.name] = true;
 				writeln("Generating HTML for ", decl.name);
 				writeHtml(decl, true, gzip, headerTitle, headerLinksParsed);
 			}
 
 			writeln(idx + 1, "/", moduleDeclsGenerate.length, " completed");
+		}
+
+		if(jobs == 1)
+		foreach(idx, decl; moduleDeclsGenerate) {
+			helper(idx, decl);
+		}
+		else
+		foreach(idx, decl; parallel(moduleDeclsGenerate)) {
+			helper(idx, decl);
 		}
 	}
 
