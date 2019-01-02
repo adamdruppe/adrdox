@@ -136,6 +136,10 @@ window.addEventListener("load", function() {
 				document.getElementById("page-nav").offsetLeft -
 				64;
 
+		// sanity check lol
+		if(maxContentWidth < 800)
+			maxContentWidth = 800;
+
 		newStyle.innerHTML = ".member-list:not(.constructors) dt .simplified-prototype:hover { width: " + (thing.offsetWidth - 32) + "px; } #page-content pre.d_code, #page-content .overload-option, #page-content .member-list dt { max-width: " + (maxContentWidth) + "px; }";
 	}
 
