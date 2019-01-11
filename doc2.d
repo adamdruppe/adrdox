@@ -1,11 +1,11 @@
 module adrdox.main;
 
-string skeletonFile = "skeleton.html";
-string outputDirectory = "generated-docs";
+__gshared string skeletonFile = "skeleton.html";
+__gshared string outputDirectory = "generated-docs";
 
-bool writePrivateDocs = false;
-bool documentInternal = false;
-bool documentUndocumented = false;
+__gshared bool writePrivateDocs = false;
+__gshared bool documentInternal = false;
+__gshared bool documentUndocumented = false;
 
 
 /*
@@ -62,7 +62,7 @@ void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) 
 	copy(findStandardFile(stdfname), destname);
 }
 
-string[string] directoriesForPackage;
+__gshared string[string] directoriesForPackage;
 string getDirectoryForPackage(string packageName) {
 
 	if(packageName.indexOf("/") != -1)
@@ -3234,8 +3234,8 @@ void writeFile(string filename, string content, bool gzip) {
 	}
 }
 
-bool generatingSource;
-bool blogMode = false;
+__gshared bool generatingSource;
+__gshared bool blogMode = false;
 
 void main(string[] args) {
 	import std.stdio;
