@@ -1211,7 +1211,7 @@ pre.d_code,
 	border-collapse: collapse;
 }
 
-.user-table th {
+.user-table tr:nth-of-type(1) th {
 	border-bottom: solid 1px black;
 	text-align: left;
 }
@@ -1220,6 +1220,18 @@ pre.d_code,
 	border-bottom: solid 1px #ccc;
 	vertical-align: top;
 	padding: 4px;
+}
+.user-table th {
+	padding: 4px;
+}
+
+.user-table.two-axes tr + tr th:first-child {
+	border-bottom: solid 1px #ccc;
+}
+
+.user-table.two-axes th:first-child {
+	border-right: solid 1px black;
+	text-align: right;
 }
 
 .allocator-table td:first-child tt {
@@ -1294,4 +1306,16 @@ tt.D.highlighted a {
 .date-posted {
 	font-size: 90%;
 	font-style: italic;
+}
+
+.token-string-literal {
+	font-style: italic;
+}
+.token-string-literal:hover {
+	background-color: rgba(255, 0, 0, 0.05);
+}
+
+.specially-highlighted {
+	background-color: yellow;
+	background-color: rgba(255, 255, 0, 0.5);
 }

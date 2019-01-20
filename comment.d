@@ -1694,6 +1694,9 @@ static this() {
 
 		"HR" : "<hr />",
 
+		"DASH" : "&#45;",
+		"NOTHING" : "", // used to escape magic syntax sometimes
+
 		// DDoc just expects these.
 		"AMP" : "&",
 		"LT" : "<",
@@ -2105,6 +2108,7 @@ Element expandDdocMacros2(string txt, Decl decl) {
 
 				if(name == "CONSOLE") {
 					awesome = outdent(txt[idx + info.macroNameEndingOffset .. idx + info.terminatingOffset - dzeroAdjustment]).strip;
+					awesome = awesome.replace("\n---", "\n$(NOTHING)---"); // disable ddoc embedded D code as it breaks for D exception messages
 				}
 
 
@@ -2259,11 +2263,24 @@ string highlight(string sourceCode)
 			writeSpan("type", t.text);
 		else if (isKeyword(t.type))
 			writeSpan("kwrd", str(t.type));
-		else if (t.type == tok!"comment")
-			writeSpan("com", t.text);
-		else if (isStringLiteral(t.type) || t.type == tok!"characterLiteral")
-			writeSpan("str", t.text);
-		else if (isNumberLiteral(t.type))
+		else if (t.type == tok!"comment") {
+			auto txt = t.text;
+			if(txt == "/* adrdox_highlight{ */")
+				ret ~= "<span class=\"specially-highlighted\">";
+			else if(txt == "/* }adrdox_highlight */")
+				ret ~= "</span>";
+			else
+				writeSpan("com", t.text);
+		} else if (isStringLiteral(t.type) || t.type == tok!"characterLiteral") {
+			auto txt = t.text;
+			if(txt.startsWith("q{")) {
+				ret ~= "<span class=\"token-string-literal\"><span class=\"str\">q{</span>";
+				ret ~= highlight(txt[2 .. $ - 1]);
+				ret ~= "<span class=\"str\">}</span></span>";
+			} else {
+				writeSpan("str", txt);
+			}
+		} else if (isNumberLiteral(t.type))
 			writeSpan("num", t.text);
 		else if (isOperator(t.type))
 			//writeSpan("op", str(t.type));
@@ -3014,6 +3031,9 @@ Element translateListTable(string text, Decl decl) {
 			nextTag = "td";
 		else {}
 	} while(text.length);
+
+	if(holder.querySelector("th:first-child + td"))
+		holder.addClass("two-axes");
 
 	return holder;
 }

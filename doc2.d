@@ -1307,6 +1307,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			}
 
 			foreach(child; iterate) {
+				if(cast(ImportDecl) child) continue; // do not document public imports here, they belong only on the inside
 				if(child.docsShouldBeOutputted) {
 					// strip overloads from sidebar
 					if(child.name !in inNavArray) {
@@ -1698,7 +1699,7 @@ abstract class Decl {
 
 		if(this.parent !is null) {
 			foreach(child; this.parent.children) {
-				if(child.name == this.name && child.docsShouldBeOutputted())
+				if(((cast(ImportDecl) child) is null) && child.name == this.name && child.docsShouldBeOutputted())
 					ret ~= child;
 			}
 			if(auto t = cast(TemplateDecl) this.parent)

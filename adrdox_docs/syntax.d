@@ -242,6 +242,18 @@ void main() {}
 ---
 )
 
+Ddoc style code samples are special in one way: you can highlight code inside it by using `/* adrdox_highlight{ */ code here would be highlighted /* }adrdox_highlight */` comments in the sample. Note that it matches those strings $(I exactly), meaning you must use `/* */` comments and must have the same spacing. `/* adrdox_highlight{ */` turns it on, `/* }adrdox_highlight */` turns it off. Note that if you don't turn it off, you may cause invalid html to be generated (the implementation just opens and closes a `span` element right now).
+
+$(ADRDOX_SAMPLE
+---
+// I will demo highlight below for the `main` function
+/* adrdox_highlight{ */void main() {
+
+}/* }adrdox_highlight */
+// and now we are done.
+---
+)
+
 $(H4 Console macro - for console output)
 
 The `$(CONSOLE)` macro is for copy/pasting text out of your console, such as showing command lines or program output. You MAY nest macros inside it for additional formatting, and thus, you should escape any `$` followed by `(` in the text.
@@ -253,6 +265,8 @@ $(CONSOLE
 	Hello, $(B world)!
 )
 )
+
+Note that most special syntax works inside `$(CONSOLE)`, but Ddoc-style code samples, delimited with `---`, does not. This is because that breaks things more often than it is useful.
 
 $(H3 Documented unittests)
 
@@ -597,6 +611,24 @@ I also support a list table format, inspired by restructuredText.
 	)
 
 In this format, the text before any `*` is the caption. Then, a leading `*` indicates a new row, a leading `+` starts a new table header, and a leading `-` starts a new table cell. The cells can be as long as you like.
+
+adrdox will also detect if you put a header on the left side of later rows, and format the table accordingly:
+
+	$(ADRDOX_SAMPLE
+	$(TABLE_ROWS
+		Caption
+		* + Header 1
+		  + Header 2
+		  + Header 3
+		* + 2D Header
+		  - Data 1.2
+		  - Data 1.3
+		* + Again
+		  - Data 1.2
+		  - Data 2.3
+	)
+	)
+
 
 
 $(H4 Formatting tables)
