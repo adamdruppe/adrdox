@@ -1,4 +1,5 @@
 // <details> html tag
+// FIXME: KEY_VALUE like params
 module arsd.docgen.comment;
 
 import adrdox.main;
@@ -1706,6 +1707,7 @@ static this() {
 		"DOLLAR" : "$",
 		"BACKTICK" : "`",
 		"COMMA": ",",
+		"COLON": ":",
 		"ARGS" : "$0",
 
 		// support for my docs' legacy components, will be removed before too long.
@@ -2167,7 +2169,7 @@ MacroInformation macroInformation(in char[] str) {
 	int parensCount = 0;
 	foreach (idx, char ch; str)
 	{
-		if (readingMacroName && (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'))
+		if (readingMacroName && (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ','))
 		{
 			readingMacroName = false;
 			readingLeadingWhitespace = true;

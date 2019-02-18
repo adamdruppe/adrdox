@@ -2635,6 +2635,8 @@ class Parser
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!EponymousTemplateDeclaration;
+        node.comment = comment;
+        comment = null;
         advance(); // enum
         const ident = expect(tok!"identifier");
         mixin(nullCheck!`ident`);

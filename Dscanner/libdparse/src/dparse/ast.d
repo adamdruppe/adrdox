@@ -1540,12 +1540,14 @@ final class EponymousTemplateDeclaration : ASTNode
 public:
     override void accept(ASTVisitor visitor) const
     {
-        mixin(visitIfNotNull!(name, templateParameters, assignExpression));
+        mixin(visitIfNotNull!(name, templateParameters, assignExpression, constraint));
     }
     /** */ Token name;
     /** */ TemplateParameters templateParameters;
     /** */ ExpressionNode assignExpression;
     /** */ Type type;
+    string comment;
+    Constraint constraint;
     mixin OpEquals;
 }
 

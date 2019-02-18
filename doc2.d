@@ -158,24 +158,26 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 		// FIXME: invariant
 
-		output.put(" {");
-		foreach(child; decl.children) {
-			if((child.isPrivate() && !writePrivateDocs))
-				continue;
-			// I want to show undocumented plain data members (if not private)
-			// since they might be used as public fields or in ctors for simple
-			// structs, but I'll skip everything else undocumented.
-			if(!child.isDocumented() && (cast(VariableDecl) child) is null)
-				continue;
-			output.putTag("<div class=\"aggregate-member\">");
-			if(child.isDocumented())
-				output.putTag("<a href=\""~child.link~"\"");
-			child.getAggregatePrototype(output);
-			if(child.isDocumented())
-				output.putTag("</a>");
-			output.putTag("</div>");
+		if(decl.children.length) {
+			output.put(" {");
+			foreach(child; decl.children) {
+				if((child.isPrivate() && !writePrivateDocs))
+					continue;
+				// I want to show undocumented plain data members (if not private)
+				// since they might be used as public fields or in ctors for simple
+				// structs, but I'll skip everything else undocumented.
+				if(!child.isDocumented() && (cast(VariableDecl) child) is null)
+					continue;
+				output.putTag("<div class=\"aggregate-member\">");
+				if(child.isDocumented())
+					output.putTag("<a href=\""~child.link~"\"");
+				child.getAggregatePrototype(output);
+				if(child.isDocumented())
+					output.putTag("</a>");
+				output.putTag("</div>");
+			}
+			output.put("}");
 		}
-		output.put("}");
 
 		if(decl.parent !is null && !decl.parent.isModule) {
 			output.putTag("</div>");
@@ -1282,6 +1284,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(TemplateDeclaration) decl.getAstNode())
 		comment.writeDetails(output, fd, decl.getProcessedUnittests());
+	else if(auto fd = cast(EponymousTemplateDeclaration) decl.getAstNode())
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(AliasDecl) decl) {
 		if(fd.initializer)
 			comment.writeDetails(output, fd.initializer, decl.getProcessedUnittests());
@@ -1633,9 +1637,11 @@ abstract class Decl {
 		// the C bindings in druntime are not documented, but
 		// we want them to show up. So I'm gonna hack it.
 
+		/*
 		auto mod = this.parentModule.name;
 		if(mod.startsWith("core"))
 			return true;
+		*/
 		return false;
 	}
 
@@ -2605,6 +2611,28 @@ class TemplateDecl : Decl {
 	}
 }
 
+class EponymousTemplateDecl : Decl {
+	mixin CtorFrom!EponymousTemplateDeclaration;
+
+	/*
+	Decl eponymousMember() {
+		foreach(child; this.children)
+			if(child.name == this.name)
+				return child;
+		return null;
+	}
+	*/
+
+	override string declarationType() {
+		return "enum";
+	}
+
+	override void getAnnotatedPrototype(MyOutputRange output) {
+		annotatedPrototype(this, output);
+	}
+}
+
+
 class MixinTemplateDecl : Decl {
 	mixin CtorFrom!TemplateDeclaration; // MixinTemplateDeclaration does nothing interesting except this..
 
@@ -2873,6 +2901,9 @@ class Looker : ASTVisitor {
 	}
 	override void visit(const TemplateDeclaration dec) {
 		visitInto!TemplateDecl(dec);
+	}
+	override void visit(const EponymousTemplateDeclaration dec) {
+		visitInto!EponymousTemplateDecl(dec);
 	}
 	override void visit(const MixinTemplateDeclaration dec) {
 		visitInto!MixinTemplateDecl(dec.templateDeclaration);

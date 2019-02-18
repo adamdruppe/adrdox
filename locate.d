@@ -232,8 +232,8 @@ shared static this() {
 		projectSearchers ~= new ProjectSearcher("experimental-docs/search-results.html", "", 5);
 		//projectSearchers ~= new ProjectSearcher("experimental-docs/std.xml", "Standard Library", 5);
 		//projectSearchers ~= new ProjectSearcher("experimental-docs/arsd.xml", "arsd", 4);
-		projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
-		projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
+		//projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
+		//projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
 	}
 }
 
