@@ -3857,7 +3857,13 @@ class Parser
             if (currentIs(tok!","))
             {
                 advance();
-                mixin(nullCheck!`node.identifierChain = parseIdentifierChain()`);
+		if(currentIs(tok!"struct") || currentIs(tok!"class")) {
+			advance(); // FIXME: discarding it!
+
+		} else if(currentIs(tok!"(")) {
+			parseExpression(); // FIXME: discarding it!
+		} else
+                	mixin(nullCheck!`node.identifierChain = parseIdentifierChain()`);
             }
         }
         expect(tok!")");
