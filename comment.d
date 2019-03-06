@@ -491,6 +491,8 @@ string preprocessComment(string comment, Decl decl) {
 	if(comment.length < 3)
 		return comment;
 
+	comment = comment.replace("\r\n", "\n");
+
 	comment = comment[1 .. $]; // trim off the /
 
 	auto commentType = comment[0];
