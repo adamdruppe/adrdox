@@ -5,7 +5,7 @@ all:
 	dmd -m64 doc2.d latex.d cgi.d comment.d stemmer.d dom.d script.d jsvar.d html.d color.d -J. $(LIBDPARSE) -g # -version=std_parser_verbose 
 	#dmd -of/var/www/dpldocs.info/locate locate.d  dom.d stemmer.d  cgi -J. -version=fastcgi -m64 -debug
 locate:
-	dmd -of/var/www/dpldocs.info/locate locate.d  dom.d stemmer.d  cgi -J. -version=fastcgi -m64 -debug
+	dmd -of/var/www/dpldocs.info/locate locate.d  dom.d stemmer.d  cgi -J. -version=fastcgi -m64 -debug postgres.d database.d -L-L/usr/local/pgsql/lib
 
 vps_locate:
 	ldc2 -oq -O3 -m64 locate.d  dom.d stemmer.d  cgi -J. -d-version=scgi -d-version=vps -g

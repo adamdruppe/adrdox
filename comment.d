@@ -278,6 +278,8 @@ struct DocComment {
 
 	string[string] linkReferences;
 
+	string[string] userDefinedMacros;
+
 	Decl decl;
 
 	bool synopsisEndedOnDoubleBlank;
@@ -585,6 +587,8 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 		bool inDdocSummary = true;
 		bool synopsisEndedOnDoubleBlank = false;
 
+		string currentMacroName;
+
 		// for symbol_groups
 		string* currentValue;
 
@@ -734,6 +738,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			} else if(maybe.startsWith("macros:")) {
 				inSynopsis = false;
 				section = "macros";
+				currentMacroName = null;
 			} else if(maybe.startsWith("symbol_groups:")) {
 				section = "symbol_groups";
 				line = line[line.indexOf(":")+1 .. $];
@@ -853,6 +858,50 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				break;
 				case "macros":
 					// ignoring for now
+
+					bool lookingForIdent = true;
+					bool inIdent;
+					bool skippingSpace;
+					size_t space_at;
+
+					auto lol = line.strip;
+					foreach(idx, ch; lol) {
+						import std.uni, std.ascii : isAlphaNum;
+						if(lookingForIdent && !inIdent) {
+							if(!isAlpha(ch) && ch != '_')
+								continue;
+							inIdent = true;
+							lookingForIdent = false;
+						}
+
+						if(inIdent) {
+							if(ch == '_' || isAlphaNum(ch) || isAlpha(ch))
+								continue;
+							else {
+								skippingSpace = true;
+								inIdent = false;
+								space_at = idx;
+							}
+						}
+						if(skippingSpace) {
+							if(!isWhite(ch)) {
+								if(ch == '=') {
+									// we finally hit a thingy
+									currentMacroName = lol[0 .. space_at].strip;
+									auto currentMacroBody = lol[idx + 1 .. $] ~ "\n";
+
+									c.userDefinedMacros[currentMacroName] = currentMacroBody;
+									break ss;
+								} else
+									// we are expecting whitespace or = and hit
+									// neither.. this can't be ident = desc!
+									break;
+							}
+						} else {
+							if(currentMacroName.length)
+								c.userDefinedMacros[currentMacroName] ~= lol;
+						}
+					}
 				break;
 				case "link_references":
 					auto eql = line.indexOf("=");
@@ -1682,7 +1731,7 @@ static this() {
 		"NOTE" : "<div class=\"note\">$0</div>",
 		"WARNING" : "<div class=\"warning\">$0</div>",
 		"PITFALL" : "<div class=\"pitfall\">$0</div>",
-		"SIDEBAR" : "<div class=\"sidebar\">$0</div>",
+		"SIDEBAR" : "<div class=\"sidebar\"><aside>$0</aside></div>",
 		"CONSOLE" : "<pre class=\"console\">$0</pre>",
 
 		// headers have meaning to the table of contents generator
@@ -1729,6 +1778,7 @@ static this() {
 		"TABLE": "<table>$0</table>",
 		"TDNW" : "<td style=\"white-space: nowrap;\">$0</td>",
 		"LEADINGROWN":"<tr class=\"leading-row\"><th colspan=\"$1\">$2</th></tr>",
+		"LEADINGROW":"<tr class=\"leading-row\"><th colspan=\"2\">$0</th></tr>",
 
 		"UL" : "<ul>$0</ul>",
 		"OL" : "<ol>$0</ol>",
@@ -1760,6 +1810,8 @@ static this() {
 		"SCRIPT" : "",
 
 		// Useless crap that should just be replaced
+		"REF_SHORT" : `<a href="$2.$3.$1.html">$1</a>`,
+		"SHORTREF" : `<a href="$2.$3.$1.html">$1</a>`,
 		"SUBMODULE" : `<a href="$(FULLY_QUALIFIED_NAME).$2.html">$1</a>`,
 		"SHORTXREF" : `<a href="std.$1.$2.html">$2</a>`,
 		"SHORTXREF_PACK" : `<a href="std.$1.$2.$3.html">$3</a>`,
@@ -1839,6 +1891,8 @@ static this() {
 		"XREF" : 2,
 		"CXREF" : 2,
 		"SHORTXREF" : 2,
+		"SHORTREF": 3,
+		"REF_SHORT": 3,
 		"SUBMODULE" : 2,
 		"SHORTXREF_PACK" : 3,
 		"XREF_PACK" : 3,
@@ -1908,6 +1962,39 @@ Element expandDdocMacros(string txt, Decl decl) {
 Element expandDdocMacros2(string txt, Decl decl) {
 	auto macros = ddocMacros;
 	auto numberOfArguments = ddocMacroInfo;
+
+	auto userDefinedMacros = decl.parsedDocComment.userDefinedMacros;
+
+	string[string] availableMacros;
+	int[string] availableNumberOfArguments;
+
+	if(userDefinedMacros.length) {
+		foreach(name, value; userDefinedMacros) {
+			availableMacros[name] = value;
+			int count;
+			foreach(idx, ch; value) {
+				if(ch == '$') {
+					if(idx + 1 < value.length) {
+						char n = value[idx + 1];
+						if(n >= '0' && n <= '9') {
+							if(n - '0' > count)
+								count = n - '0';
+						}
+					}
+				}
+			}
+			if(count)
+				availableNumberOfArguments[name] = count;
+		}
+
+		foreach(name, value; macros)
+			availableMacros[name] = value;
+		foreach(name, n; numberOfArguments)
+			availableNumberOfArguments[name] = n;
+	} else {
+		availableMacros = macros;
+		availableNumberOfArguments = numberOfArguments;
+	}
 
 	auto idx = 0;
 	if(txt[idx] == '$') {
@@ -2064,10 +2151,12 @@ Element expandDdocMacros2(string txt, Decl decl) {
 		}
 
 
-		if(auto replacementRaw = name in macros) {
-			if(auto nargsPtr = name in numberOfArguments) {
+		if(auto replacementRaw = name in availableMacros) {
+			if(auto nargsPtr = name in availableNumberOfArguments) {
 				auto nargs = *nargsPtr;
 				replacement = *replacementRaw;
+
+				auto orig = txt[idx + info.textBeginningOffset .. idx + info.terminatingOffset - dzeroAdjustment];
 
 				foreach(i; 1 .. nargs + 1) {
 					int blargh = -1;
@@ -2103,9 +2192,18 @@ Element expandDdocMacros2(string txt, Decl decl) {
 						replacement = replace(replacement, "$" ~ cast(char)(i + '0'), magic);
 				}
 
+				// FIXME: recursive replacement doesn't work...
+
 				auto awesome = stuff.strip;
-				awesome = formatDocumentationComment2(awesome, decl, null).innerHTML;
-				replacement = replace(replacement, "$+", awesome);
+				if(replacement.indexOf("$+") != -1) {
+					awesome = formatDocumentationComment2(awesome, decl, null).innerHTML;
+					replacement = replace(replacement, "$+", awesome);
+				}
+
+				if(replacement.indexOf("$0") != -1) {
+					awesome = formatDocumentationComment2(orig, decl, null).innerHTML;
+					replacement = replace(*replacementRaw, "$0", awesome);
+				}
 			} else {
 				// if there is any text, we slice off the ), otherwise, keep the empty string
 				auto awesome = txt[idx + info.textBeginningOffset .. idx + info.terminatingOffset - dzeroAdjustment];

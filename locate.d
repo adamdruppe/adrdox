@@ -2,6 +2,8 @@
 
 module adrdox.locate;
 
+import arsd.postgres;
+
 //  # dpldocs: if one request, go right to it. and split camel case and ry rearranging words. File.size returned nothing
 
 import ps = PorterStemmer;
@@ -14,63 +16,35 @@ import std.algorithm : sort;
 import std.string : toLower, replace, split;
 
 class ProjectSearcher {
+	int projectId;
+	PostgreSql db;
 	this(string path, string name, int projectAdjustment) {
+		db = new PostgreSql("dbname=dpldocs user=me");
+
+		//foreach(row; db.query("SELECT id FROM projects WHERE name = ?", name))
+			//projectId = to!int(row[0]);
+
+		projectId = 1;
+
 		this.projectName = name;
 		this.projectAdjustment = projectAdjustment;
-
-		string text;
-		if(path[$ - 3 .. $] == ".gz") {
-			auto com = std.file.read(path);
-			import std.zlib;
-			auto uc = new UnCompress;
-			text = cast(string) uc.uncompress(com);
-			text ~= cast(string) uc.flush();
-		} else {
-			text = readText(path);
-		}
-
-		auto index = new Document();
-		index.parseUtf8(text, true, true);
-
-		if(auto s = index.querySelector("script#search-index-container")) {
-			index = new Document();
-			index.parseUtf8(s.innerHTML, true, true);
-		}
-
-		declById[0] = DeclElement();
-
-		foreach(element; index.querySelectorAll("adrdox > listing decl[id]"))
-			declById[to!int(element.attrs.id)] = DeclElement(
-				element.requireSelector("> name").innerText,
-				element.requireSelector("> desc").innerText,
-				element.requireSelector("> link").innerText,
-				to!int(element.attrs.id),
-				element.attrs.type,
-				(element.parentNode && element.parentNode.attrs.id.length) ? to!int(element.parentNode.attrs.id) : 0
-			);
-		foreach(element; index.querySelectorAll("adrdox > index term[value]")) {
-			auto answer = element.querySelectorAll("result");
-			termByValue[element.attrs.value] = new TermElement[](answer.length);
-			foreach(i, res; answer) {
-				termByValue[element.attrs.value][i] = TermElement(to!int(res.attrs.decl), to!int(res.attrs.score));
-			}
-		}
 	}
 
 	string projectName;
 	int projectAdjustment = 0;
 
 	TermElement[] resultsByTerm(string term) {
-		if(auto t = term in termByValue) {
-			return (*t);
-		} else {
-			return null;
-		}
+		TermElement[] ret;
+		// FIXME: project id?!?!?
+		foreach(row; db.query("SELECT declId, score FROM terms WHERE term = ?", term))
+			ret ~= TermElement(to!int(row[0]), to!int(row[1]));
+		return ret;
 	}
 
 	DeclElement getDecl(int i) {
-		if(auto a = i in declById)
-			return *a;
+		foreach(row; db.query("SELECT * FROM decls WHERE id = ? AND project_id = ?", i, projectId)) {
+			return DeclElement(row["name"], row["description"], row["link"], row["id"].to!int, row["type"], row["parent"].length ? row["parent"].to!int : 0);
+		}
 		return DeclElement.init;
 	}
 
@@ -87,9 +61,6 @@ class ProjectSearcher {
 		string type;
 		int parent;
 	}
-
-	DeclElement[int] declById;
-	TermElement[][string] termByValue;
 
 	static struct Magic {
 		int declId;
@@ -166,12 +137,14 @@ class ProjectSearcher {
 		if(magic.length == 0) {
 			foreach(term; terms) {
 				term = term.toLower();
-				foreach(id, decl; declById) {
+				foreach(row; db.query("SELECT id, term FROM terms")) {
+					string name = row[1];
+					int id = row[0].to!int;
 					import std.algorithm;
-					auto name = decl.name.toLower;
+					name = name.toLower;
 					auto dist = cast(int) levenshteinDistance(name, term);
 					if(dist <= 2)
-						magic ~= Magic(id, projectAdjustment + (3 - dist), decl, this);
+						magic ~= Magic(id, projectAdjustment + (3 - dist), getDecl(id), this);
 				}
 			}
 		}
@@ -184,7 +157,7 @@ class ProjectSearcher {
 				item.score += 8;
 				continue;
 			}
-			if(declById[decl.id].type == "module") {
+			if(getDecl(decl.id).type == "module") {
 				item.score += 5;
 			}
 		}
@@ -322,7 +295,7 @@ void searcher(Cgi cgi) {
 				break;
 			if(i.parent == 0)
 				break;
-			i = searcher.declById[i.parent];
+			i = searcher.getDecl(i.parent);
 			if(i.id == 0)
 				break;
 		}

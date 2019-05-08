@@ -2019,7 +2019,7 @@ class Parser
                     else
                     {
                         goToBookmark(b);
-                        error("Declaration expected");
+                        error("Declaration expected for mixin");
                         deallocate(node);
                         return null;
                     }
@@ -2144,7 +2144,7 @@ class Parser
                 mixin(nullCheck!`node.conditionalDeclaration = parseConditionalDeclaration()`);
             break;
         default:
-            error("Declaration expected");
+            error("Declaration expected for parse declartion");
             deallocate(node);
             return null;
         }
@@ -5173,6 +5173,46 @@ class Parser
 	// FIXME: so this one is kinda important but i am doing it lazily
     StaticForeachDeclaration parseStaticForeachDeclaration()
     {
+
+
+	auto node = new StaticForeachDeclaration();
+
+	expect(tok!"static");
+	expect(tok!"foreach");
+	expect(tok!"(");
+	auto n = advance();
+	int parensCount = 1;
+	while(parensCount > 0) {
+		if(n == tok!"(")
+			parensCount++;
+		else if(n == tok!")")
+			parensCount--;
+		n = advance();
+	}
+
+	if(n == tok!"{") {
+		int bracesCount = 1;
+		n = advance();
+		while(bracesCount > 0) {
+			if(n == tok!"}") {
+				bracesCount--;
+				if(bracesCount == 0) break;
+			} else if(n == tok!"{")
+				bracesCount++;
+			n = advance();
+		}
+	} else {
+		if(isDeclaration())
+			parseDeclaration();
+		else
+			parseStatement();
+	}
+
+	return node;
+
+
+/+
+
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
 	expect(tok!"static");
 	expect(tok!"foreach");
@@ -5215,6 +5255,7 @@ class Parser
 	}
 
 	return node;
++/
     }
 
     // FIXME. i don't really care about this right now but just want it
@@ -5241,10 +5282,11 @@ class Parser
 	if(n == tok!"{") {
 		int bracesCount = 1;
 		n = advance();
-		while(bracesCount > 1) {
-			if(n == tok!"}")
+		while(bracesCount > 0) {
+			if(n == tok!"}") {
 				bracesCount--;
-			else if(n == tok!"{")
+				if(bracesCount == 0) break;
+			} else if(n == tok!"{")
 				bracesCount++;
 			n = advance();
 		}

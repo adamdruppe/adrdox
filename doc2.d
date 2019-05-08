@@ -1483,15 +1483,28 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			addLineNumbering(pre);
 		}
 
-		if(usePseudoFiles)
-			pseudoFiles[decl.link(true)] = document.toString();
-		else
-			writeFile(outputDirectory ~ decl.link(true), document.toString(), gzip);
+		string overloadLink;
+		string declLink = decl.link(true, &overloadLink);
+
+		if(usePseudoFiles) {
+			pseudoFiles[declLink] = document.toString();
+			if(overloadLink.length)
+				pseudoFiles[overloadLink] = redirectToOverloadHtml(declLink);
+		} else {
+			writeFile(outputDirectory ~ declLink, document.toString(), gzip);
+			if(overloadLink.length)
+				writeFile(outputDirectory ~ overloadLink, redirectToOverloadHtml(declLink), gzip);
+		}
+
 		import std.stdio;
-		writeln("WRITTEN TO ", decl.link(true));
+		writeln("WRITTEN TO ", declLink);
 	}
 
 	return document;
+}
+
+string redirectToOverloadHtml(string what) {
+	return `<script>location.href = '`~what~`';</script> <a href="`~what~`">Continue to overload</a>`;
 }
 
 void addLineNumbering(Element pre, bool id = false) {
@@ -1743,7 +1756,7 @@ abstract class Decl {
 		return this.parent.children[lastNonDitto .. stop];
 	}
 
-	string link(bool forFile = false) {
+	string link(bool forFile = false, string* masterOverloadName = null) {
 		auto linkTo = this;
 		if(!forFile && this.isModule && this.children.length == 1) {
 			linkTo = this.children[0];
@@ -1768,16 +1781,25 @@ abstract class Decl {
 			else
 				number = 1;
 
+			if(masterOverloadName !is null)
+				*masterOverloadName = n.idup;
+
 			import std.conv : text;
 			n ~= text(".", number);
 		}
 
 		n ~= ".html";
 
+		if(masterOverloadName !is null)
+			*masterOverloadName ~= ".html";
+
 		if(!forFile) {
 			string d = getDirectoryForPackage(linkTo.fullyQualifiedName());
-			if(d.length)
+			if(d.length) {
 				n = d ~ n;
+				if(masterOverloadName !is null)
+					*masterOverloadName = d ~ *masterOverloadName;
+			}
 		}
 
 		return n;
@@ -2528,7 +2550,7 @@ class ImportDecl : Decl {
 	string newName;
 	string oldName;
 
-	override string link(bool forFile = false) {
+	override string link(bool forFile = false, string* useless = null) {
 		return oldName ~ ".html";
 	}
 
