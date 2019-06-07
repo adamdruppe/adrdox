@@ -3111,7 +3111,7 @@ import std.string : strip;
 //Decl[][string] packages;
 ModuleDecl[string] modulesByName;
 
-string specialPreprocessor;
+__gshared string specialPreprocessor;
 
 // simplified ".gitignore" processor
 final class GitIgnore {

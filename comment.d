@@ -1764,6 +1764,8 @@ static this() {
 		// support for my docs' legacy components, will be removed before too long.
 		"DDOC_ANCHOR" : "<a id=\"$0\" href=\"$(FULLY_QUALIFIED_NAME).html#$0\">$0</a>",
 
+		"DDOC_COMMENT" : "",
+
 		// this is support for the Phobos docs
 
 		// useful parts
