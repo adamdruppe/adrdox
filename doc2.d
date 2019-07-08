@@ -2263,6 +2263,12 @@ class AliasDecl : Decl {
 
 	void getPrototype(MyOutputRange output, bool link) {
 		// FIXME: storage classes?
+
+		if(link) {
+			auto f = new MyFormatter!(typeof(output))(output, this);
+			writeAttributes(f, output, this.attributes);
+		}
+
 		output.putTag("<span class=\"builtin-type\">alias</span> ");
 
 		output.putTag("<span class=\"name\">");
@@ -2551,7 +2557,11 @@ class ImportDecl : Decl {
 	string oldName;
 
 	override string link(bool forFile = false, string* useless = null) {
-		return oldName ~ ".html";
+		string d;
+		if(!forFile) {
+			d = getDirectoryForPackage(oldName);
+		}
+		return d ~ oldName ~ ".html";
 	}
 
 	// I also want to document undocumented public imports, since they also spam up the namespace
@@ -3109,7 +3119,7 @@ import std.algorithm : startsWith, findSplitBefore;
 import std.string : strip;
 
 //Decl[][string] packages;
-ModuleDecl[string] modulesByName;
+__gshared ModuleDecl[string] modulesByName;
 
 __gshared string specialPreprocessor;
 
@@ -3427,6 +3437,23 @@ void main(string[] args) {
 		import std.file;
 		auto annotatedSourceDocument = new Document();
 		annotatedSourceDocument.parseUtf8(readText(skeletonFile), true, true);
+
+		string fixupLink(string s) {
+			if(!s.startsWith("http") && !s.startsWith("/"))
+				return "../" ~ s;
+			return s;
+		}
+
+		foreach(ele; annotatedSourceDocument.querySelectorAll("a, link, script[src], form"))
+			if(ele.tagName == "link")
+				ele.attrs.href = "../" ~ ele.attrs.href;
+			else if(ele.tagName == "form")
+				ele.attrs.action = "../" ~ ele.attrs.action;
+			else if(ele.tagName == "a")
+				ele.attrs.href = fixupLink(ele.attrs.href);
+			else
+				ele.attrs.src = "../" ~ ele.attrs.src;
+
 		auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) mod.originalSource), mod, "../", true))).addClass("d_code highlighted");
 		addLineNumbering(code.requireSelector("pre"), true);
 		auto content = annotatedSourceDocument.requireElementById("page-content");
@@ -3437,7 +3464,7 @@ void main(string[] args) {
 		void addDeclNav(Element nav, Decl decl) {
 			auto li = nav.addChild("li");
 			if(decl.docsShouldBeOutputted)
-				li.addChild("a", "[Docs] ", "../" ~ decl.link).addClass("docs");
+				li.addChild("a", "[Docs] ", fixupLink(decl.link)).addClass("docs");
 			li.addChild("a", decl.name, "#L" ~ to!string(decl.lineNumber == 0 ? 1 : decl.lineNumber));
 			if(decl.children.length)
 				nav = li.addChild("ul");
@@ -3454,11 +3481,6 @@ void main(string[] args) {
 
 		if(!usePseudoFiles && !exists(outputDirectory ~ "source"))
 			mkdir(outputDirectory ~ "source");
-		foreach(ele; annotatedSourceDocument.querySelectorAll("link, script[src]"))
-			if(ele.tagName == "link")
-				ele.attrs.href = "../" ~ ele.attrs.href;
-			else
-				ele.attrs.src = "../" ~ ele.attrs.src;
 		if(usePseudoFiles)
 			pseudoFiles["source/" ~ mod.name ~ ".d.html"] = annotatedSourceDocument.toString();
 		else

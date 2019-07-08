@@ -51,6 +51,22 @@ a:visited {
 
 /* done with basic colors */
 
+html {
+	font-size: 100%;
+}
+
+h1 {
+	font-size: 1.6rem;
+}
+
+h2 {
+	font-size: 1.21rem;
+}
+
+h3 {
+	font-size: 1.1rem;
+}
+
 body {
 	font-family: sans-serif;
 	color: #111;
@@ -180,7 +196,7 @@ pre {
 	margin-top: 0em;
 	padding-top: 2em;
 	color: #999;
-	font-size: 80%;
+	font-size: 0.9rem;
 	text-align: center;
 	border-top-style: solid;
 	border-top-width: 1px;
@@ -224,7 +240,7 @@ pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border
 .documentation-comment p {
 	/* white-space: pre-line; */
 	max-width: 70ch;
-	font-size: 15px;
+	font-size: 1.1rem;
 	line-height: 1.5;
 }
 
@@ -310,7 +326,7 @@ ol.overloads + .function-prototype {
 	width: 1em;
 	height: 1em;
 	text-align: center;
-	font-size: 125%;
+	font-size: 1.1rem;
 	padding-bottom: 3px;
 }
 
@@ -394,7 +410,7 @@ ol.overloads + .function-prototype {
 */
 
 .function-name {
-	font-size: 125%;
+	font-size: 1.1rem;
 }
 
 .type-constructor,
@@ -570,7 +586,7 @@ h1 .entity-name {
 }
 
 .other-section h3 {
-	font-size: 1em;
+	font-size: 1rem;
 	margin-bottom: 0.25em;
 }
 
@@ -674,7 +690,7 @@ tt.D,
 
 #page-nav a.parent {
 	font-weight: bold;
-	font-size: 125%;
+	font-size: 1.1rem;
 }
 
 #page-nav a.parent + a.parent::before {
@@ -697,7 +713,7 @@ pre.console {
 #more-link {
 	display: block;
 	font-weight: bold;
-	font-size: 125%;
+	font-size: 1.1rem;
 	color: blue;
 }
 
@@ -708,7 +724,7 @@ pre.console {
 }
 
 .member-list dt a {
-	font-size: 110%;
+	font-size: 1.1rem;
 	font-weight: bold;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -716,7 +732,7 @@ pre.console {
 
 .member-list dt .simplified-prototype {
 	font-family: monospace;
-	font-size: 80%;
+	font-size: 0.9rem;
 	color: #333;
 	white-space: nowrap;
 	text-overflow: ellipsis;
@@ -822,7 +838,7 @@ a.xref:link span[data-ident].active {
 }
 
 .parent-prototype {
-	font-size: 90%;
+	font-size: 0.9rem;
 	padding-bottom: 1em;
 }
 
@@ -837,14 +853,14 @@ a.xref:link span[data-ident].active {
 .parent-prototype + div::after {
 	content: "}";
 	display: block;
-	font-size: 90%;
+	font-size: 0.9rem;
 	padding-top: 1em;
 	margin-left: -1.33em; /* 1/(3/4) */
 }
 
 .search-result::after {
 	content: '(Search Score: ' attr(data-score) ')';
-	font-size: 80%;
+	font-size: 0.9rem;
 }
 
 table.std_math {
@@ -882,7 +898,7 @@ table.std_math.special-values caption {
 .block-code,
 .d_code,
 .annotated-prototype {
-	font-size: 14px;
+	font-size: 1rem;
 }
 
 .annotated-prototype .overloads {
@@ -923,7 +939,7 @@ table.std_math.special-values caption {
 	display: inline-block;
 	width: 6em;
 	width: 9ch;
-	font-size: 12px;
+	font-size: 0.9rem;
 	vertical-align: baseline;
 }
 
@@ -1049,7 +1065,7 @@ pre.d_code,
 	content: attr(data-language);
 	display: block;
 	text-transform: capitalize;
-	font-size: 80%;
+	font-size: 0.9rem;
 	padding: 0px 2px;
 	border: solid 1px #999;
 	border-top: none;
@@ -1198,7 +1214,7 @@ pre.d_code,
 .postcondition {
 	color: blue;
 	font-family: monospace;
-	font-size: small;
+	font-size: 0.9rem;
 }
 .postcondition::before {
 	content: "Post: ";
@@ -1304,7 +1320,7 @@ tt.D.highlighted a {
 }
 
 .date-posted {
-	font-size: 90%;
+	font-size: 0.9rem;
 	font-style: italic;
 }
 
