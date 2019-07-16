@@ -2430,6 +2430,19 @@ class MyFormatter(Sink) : Formatter!Sink {
 			sink.put(s);
 	}
 
+	override void format(const AtAttribute atAttribute) {
+		if(atAttribute is null || atAttribute.argumentList is null)
+			super.format(atAttribute);
+		else {
+			sink.put("@");
+			if(atAttribute.argumentList.items.length == 1) {
+				format(atAttribute.argumentList.items[0]);
+			} else {
+				format(atAttribute.argumentList);
+			}
+		}
+	}
+
 	override void format(const TemplateParameterList templateParameterList)
 	{
 		putTag("<div class=\"parameters-list\">");

@@ -2403,7 +2403,9 @@ class VariableDecl : Decl {
 	}
 
 	override void getAggregatePrototype(MyOutputRange output) {
-		getSimplifiedPrototype(output);
+		auto f = new MyFormatter!(typeof(output))(output);
+		writeAttributes(f, output, attributes);
+		getSimplifiedPrototypeInternal(output, false);
 	}
 
 	override string declarationType() {
