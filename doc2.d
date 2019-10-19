@@ -2349,9 +2349,13 @@ class VariableDecl : Decl {
 			output.putTag("<div class=\"parent-prototype\"");
 			parent.getSimplifiedPrototype(output);
 			output.putTag("</div><div>");
+			auto f = new MyFormatter!(typeof(output))(output);
+			writeAttributes(f, output, attributes);
 			getSimplifiedPrototypeInternal(output, true);
 			output.putTag("</div>");
 		} else {
+			auto f = new MyFormatter!(typeof(output))(output);
+			writeAttributes(f, output, attributes);
 			getSimplifiedPrototypeInternal(output, true);
 		}
 		output.putTag("</div>");

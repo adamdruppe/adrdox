@@ -3933,9 +3933,36 @@ class Parser
         auto node = allocate!MixinDeclaration;
         if (peekIsOneOf(tok!"identifier", tok!"typeof", tok!"."))
             mixin(nullCheck!`node.templateMixinExpression = parseTemplateMixinExpression()`);
-        else if (peekIs(tok!"("))
+        else if (peekIs(tok!"(")) {
             mixin(nullCheck!`node.mixinExpression = parseMixinExpression()`);
-        else
+
+	    if(auto ae = cast(UnaryExpression) node.mixinExpression.assignExpression) {
+	    	auto pe = ae.primaryExpression;
+		if(pe) {
+			auto txt = pe.primary.text;
+			if(txt.length > 5 && txt[0 .. 2] == "q{") {
+				txt = txt[2 .. $-1];
+
+				LexerConfig config;
+				StringCache* stringCache = new StringCache(128);
+
+				config.stringBehavior = StringBehavior.source;
+				config.whitespaceBehavior = WhitespaceBehavior.include;
+				config.fileName = "mixin";
+
+				auto tokens = getTokensForParser(cast(ubyte[]) txt, config, stringCache);
+
+				foreach(ref token; tokens) {
+					cast() token.line += pe.primary.line - 1;
+				}
+				auto m = .parseModule(tokens, "mixin");
+				node.trivialDeclarations = m.declarations.dup;
+			}
+		}
+	    }
+
+	    //node.trivialDeclarations = parseDeclaration
+        } else
         {
             error(`"(" or identifier expected`);
             return null;
@@ -3957,7 +3984,13 @@ class Parser
         auto node = allocate!MixinExpression;
         expect(tok!"mixin");
         expect(tok!"(");
-        mixin(nullCheck!`node.assignExpression = parseAssignExpression()`);
+	moar:
+	    // FIXME: it discards the others...
+            mixin(nullCheck!`node.assignExpression = parseAssignExpression()`);
+        if (currentIs(tok!",")) {
+		advance();
+		goto moar;
+	}
         expect(tok!")");
         return node;
     }

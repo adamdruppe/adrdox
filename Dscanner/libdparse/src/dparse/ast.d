@@ -2144,9 +2144,15 @@ public:
     override void accept(ASTVisitor visitor) const
     {
         mixin(visitIfNotNull!(mixinExpression, templateMixinExpression));
+	foreach(decl; trivialDeclarations) {
+		decl.accept(visitor);
+	}
     }
     /** */ MixinExpression mixinExpression;
     /** */ TemplateMixinExpression templateMixinExpression;
+
+    Declaration[] trivialDeclarations;
+
     mixin OpEquals;
 }
 

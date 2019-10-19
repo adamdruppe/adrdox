@@ -1,5 +1,7 @@
 // FIXME: add +proj and -proj to adjust project results
 
+// my local config assumes this will be on port 9653
+
 module adrdox.locate;
 
 import arsd.postgres;
@@ -15,11 +17,17 @@ import std.conv : to;
 import std.algorithm : sort;
 import std.string : toLower, replace, split;
 
+PostgreSql db_;
+
+PostgreSql db() {
+	if(db_ is null)
+		db_ = new PostgreSql("dbname=dpldocs user=me");
+	return db_;
+}
+
 class ProjectSearcher {
 	int projectId;
-	PostgreSql db;
 	this(string path, string name, int projectAdjustment) {
-		db = new PostgreSql("dbname=dpldocs user=me");
 
 		//foreach(row; db.query("SELECT id FROM projects WHERE name = ?", name))
 			//projectId = to!int(row[0]);
@@ -210,6 +218,8 @@ shared static this() {
 	}
 }
 
+import std.uri;
+
 void searcher(Cgi cgi) {
 
 	version(vps) {
@@ -242,6 +252,65 @@ void searcher(Cgi cgi) {
 	}
 
 	auto search = cgi.request("q", cgi.request("searchTerm", cgi.queryString));
+	alias searchTerm = search;
+
+	if(search.length == 0) {
+		cgi.setResponseLocation("/");
+		return;
+	}
+	auto parts = search.split(" ");
+	switch(parts[0].toLower()) {
+		case "auto-ref-return-function-prototype":
+			cgi.setResponseLocation("http://dlang.org/spec/function.html#auto-ref-functions");
+			return;
+		case "auto-function-return-prototype":
+			cgi.setResponseLocation("http://dlang.org/spec/function.html#auto-functions");
+			return;
+		case "ref-function-return-prototype":
+			cgi.setResponseLocation("http://dlang.org/spec/function.html#ref-functions");
+			return;
+		case "bugzilla":
+			auto url = "http://d.puremagic.com/issues/";
+			if(parts.length > 1)
+				url ~= "show_bug.cgi?id=" ~ parts[1];
+			cgi.setResponseLocation(url);
+			return;
+		case "dip":
+			auto url = "http://wiki.dlang.org/DIPs";
+			if(parts.length > 1)
+				url = "http://wiki.dlang.org/DIP" ~ parts[1];
+			cgi.setResponseLocation(url);
+			return;
+		case "wiki":
+			auto url = "http://wiki.dlang.org/";
+			if(parts.length > 1)
+				url ~= "search="~std.uri.encodeComponent(join(parts[1..$], "
+							"))~"&go=Go&title=Special%3ASearch";
+			cgi.setResponseLocation(url);
+			return;
+		case "faqs":
+		case "faq":
+			cgi.setResponseLocation("http://wiki.dlang.org/FAQs");
+			return;
+		case "oldwiki":
+			auto url = "http://prowiki.org/wiki4d/wiki.cgi";
+			if(parts.length > 1)
+				url ~= "?formpage=Search&id=Search&search=" ~ std.uri.
+					encodeComponent(join(parts[1..$], " "));
+			cgi.setResponseLocation(url);
+			return;
+		default:
+			// just continue
+			if(std.file.exists("experimental-docs/" ~ searchTerm ~ ".1.html")) {
+				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".1.html");
+				return;
+			}
+			if(std.file.exists("experimental-docs/" ~ searchTerm ~ ".html")) {
+				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".html");
+				return;
+			}
+	}
+
 
 	ProjectSearcher.Magic[] magic;
 	foreach(searcher; projectSearchers)

@@ -125,6 +125,21 @@ enum scriptable = "arsd_jsvar_compatible";
 	it would be nice if delegates on native types could work
 */
 
+static if(__VERSION__ <= 2076) {
+	// compatibility shims with gdc
+	enum JSONType {
+		object = JSON_TYPE.OBJECT,
+		null_ = JSON_TYPE.NULL,
+		false_ = JSON_TYPE.FALSE,
+		true_ = JSON_TYPE.TRUE,
+		integer = JSON_TYPE.INTEGER,
+		float_ = JSON_TYPE.FLOAT,
+		array = JSON_TYPE.ARRAY,
+		string = JSON_TYPE.STRING,
+		uinteger = JSON_TYPE.UINTEGER
+	}
+}
+
 
 /*
 	Script notes:
@@ -391,7 +406,7 @@ private var _op(alias _this, alias this2, string op, T)(T t) if(op != "~") {
 			return _op!(_this, this2, op)(t._payload._floating);
 		if(t.payloadType() == var.Type.String)
 			return _op!(_this, this2, op)(t._payload._string);
-		assert(0, to!string(t.payloadType()));
+		throw new Exception("Attempted invalid operator `" ~ op ~ "` on variable of type " ~ to!string(t.payloadType()));
 	} else {
 		if(this2.payloadType() == var.Type.Integral) {
 			auto l = this2._payload._integral;
@@ -1819,9 +1834,11 @@ WrappedNativeObject wrapUfcs(alias Module, Type)(Type obj) {
 }
 
 bool isScriptable(attributes...)() {
+	bool nonConstConditionForWorkingAroundASpuriousDmdWarning = true;
 	foreach(attribute; attributes) {
 		static if(is(typeof(attribute) == string)) {
 			static if(attribute == scriptable) {
+				if(nonConstConditionForWorkingAroundASpuriousDmdWarning)
 				return true;
 			}
 		}
