@@ -2016,6 +2016,7 @@ public pure nothrow @nogc:
         buckets = (cast(Node**) calloc((Node*).sizeof, bucketCount))[0 .. bucketCount];
     }
 
+    version(none)
     ~this()
     {
         Block* current = rootBlock;
