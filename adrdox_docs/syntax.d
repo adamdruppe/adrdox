@@ -214,6 +214,33 @@ $(ADRDOX_SAMPLE
 		color: red;
 	}
 	```
+
+	```sdlang
+	// dub.sdl can contain comments!
+	name "somepackage"
+	description "A little web service of mine."
+	authors "Peter Parker"
+	homepage "http://myproject.example.com"
+	license "GPL-2.0"
+	dependency "vibe-d" version="~>0.7.23"
+	configuration "metro-app" {
+		platforms "windows"
+		targetType "executable"
+		versions "MetroApp"
+		libs "d3d11"
+	}
+	configuration "desktop-app" {
+		platforms "windows"
+		targetType "executable"
+		versions "DesktopApp"
+		libs "d3d9"
+	}
+	configuration "glut-app" {
+		// works on any platform
+		targetType "executable"
+		versions "GlutApp"
+	}
+	```
 )
 
 Currently supported languages for highlighting include: C, C++, Javascript, PHP, Java, C#, CSS, HTML, XML, Python, Ruby, [arsd.script|adrscript] and D. Though, for D, you should use ddoc style `---` delimiters to get the full-featured D highlighter instead of using the simpler one here. This simple highlighter aims for good enough to help visually on simple examples rather than being perfect on each target language.

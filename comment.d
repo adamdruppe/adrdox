@@ -1273,7 +1273,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					string code = outdent(stripRight(remaining[0 .. sliceEnding]));
 					Element ele;
 					// all these languages are close enough for hack good enough.
-					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php" || language == "c#" || language == "d" || language == "adrscript")
+					if(language == "javascript" || language == "c" || language == "c++" || language == "java" || language == "php" || language == "c#" || language == "d" || language == "adrscript" || language == "json")
 						ele = div.addChild("pre", syntaxHighlightCFamily(code, language));
 					else if(language == "css")
 						ele = div.addChild("pre", syntaxHighlightCss(code));
@@ -1283,6 +1283,8 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 						ele = div.addChild("pre", syntaxHighlightPython(code));
 					else if(language == "ruby")
 						ele = div.addChild("pre", syntaxHighlightRuby(code));
+					else if(language == "sdlang")
+						ele = div.addChild("pre", syntaxHighlightSdlang(code));
 					else
 						ele = div.addChild("pre", code);
 					ele.addClass("block-code");
@@ -1942,14 +1944,26 @@ string formatDocumentationComment(string comment, Decl decl) {
 Element expandDdocMacros(string txt, Decl decl) {
 	auto e = expandDdocMacros2(txt, decl);
 
-	foreach(cmd; e.querySelectorAll("magic-command")) {
-		auto subject = cmd.parentNode;
-		if(subject is null)
-			continue;
-		if(subject.tagName == "caption")
-			subject = subject.parentNode;
-		if(subject is null)
-			continue;
+	translateMagicCommands(e);
+
+	return e;
+}
+
+void translateMagicCommands(Element container, Element applyTo = null) {
+	foreach(cmd; container.querySelectorAll("magic-command")) {
+		Element subject;
+		if(applyTo is null) {
+			subject = cmd.parentNode;
+			if(subject is null)
+				continue;
+			if(subject.tagName == "caption")
+				subject = subject.parentNode;
+			if(subject is null)
+				continue;
+		} else {
+			subject = applyTo;
+		}
+
 		if(cmd.className.length) {
 			subject.addClass(cmd.className);
 		}
@@ -1957,8 +1971,6 @@ Element expandDdocMacros(string txt, Decl decl) {
 			subject.id = cmd.id;
 		cmd.removeFromTree();
 	}
-
-	return e;
 }
 
 Element expandDdocMacros2(string txt, Decl decl) {
@@ -3166,6 +3178,8 @@ Element translateList(string text, Decl decl, string tagName) {
 	auto opening = formatDocumentationComment2(text, decl, null, &termination);
 	text = termination.remaining;
 
+	translateMagicCommands(opening, holder);
+
 	while(text.length) {
 		auto fmt = formatDocumentationComment2(text, decl, null, &termination);
 		holder.addChild("li", fmt);
@@ -4065,6 +4079,162 @@ Html syntaxHighlightHtml(string code, string language) {
 	return Html(highlighted);
 }
 
+Html syntaxHighlightSdlang(string jsCode) {
+	string highlighted;
+
+	bool isIdentifierChar(char c) {
+		return
+			(c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			(c == '$' || c == '_');
+	}
+
+	bool startOfLine = true;
+
+	while(jsCode.length) {
+		switch(jsCode[0]) {
+			case '\'':
+			case '\"':
+				// string literal
+				char start = jsCode[0];
+				size_t i = 1;
+				while(i < jsCode.length && jsCode[i] != start && jsCode[i] != '\n') {
+					if(jsCode[i] == '\\')
+						i++; // skip escaped char too
+					i++;
+				}
+
+				i++; // skip closer
+				highlighted ~= "<span class=\"highlighted-string\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+				jsCode = jsCode[i .. $];
+				startOfLine = false;
+			break;
+			case '-':
+				if(jsCode.length > 1 && jsCode[1] == '-') {
+					int i = 0;
+					while(i < jsCode.length && jsCode[i] != '\n')
+						i++;
+					highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+					jsCode = jsCode[i .. $];
+				} else {
+					highlighted ~= '-';
+					jsCode = jsCode[1 .. $];
+				}
+			break;
+			case '#':
+				int i = 0;
+				while(i < jsCode.length && jsCode[i] != '\n')
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+				jsCode = jsCode[i .. $];
+			break;
+			case '/':
+				if(jsCode.length > 1 && (jsCode[1] == '*' || jsCode[1] == '/')) {
+					// it is a comment
+					if(jsCode[1] == '/') {
+						size_t i;
+						while(i < jsCode.length && jsCode[i] != '\n')
+							i++;
+
+						highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+						jsCode = jsCode[i .. $];
+					} else {
+						// a star comment
+						size_t i;
+						while((i+1) < jsCode.length && !(jsCode[i] == '*' && jsCode[i+1] == '/'))
+							i++;
+
+						if(i < jsCode.length)
+							i+=2; // skip the */
+
+						highlighted ~= "<span class=\"highlighted-comment\">" ~ htmlEntitiesEncode(jsCode[0 .. i]) ~ "</span>";
+						jsCode = jsCode[i .. $];
+					}
+				} else {
+					highlighted ~= '/';
+					jsCode = jsCode[1 .. $];
+				}
+			break;
+			case '0': .. case '9':
+				// number literal
+				size_t i;
+				while(i < jsCode.length && (
+					(jsCode[i] >= '0' && jsCode[i] <= '9')
+					||
+					// really fuzzy but this is meant to highlight hex and exponents too
+					jsCode[i] == '.' || jsCode[i] == 'e' || jsCode[i] == 'x' ||
+					(jsCode[i] >= 'a' && jsCode[i] <= 'f') ||
+					(jsCode[i] >= 'A' && jsCode[i] <= 'F')
+				))
+					i++;
+
+				highlighted ~= "<span class=\"highlighted-number\">" ~ jsCode[0 .. i] ~ "</span>";
+				jsCode = jsCode[i .. $];
+				startOfLine = false;
+			break;
+			case '\t', ' ', '\r':
+				highlighted ~= jsCode[0];
+				jsCode = jsCode[1 .. $];
+			break;
+			case '\n':
+				startOfLine = true;
+				highlighted ~= jsCode[0];
+				jsCode = jsCode[1 .. $];
+			break;
+			case '\\':
+				if(jsCode.length > 1 && jsCode[1] == '\n') {
+					highlighted ~= jsCode[0 .. 1];
+					jsCode = jsCode[2 .. $];
+				}
+			break;
+			case ';':
+				startOfLine = true;
+			break;
+			// escape html chars
+			case '<':
+				highlighted ~= "&lt;";
+				jsCode = jsCode[1 .. $];
+				startOfLine = false;
+			break;
+			case '>':
+				highlighted ~= "&gt;";
+				jsCode = jsCode[1 .. $];
+				startOfLine = false;
+			break;
+			case '&':
+				highlighted ~= "&amp;";
+				jsCode = jsCode[1 .. $];
+				startOfLine = false;
+			break;
+			default:
+				if(isIdentifierChar(jsCode[0])) {
+					size_t i;
+					while(i < jsCode.length && isIdentifierChar(jsCode[i]))
+						i++;
+					auto ident = jsCode[0 .. i];
+					jsCode = jsCode[i .. $];
+
+					if(startOfLine)
+						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
+					else if(ident == "true" || ident == "false")
+						highlighted ~= "<span class=\"highlighted-number\">" ~ ident ~ "</span>";
+					else
+						highlighted ~= "<span class=\"highlighted-attribute-name\">" ~ ident ~ "</span>";
+				} else {
+					highlighted ~= jsCode[0];
+					jsCode = jsCode[1 .. $];
+				}
+
+				startOfLine = false;
+		}
+	}
+
+	return Html(highlighted);
+
+}
+
 Html syntaxHighlightCFamily(string jsCode, string language) {
 	string highlighted;
 
@@ -4191,6 +4361,10 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 				highlighted ~= "&amp;";
 				jsCode = jsCode[1 .. $];
 			break;
+			case '@':
+				// FIXME highlight UDAs
+				//goto case;
+			//break;
 			default:
 				if(isJsIdentifierChar(jsCode[0])) {
 					size_t i;
@@ -4203,6 +4377,13 @@ Html syntaxHighlightCFamily(string jsCode, string language) {
 						highlighted ~= "<span class=\"highlighted-keyword\">" ~ ident ~ "</span>";
 					else if(["enum", "final", "virtual", "explicit", "var", "void", "const", "let", "int", "short", "unsigned", "char", "class", "struct", "float", "double", "typedef", "public", "protected", "private", "static"].canFind(ident))
 						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
+					else if(language == "java" && ["extends", "implements"].canFind(ident))
+						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
+					// FIXME: do i want to give using this same color?
+					else if((language == "c#" || language == "c++") && ["using", "namespace"].canFind(ident))
+						highlighted ~= "<span class=\"highlighted-type\">" ~ ident ~ "</span>";
+					else if(language == "java" && ["native", "package", "import"].canFind(ident))
+						highlighted ~= "<span class=\"highlighted-preprocessor-directive\">" ~ ident ~ "</span>";
 					else if(ident[0] == '$')
 						highlighted ~= "<span class=\"highlighted-identifier\">" ~ ident ~ "</span>";
 					else

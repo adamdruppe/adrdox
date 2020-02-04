@@ -7,6 +7,11 @@ __gshared bool writePrivateDocs = false;
 __gshared bool documentInternal = false;
 __gshared bool documentUndocumented = false;
 
+version(linux)
+	__gshared bool caseInsensitiveFilenames = false;
+else
+	__gshared bool caseInsensitiveFilenames = true;
+
 
 /*
 
@@ -35,6 +40,18 @@ import std.algorithm :sort, canFind;
 
 import std.string;
 import std.conv : to;
+
+string handleCaseSensitivity(string s) {
+	if(!caseInsensitiveFilenames)
+		return s;
+	string ugh;
+	foreach(ch; s) {
+		if(ch >= 'A' && ch <= 'Z')
+			ugh ~= "_";
+		ugh ~= ch;
+	}
+	return ugh;
+}
 
 // returns empty string if file not found
 string findStandardFile(bool dofail=true) (string stdfname) {
@@ -395,8 +412,10 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			output.putTag("</div>");
 
 			foreach(attr; decl.astNode.memberFunctionAttributes) {
-				f.format(attr);
-				output.put(" ");
+				if(attr) {
+					f.format(attr);
+					output.put(" ");
+				}
 			}
 
 			output.putTag("<div class=\"template-parameters\">");
@@ -1802,7 +1821,7 @@ abstract class Decl {
 			}
 		}
 
-		return n;
+		return n.handleCaseSensitivity();
 	}
 
 	string[] parentNameList() {
@@ -2815,7 +2834,7 @@ mixin template CtorFrom(T) {
 		output.put(" ");
 
 		output.putTag("<span class=\"name\">");
-		output.put(name);
+		output.put(this.name);
 		output.putTag("</span>");
 
 		static if(__traits(compiles, astNode.templateParameters)) {
@@ -3365,6 +3384,7 @@ void main(string[] args) {
 		"header-title", "Title to put on the page header", &headerTitle,
 		"header-link", "Link to add to the header (text=url)", &headerLinks,
 		"document-undocumented", "Generate documentation even for undocumented symbols", &documentUndocumented,
+		"case-insensitive-filenames", "Adjust generated filenames for case-insensitive file systems", &caseInsensitiveFilenames,
 		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,

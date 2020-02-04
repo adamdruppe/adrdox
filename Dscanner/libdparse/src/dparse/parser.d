@@ -6216,6 +6216,10 @@ class Parser
         }
         switch (current.type)
         {
+	case tok!"__traits":
+		advance();
+		skipParens();
+		break;
         case tok!"const":
         case tok!"immutable":
         case tok!"inout":
