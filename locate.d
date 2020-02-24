@@ -44,7 +44,7 @@ class ProjectSearcher {
 	TermElement[] resultsByTerm(string term) {
 		TermElement[] ret;
 		// FIXME: project id?!?!?
-		foreach(row; db.query("SELECT declId, score FROM terms WHERE term = ?", term))
+		foreach(row; db.query("SELECT declId, score FROM terms WHERE term = ? ORDER BY score DESC LIMIT 15", term))
 			ret ~= TermElement(to!int(row[0]), to!int(row[1]));
 		return ret;
 	}
@@ -144,8 +144,10 @@ class ProjectSearcher {
 
 		if(magic.length == 0) {
 			foreach(term; terms) {
+				if(term.length == 0) continue;
 				term = term.toLower();
-				foreach(row; db.query("SELECT id, term FROM terms")) {
+				//foreach(row; db.query("SELECT id, term FROM terms WHERE score >= 10")) {
+				foreach(row; db.query("SELECT id, name FROM decls WHERE name LIKE ?", term[0 .. 1] ~ "%")) {
 					string name = row[1];
 					int id = row[0].to!int;
 					import std.algorithm;
@@ -291,6 +293,15 @@ void searcher(Cgi cgi) {
 		case "faqs":
 		case "faq":
 			cgi.setResponseLocation("http://wiki.dlang.org/FAQs");
+			return;
+		case "template-alias-parameter":
+			cgi.setResponseLocation("https://dlang.org/spec/template.html#aliasparameters");
+			return;
+		case "is-expression":
+			cgi.setResponseLocation("https://dlang.org/spec/expression.html#IsExpression");
+			return;
+		case "typeof-expression":
+			cgi.setResponseLocation("https://dlang.org/spec/declaration.html#Typeof");
 			return;
 		case "oldwiki":
 			auto url = "http://prowiki.org/wiki4d/wiki.cgi";

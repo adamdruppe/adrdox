@@ -6,6 +6,7 @@ __gshared string outputDirectory = "generated-docs";
 __gshared bool writePrivateDocs = false;
 __gshared bool documentInternal = false;
 __gshared bool documentUndocumented = false;
+__gshared bool minimalDescent = false;
 
 version(linux)
 	__gshared bool caseInsensitiveFilenames = false;
@@ -91,6 +92,7 @@ string getDirectoryForPackage(string packageName) {
 	int bestMatchDots = -1;
 
 	import std.path;
+	synchronized
 	foreach(pkg, dir; directoriesForPackage) {
 		if(globMatch!(CaseSensitive.yes)(packageName, pkg)) {
 			int cnt;
@@ -382,8 +384,15 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				output.putTag("</div><div>");
 			}
 
-			writeAttributes(f, output, decl.attributes);
-
+			output.putTag("<div class=\"attributes\">");
+			writeAttributes(f, output, decl.attributes, false);
+			foreach(attr; decl.astNode.memberFunctionAttributes) {
+				if(attr) {
+					f.format(attr);
+					output.put(" ");
+				}
+			}
+			output.putTag("</div>");
 
 			static if(
 				!is(typeof(functionDec) == const(Constructor)) &&
@@ -411,18 +420,11 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			output.put(decl.name);
 			output.putTag("</div>");
 
-			foreach(attr; decl.astNode.memberFunctionAttributes) {
-				if(attr) {
-					f.format(attr);
-					output.put(" ");
-				}
-			}
-
-			output.putTag("<div class=\"template-parameters\">");
+			output.putTag("<div class=\"template-parameters\" data-count=\""~to!string((functionDec.templateParameters && functionDec.templateParameters.templateParameterList) ? functionDec.templateParameters.templateParameterList.items.length : 0)~"\">");
 			if (functionDec.templateParameters !is null)
 				f.format(functionDec.templateParameters);
 			output.putTag("</div>");
-			output.putTag("<div class=\"runtime-parameters\">");
+			output.putTag("<div class=\"runtime-parameters\" data-count=\""~to!string(functionDec.parameters.parameters.length)~"\">");
 			f.format(functionDec.parameters);
 			output.putTag("</div>");
 			if(functionDec.constraint !is null) {
@@ -525,9 +527,9 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 	}
 
 
-	void writeAttributes(F, W)(F formatter, W writer, const(VersionOrAttribute)[] attrs)
+	void writeAttributes(F, W)(F formatter, W writer, const(VersionOrAttribute)[] attrs, bool bracket = true)
 	{
-		writer.putTag("<div class=\"attributes\">");
+		if(bracket) writer.putTag("<div class=\"attributes\">");
 		IdType protection;
 		foreach (a; attrs)
 		{
@@ -562,7 +564,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				writer.put(" ");
 			}
 		}
-		writer.putTag("</div>");
+		if(bracket) writer.putTag("</div>");
 	}
 
 class VersionOrAttribute {
@@ -1070,8 +1072,10 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		if(child.isDitto && child.comment == dittoedComment && lastDt !is null) {
 			// ditto'd names don't need to be written again
 			if(child.name == dittoedName) {
-				if(sp == lastDt.requireSelector(".simplified-prototype").innerHTML)
-					return; // no need to say the same thing twice
+				foreach(ldt; lastDt.parentNode.querySelectorAll("dt .simplified-prototype")) {
+					if(st.innerHTML == ldt.innerHTML)
+						return; // no need to say the same thing twice
+				}
 				// same name, but different prototype. Cut the repetition.
 				newDt.requireSelector("a").removeFromTree();
 			}
@@ -1128,7 +1132,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			if(child is decl.disabledDefaultConstructor)
 				continue;
 			handleChildDecl(dl, child);
-			writeHtml(child, forReal, gzip, headerTitle, headerLinks);
+			if(!minimalDescent)
+				writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 		}
 	}
 
@@ -1140,7 +1145,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			handleChildDecl(dl, dtor);
 		else
 			content.addChild("p", "A destructor is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
+		//if(!minimalDescent)
+			//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
 	}
 
 	if(auto postblit = decl.postblit) {
@@ -1154,7 +1160,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			handleChildDecl(dl, postblit);
 		else
 			content.addChild("p", "A postblit is present on this object, but not explicitly documented in the source.");
-		//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
+		//if(!minimalDescent)
+			//writeHtml(dtor, forReal, gzip, headerTitle, headerLinks);
 	}
 
 	if(articles.length) {
@@ -1216,7 +1223,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 
 				handleChildDecl(dl, child);
 
-				writeHtml(child, forReal, gzip, headerTitle, headerLinks);
+				if(!minimalDescent)
+					writeHtml(child, forReal, gzip, headerTitle, headerLinks);
 			}
 		}
 
@@ -1523,7 +1531,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 }
 
 string redirectToOverloadHtml(string what) {
-	return `<script>location.href = '`~what~`';</script> <a href="`~what~`">Continue to overload</a>`;
+	return `<html class="overload-redirect"><script>location.href = '`~what~`';</script> <a href="`~what~`">Continue to overload</a></html>`;
 }
 
 void addLineNumbering(Element pre, bool id = false) {
@@ -3384,6 +3392,7 @@ void main(string[] args) {
 		"header-title", "Title to put on the page header", &headerTitle,
 		"header-link", "Link to add to the header (text=url)", &headerLinks,
 		"document-undocumented", "Generate documentation even for undocumented symbols", &documentUndocumented,
+		"minimal-descent", "Performs minimal descent into generating sub-pages", &minimalDescent,
 		"case-insensitive-filenames", "Adjust generated filenames for case-insensitive file systems", &caseInsensitiveFilenames,
 		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
@@ -3401,6 +3410,7 @@ void main(string[] args) {
 			pathGlob = gpi;
 		}
 
+		synchronized
 		directoriesForPackage[pathGlob] = dir;
 	}
 
@@ -3547,6 +3557,7 @@ void main(string[] args) {
 				if(b.startsWith(cast(ubyte[])"// just docs:"))
 					sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
 
+				synchronized
 				if(sweet.root.name !in modulesByName) {
 					moduleDecls ~= mod;
 					existingDecl = mod;

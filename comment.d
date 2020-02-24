@@ -1710,13 +1710,14 @@ static this() {
 
 		// std.math
 		"TABLE_SV" : 1,
-		"TABLE_DOMRG": 1,
+		"TABLE_DOMRG": 2,
 		"DOMAIN": 1,
 		"RANGE": 1,
 		"SVH": 1,
 		"SV": 1,
 
 		"UDA_USES" : 1,
+		"C_HEADER_DESCRIPTION": 1,
 	];
 
 	ddocMacros = [
@@ -1834,6 +1835,7 @@ static this() {
 		"D_INLINECODE" : `<tt>$1</tt>`,
 		"D_STRING" : `<tt>$1</tt>`,
 		"D_CODE_STRING" : `<tt>$1</tt>`,
+		"D_CODE" : `<pre>$0</pre>`,
 		"HTTPS" : `<a href="https://$1">$2</a>`,
 
 		"RES": `<i>result</i>`,
@@ -1858,7 +1860,7 @@ static this() {
 		"TABLE_SV": `<table class="std_math special-values"><caption>Special Values</caption>$0</table>`,
 		"SVH" : `<tr><th>$1</th><th>$2</th></tr>`,
 		"SV" : `<tr><td>$1</td><td>$2</td></tr>`,
-		"TABLE_DOMRG": `<table class="std_math domain-and-range">$0</table>`,
+		"TABLE_DOMRG": `<table class="std_math domain-and-range">$1 $2</table>`,
 		"DOMAIN": `<tr><th>Domain</th><td>$0</td></tr>`,
 		"RANGE": `<tr><th>Range</th><td>$0</td></tr>`,
 
@@ -1871,7 +1873,9 @@ static this() {
 		"NAN": "<span class=\"nan\">NaN</span>",
 		"PLUSMN": "\u00b1",
 		"GLOSSARY": `<a href="http://dlang.org/glosary.html#$0">$0</a>`,
-		"PHOBOSSRC": `<a href="https://github.com/D-Programming-Language/phobos/blob/master/$0">$0</a>`,
+		"PHOBOSSRC": `<a href="https://github.com/dlang/phobos/blob/master/$0">$0</a>`,
+		"DRUNTIMESRC": `<a href="https://github.com/dlang/druntime/blob/master/src/$0">$0</a>`,
+		"C_HEADER_DESCRIPTION": `<p>This module contains bindings to selected types and functions from the standard C header <a href="http://$1">&lt;$2&gt;</a>. Note that this is not automatically generated, and may omit some types/functions from the original C header.</p>`,
 	];
 
 	ddocMacroInfo = [ // number of arguments expected, if needed
@@ -1886,6 +1890,7 @@ static this() {
 		"D_INLINECODE" : 1,
 		"D_STRING" : 1,
 		"D_CODE_STRING": 1,
+		"D_CODE": 1,
 		"HTTPS": 2,
 		"DIVC" : 1,
 		"LINK2" : 2,
@@ -1902,6 +1907,7 @@ static this() {
 		"XREF_PACK" : 3,
 		"MREF" : 1,
 		"LREF2" : 2,
+		"C_HEADER_DESCRIPTION": 2,
 
 		"REG_ROW" : 1,
 		"REG_TITLE" : 2,
@@ -2087,9 +2093,9 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			return holder;
 		}
 
-		if(name == "D" || name == "D_PARAM") {
+		if(name == "D" || name == "D_PARAM" || name == "D_CODE") {
 			// this is magic: syntax highlight it
-			auto holder = Element.make("tt");
+			auto holder = Element.make(name == "D_CODE" ? "pre" : "tt");
 			holder.className = "D highlighted";
 			try {
 				holder.innerHTML = linkUpHtml(highlight(stuff), decl);
@@ -2146,6 +2152,10 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			cool ~= "." ~ parts[1].strip;
 
 			return getReferenceLink(cool, decl, parts[0].strip);
+		}
+
+		if(name == "NBSP") {
+			return new TextNode("\&nbsp;");
 		}
 
 		if(name == "REF" || name == "MREF" || name == "LREF" || name == "MYREF") {
@@ -2926,8 +2936,8 @@ class MyFormatter(Sink) : Formatter!Sink {
 		  bool hasVarargs;
 		 **/
 
-		put("(");
 		putTag("<div class=\"parameters-list\">");
+		putTag("<span class=\"paren\">(</span>");
 		foreach (count, param; parameters.parameters)
 		{
 			if (count) putTag("<span class=\"comma\">,</span>");
@@ -2943,8 +2953,8 @@ class MyFormatter(Sink) : Formatter!Sink {
 			putTag("</a>");
 			putTag("</div>");
 		}
+		putTag("<span class=\"paren\">)</span>");
 		putTag("</div>");
-		put(")");
 	}
 
     	override void format(const IdentifierChain identifierChain)

@@ -28,25 +28,46 @@
 	border-color: rgb(41, 48, 148);
 	border-color: rgb(41, 110, 48);
 	border-color: rgb(148, 48, 41);
+	border-color: rgb(204, 204, 204);
 }
 
 #page-nav {
 	background-color: rgb(245, 245, 255);
 	background-color: rgb(245, 250, 245);
-	background-color: rgb(245, 245, 255);
+	background-color: rgb(245, 245, 245);
 
 }
 
 a:link {
 	color: #0000ff;
-	color: #880000;
+	color: #bb0000;
 }
 
 a:visited {
 	color: #004488;
-	color: #880066;
+	color: #bb0044;
 }
 
+/* for the dlang.org website font thing */
+
+@font-face {
+	font-family: "Roboto Slab";
+	font-weight: normal;
+	src: url("RobotoSlab-Regular.ttf");
+}
+@font-face {
+	font-family: "Roboto Slab";
+	font-weight: bold;
+	src: url("RobotoSlab-Bold.ttf");
+}
+
+body {
+	font-family: "Roboto Slab", sans-serif;
+}
+
+h1, #page-nav a, .quickindex a.xref, .breadcrumb, dt > a {
+	font-family: Consolas, "Bitstream Vera Sans Mono", "Andale Mono", Monaco, "DejaVu Sans Mono", "Lucida Console", monospace;
+}
 
 
 /* done with basic colors */
@@ -68,7 +89,7 @@ h3 {
 }
 
 body {
-	font-family: sans-serif;
+	/*font-family: sans-serif;*/
 	color: #111;
 	background-color: white;
 }
@@ -190,6 +211,17 @@ pre {
 		max-width: calc(100vw - 2em);
 	}
 
+	#page-header {
+		line-height: 20px;
+		height: auto;
+		min-height: 32px;
+		overflow: visible;
+	}
+	#page-header::after {
+		content: ' ';
+		display: block;
+		clear: both;
+	}
 }
 
 #page-footer {
@@ -336,6 +368,10 @@ ol.overloads + .function-prototype {
 	background-color: #ccc;
 }
 
+.function-prototype .attributes {
+	color: #666;
+}
+
 .declaration-prototype,
 .aggregate-prototype,
 .function-prototype {
@@ -379,7 +415,7 @@ ol.overloads + .function-prototype {
 .toplevel.parameters-list > .parameter-item > *:last-child::after {
 	content: ",";
 }
-.toplevel.parameters-list > .parameter-item:last-child > *:last-child::after {
+.toplevel.parameters-list > .parameter-item:last-of-type > *:last-child::after {
 	content: "";
 }
 
@@ -409,22 +445,42 @@ ol.overloads + .function-prototype {
 }
 */
 
+.function-prototype .return-type, .function-prototype .function-name {
+	display: inline;
+}
+
+.function-name::before {
+	content: ' ';
+}
+
 .function-name {
-	font-size: 1.1rem;
+	/*color: #008888;*/
+}
+
+.template-parameters[data-count="0"],
+.template-parameters[data-count="0"] ~ .runtime-parameters[data-count="0"],
+.template-parameters[data-count="0"] ~ .runtime-parameters[data-count="0"] > .parameters-list {
+	display: inline;
+}
+
+.parameters-list:empty {
+	display: inline;
 }
 
 .type-constructor,
 .builtin-type {
 	text-decoration: none;
-	color: green !important;
-	font-weight: bold;
+	color: #004400 !important;
+	/*color: green !important;
+	font-weight: bold;*/
 }
 
+.kwrd,
+.highlighted-keyword,
 .lang-feature,
 .storage-class {
 	text-decoration: none;
-	color: #888800 !important;
-	font-weight: bold;
+	color: #026 !important;
 }
 
 [data-ident].active {
@@ -506,6 +562,7 @@ table.enum-members {
 
 .phobos-booktable {
 	border-collapse: collapse;
+	margin-bottom: 1.5em;
 }
 
 .phobos-booktable tt.D {
@@ -536,10 +593,23 @@ table.enum-members {
 
 .phobos-booktable th {
 	text-align: left;
+	padding-top: 0.3em;
+	padding-bottom: 0.3em;
 }
 
 .phobos-booktable td:first-child {
+	padding-top: 0.3em;
+	padding-bottom: 0.3em;
 	padding-right: 1em;
+}
+
+.phobos-booktable td:not(:last-child),
+.phobos-booktable th:not(:last-child) {
+	padding-right: 1em;
+}
+
+.quickindex .phobos-booktable td:last-child a {
+	padding-right: 1.2em;
 }
 
 .current.breadcrumb {
@@ -686,6 +756,7 @@ tt.D,
 
 #page-nav a {
 	display: block;
+	padding-left: 0.3em;
 }
 
 #page-nav a.parent {
@@ -723,16 +794,22 @@ pre.console {
 	margin-top: 0.5em;
 }
 
+/*
+.member-list dd {
+	max-height: 4em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+*/
+
 .member-list dt a {
-	font-size: 1.1rem;
-	font-weight: bold;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
 .member-list dt .simplified-prototype {
 	font-family: monospace;
-	font-size: 0.9rem;
+	font-size: 90%;
 	color: #333;
 	white-space: nowrap;
 	text-overflow: ellipsis;
@@ -1076,16 +1153,10 @@ pre.d_code,
 	margin-top: -0.25em;
 	margin-top: calc(-0.25em - 1px);
 }
-
-.kwrd,
-.highlighted-keyword {
-	color: #859900;
-	font-weight: bold;
-}
 .type,
 .highlighted-type {
 	color: green;
-	font-weight: bold;
+	/* font-weight: bold; */
 }
 .num,
 .highlighted-number {
@@ -1104,7 +1175,7 @@ pre.d_code,
 }
 .highlighted-identifier,
 .highlighted-tag {
-	color: #008888
+	color: #008888;
 }
 .highlighted-tag-name {
 	color: #859900;
@@ -1334,4 +1405,26 @@ tt.D.highlighted a {
 .specially-highlighted {
 	background-color: yellow;
 	background-color: rgba(255, 255, 0, 0.5);
+}
+
+.quickindex {
+	background: #f5f5f5;
+	max-width: 760px;
+}
+
+.quickindex .phobos-booktable {
+	width: 100%;
+}
+
+.leading-row {
+	font-style: italic;
+	background-color: rgb(228, 233, 239);
+}
+
+.leading-row th {
+	padding-left: 1.5em;
+}
+
+.quickindex td, .quickindex th {
+	padding-left: 0.3em;
 }

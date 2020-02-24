@@ -1118,7 +1118,9 @@ class Parser
         } while (moreTokens());
         node.identifiers = ownArray(identifiers);
         node.initializers = ownArray(initializers);
-        mixin(nullCheck!`expect(tok!";")`);
+        auto semicolon = expect(tok!";");
+	if(semicolon !is null)
+	        node.comment ~= semicolon.trailingComment;
         return node;
     }
 
