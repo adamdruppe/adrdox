@@ -932,7 +932,12 @@ class Parser
         }
         node.startLocation = start.index;
 
-        mixin(nullCheck!`node.argumentList = parseArgumentList()`);
+	if(currentIs(tok!"(")) {
+		advance();
+        	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
+		expect(tok!")");
+	} else
+        	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
 
 	    // I don't think any of this following spam is necessary and I know it isn't correct, let's just use this one thing and see how it goes
 	    version(none)
