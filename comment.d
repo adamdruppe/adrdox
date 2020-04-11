@@ -2485,7 +2485,13 @@ class MyFormatter(Sink) : Formatter!Sink {
 		put("in");
 		putTag("</a>");
 		//put(" ");
-		format(inStatement.blockStatement);
+		if(inStatement.blockStatement)
+			format(inStatement.blockStatement);
+		else if(inStatement.expression) {
+			put(" (");
+			format(inStatement.expression);
+			put(")");
+		}
 	}
 
 	override void format(const OutStatement outStatement) {

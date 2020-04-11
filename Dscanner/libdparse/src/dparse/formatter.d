@@ -1812,7 +1812,13 @@ class Formatter(Sink)
     {
         debug(verbose) writeln("InStatement");
         put("in");
-        format(inStatement.blockStatement);
+	if(inStatement.blockStatement)
+	        format(inStatement.blockStatement);
+	else if(inStatement.expression) {
+		put(" (");
+		format(inStatement.expression);
+		put(")");
+	}
     }
 
     void format(const Initialize initialize)

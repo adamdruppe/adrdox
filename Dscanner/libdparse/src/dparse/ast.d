@@ -1963,6 +1963,7 @@ public:
     }
     /** */ size_t inTokenLocation;
     /** */ BlockStatement blockStatement;
+    /** */ Expression expression;
     mixin OpEquals;
 }
 

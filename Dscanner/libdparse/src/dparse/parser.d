@@ -936,8 +936,9 @@ class Parser
 		advance();
         	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
 		expect(tok!")");
-	} else
+	} else {
         	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
+	}
 
 	    // I don't think any of this following spam is necessary and I know it isn't correct, let's just use this one thing and see how it goes
 	    version(none)
@@ -3615,9 +3616,17 @@ class Parser
         const i = expect(tok!"in");
         mixin(nullCheck!`i`);
         node.inTokenLocation = i.index;
-        mixin(nullCheck!`node.blockStatement = parseBlockStatement()`);
-        if (node.blockStatement is null)
-            return null;
+	if(currentIs(tok!"(")) {
+		advance();
+		mixin(nullCheck!`node.expression = parseExpression()`);
+		if (node.expression is null)
+		    return null;
+		expect(tok!")");
+	} else {
+		mixin(nullCheck!`node.blockStatement = parseBlockStatement()`);
+		if (node.blockStatement is null)
+		    return null;
+	}
         return node;
     }
 
