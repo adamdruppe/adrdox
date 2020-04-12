@@ -2964,18 +2964,16 @@ class Parser
         }
         else
         {
-            if (currentIs(tok!"in"))
-            {
-                mixin(nullCheck!`node.inStatement = parseInStatement()`);
-                if (currentIs(tok!"out"))
-                    mixin(nullCheck!`node.outStatement = parseOutStatement()`);
-            }
-            else if (currentIs(tok!"out"))
-            {
-                mixin(nullCheck!`node.outStatement = parseOutStatement()`);
-                if (currentIs(tok!"in"))
-                    mixin(nullCheck!`node.inStatement = parseInStatement()`);
-            }
+	    while(currentIs(tok!"in") || currentIs(tok!"out")) {
+		    if (currentIs(tok!"in"))
+		    {
+			mixin(nullCheck!`node.inStatement = parseInStatement()`);
+		    }
+		    else if (currentIs(tok!"out"))
+		    {
+			mixin(nullCheck!`node.outStatement = parseOutStatement()`);
+		    }
+	    }
             // Allow function bodies without body statements because this is
             // valid inside of interfaces.
             if (currentIs(tok!"body"))
