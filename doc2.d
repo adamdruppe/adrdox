@@ -384,15 +384,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				output.putTag("</div><div>");
 			}
 
-			output.putTag("<div class=\"attributes\">");
-			writeAttributes(f, output, decl.attributes, false);
-			foreach(attr; decl.astNode.memberFunctionAttributes) {
-				if(attr) {
-					f.format(attr);
-					output.put(" ");
-				}
-			}
-			output.putTag("</div>");
+			writeAttributes(f, output, decl.attributes);
 
 			static if(
 				!is(typeof(functionDec) == const(Constructor)) &&
@@ -438,7 +430,8 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				import dparse.formatter;
 				auto f2 = new Formatter!(typeof(output))(output);
 
-				if(functionDec.functionBody.inStatement) {
+				// I'm skipping statements cuz they ugly. but the shorter expressions aren't too bad
+				if(functionDec.functionBody.inStatement && functionDec.functionBody.inStatement.expression) {
 					output.putTag("<div class=\"in-contract\">");
 					f2.format(functionDec.functionBody.inStatement);
 					output.putTag("</div>");
@@ -529,41 +522,74 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 	void writeAttributes(F, W)(F formatter, W writer, const(VersionOrAttribute)[] attrs, bool bracket = true)
 	{
+
 		if(bracket) writer.putTag("<div class=\"attributes\">");
 		IdType protection;
-		foreach (a; attrs)
-		{
-			if (a.attr && isProtection(a.attr.attribute.type))
+
+		string versions;
+
+		const(VersionOrAttribute)[] remainingBuiltIns;
+		const(VersionOrAttribute)[] remainingCustoms;
+
+		foreach(a; attrs) {
+			if (a.attr && isProtection(a.attr.attribute.type)) {
 				protection = a.attr.attribute.type;
+			} else if (auto v = cast(VersionFakeAttribute) a) {
+				if(versions.length)
+					versions ~= " && ";
+				if(v.inverted)
+					versions ~= "!";
+				versions ~= v.cond;
+			} else if(a.attr && a.attr.attribute.type == tok!"auto") {
+				// skipping auto because it is already handled as the return value
+			} else if(a.isBuiltIn) {
+				remainingBuiltIns ~= a;
+			} else {
+				remainingCustoms ~= a;
+			}
 		}
+
+		if(versions.length) {
+			writer.putTag("<div class=\"versions-container\">");
+			writer.put("version(");
+			writer.put(versions);
+			writer.put(")");
+			writer.putTag("</div>");
+		}
+
 		switch (protection)
 		{
-		case tok!"private": writer.put("private "); break;
-		case tok!"package": writer.put("package "); break;
-		case tok!"protected": writer.put("protected "); break;
-		case tok!"export": writer.put("export "); break;
-		case tok!"public": // see below
-		default:
-			// I'm not printing public so this is commented intentionally
-			// public is the default state of documents so saying it outright
-			// is kinda just a waste of time IMO.
-			//writer.put("public ");
-		break;
+			case tok!"private": writer.put("private "); break;
+			case tok!"package": writer.put("package "); break;
+			case tok!"protected": writer.put("protected "); break;
+			case tok!"export": writer.put("export "); break;
+			case tok!"public": // see below
+			default:
+				// I'm not printing public so this is commented intentionally
+				// public is the default state of documents so saying it outright
+				// is kinda just a waste of time IMO.
+				//writer.put("public ");
+			break;
 		}
-		foreach (a; attrs)
-		{
-			if(auto fakeAttr = cast(FakeAttribute) a) {
-				writer.putTag(fakeAttr.toHTML());
+
+		void innards(const VersionOrAttribute a) {
+			if(auto fakeAttr = cast(const MemberFakeAttribute) a) {
+				formatter.format(fakeAttr.attr);
 				writer.put(" ");
-				continue;
-			}
-			// skipping auto because it is already handled as the return value
-			if (!isProtection(a.attr.attribute.type) && a.attr.attribute.type != tok!"auto")
-			{
+			} else {
 				formatter.format(a.attr);
 				writer.put(" ");
 			}
 		}
+
+		foreach (a; remainingBuiltIns)
+			innards(a);
+		foreach (a; remainingCustoms) {
+			writer.putTag("<div class=\"uda\">");
+			innards(a);
+			writer.putTag("</div>");
+		}
+
 		if(bracket) writer.putTag("</div>");
 	}
 
@@ -571,6 +597,28 @@ class VersionOrAttribute {
 	const(Attribute) attr;
 	this(const(Attribute) attr) {
 		this.attr = attr;
+	}
+
+	bool isBuiltIn() const {
+		if(attr is null) return false;
+		if(attr.atAttribute is null) return true; // any keyword can be safely assumed...
+
+		return phelper(attr.atAttribute);
+	}
+
+	protected bool phelper(const AtAttribute at) const {
+		string txt = toText(at);
+
+		if(txt == "@(nogc)") return true;
+		if(txt == "@(disable)") return true;
+		if(txt == "@(live)") return true;
+		if(txt == "@(property)") return true;
+
+		if(txt == "@(safe)") return true;
+		if(txt == "@(system)") return true;
+		if(txt == "@(trusted)") return true;
+
+		return false;
 	}
 
 	const(VersionOrAttribute) invertedClone() const {
@@ -583,6 +631,23 @@ class FakeAttribute : VersionOrAttribute {
 	abstract string toHTML() const;
 }
 
+class MemberFakeAttribute : FakeAttribute {
+	const(MemberFunctionAttribute) attr;
+	this(const(MemberFunctionAttribute) attr) {
+		this.attr = attr;
+	}
+
+	override string toHTML() const {
+		return toText(attr);
+	}
+
+	override bool isBuiltIn() const {
+		if(attr is null) return false;
+		if(attr.atAttribute is null) return true;
+		return phelper(attr.atAttribute);
+	}
+}
+
 class VersionFakeAttribute : FakeAttribute {
 	string cond;
 	bool inverted;
@@ -593,6 +658,10 @@ class VersionFakeAttribute : FakeAttribute {
 
 	override const(VersionFakeAttribute) invertedClone() const {
 		return new VersionFakeAttribute(cond, !inverted);
+	}
+
+	override bool isBuiltIn() const {
+		return false;
 	}
 
 	override string toHTML() const {
@@ -2744,6 +2813,12 @@ mixin template CtorFrom(T) {
 		this.astNode = astNode;
 		this.attributes = attributes;
 
+		static if(is(typeof(astNode.memberFunctionAttributes))) {
+			foreach(a; astNode.memberFunctionAttributes)
+				if(a !is null)
+				this.attributes ~= new MemberFakeAttribute(a);
+		}
+
 		static if(is(typeof(astNode) == const(ClassDeclaration)) || is(typeof(astNode) == const(InterfaceDeclaration))) {
 			if(astNode.baseClassList)
 			foreach(idx, baseClass; astNode.baseClassList.items) {
@@ -3038,11 +3113,13 @@ class Looker : ASTVisitor {
 		bool isPublic = false;
 
 		foreach(a; attributes[$-1]) {
-			if (a.attr && isProtection(a.attr.attribute.type))
+			if (a.attr && isProtection(a.attr.attribute.type)) {
 				if(a.attr.attribute.type == tok!"public") {
 					isPublic = true;
-					break;
+				} else {
+					isPublic = false;
 				}
+			}
 		}
 
 
@@ -3092,8 +3169,19 @@ class Looker : ASTVisitor {
 		popAttributes();
 	}
 
+	override void visit(const FunctionBody bs) {
+		// just skipping it hence the commented code below. not important to docs
+		/*
+		pushAttributes();
+		bs.accept(this);
+		popAttributes();
+		*/
+	}
+
 	override void visit(const ConditionalDeclaration bs) {
 		pushAttributes();
+		if(attributes.length > 2)
+			attributes[$-1] = attributes[$-2]; // inherit from the previous scope here
 		size_t previousConditions;
 		if(bs.compileCondition) {
 			previousConditions = attributes[$-1].length;

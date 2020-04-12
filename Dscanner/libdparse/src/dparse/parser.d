@@ -2982,6 +2982,10 @@ class Parser
                 mixin(nullCheck!`node.bodyStatement = parseBodyStatement()`);
 	    else if(currentIs(tok!"do"))
                 mixin(nullCheck!`node.bodyStatement = parseBodyDoStatement()`);
+	    else if(currentIs(tok!"{")) {
+		hackFunctionBody();
+		return new FunctionBody();
+	    }
         }
 	if(minimize_memory) {
 		.destroy(node.blockStatement);
