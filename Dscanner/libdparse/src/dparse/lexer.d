@@ -503,8 +503,24 @@ const(Token)[] getTokensForParser(ubyte[] sourceCode, LexerConfig config,
             }
             else
             {
-                blockComment = cache.intern(blockComment.length == 0 ? lexer.front.text
-                    : blockComment ~ "\n" ~ lexer.front.text);
+	    	string c = lexer.front.text[3 .. $]; // just take the /// off entirely
+		if(blockComment.length == 0) {
+			blockComment = "/++" ~ c ~ "+/"; // just rewrite to this
+		} else {
+			import std.string;
+			auto l = blockComment.lastIndexOf("\n");
+			if(l != -1) {
+				blockComment = blockComment[0 .. l + 1];
+			} else {
+				blockComment = blockComment[0 .. $-2]; // just cut off the */ or +/
+			}
+			if(blockComment[0 .. 3] == "/**")
+				blockComment ~= c ~ "\n*/";
+			else if(blockComment[0 .. 3] == "/++")
+				blockComment ~= c ~ "\n+/";
+			else assert(0);
+
+		}
             }
             lexer.popFront();
             break;

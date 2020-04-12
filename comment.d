@@ -538,7 +538,6 @@ string preprocessComment(string comment, Decl decl) {
 		poop = closingSpam ~ commentType ~ " ";
 
 	string newComment;
-	// FIXME: http://dplug.dpldocs.info/v6.0.22/dplug.graphics.jpegload.html
 	foreach(line; comment.splitter("\n")) {
 		// check for "  * some text"
 		if(line.length >= poop.length && line.startsWith(poop)) {
@@ -671,6 +670,10 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				line = line[line.indexOf(":")+1 .. $];
 			} else if(maybe.startsWith("author:")) {
 				section = "authors";
+				line = line[line.indexOf(":")+1 .. $];
+				inSynopsis = false;
+			} else if(maybe.startsWith("details:")) {
+				section = "details";
 				line = line[line.indexOf(":")+1 .. $];
 				inSynopsis = false;
 			} else if(maybe.startsWith("authors:")) {
@@ -938,6 +941,9 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 				case "date":
 					c.otherSections[section] ~= line ~ "\n";
 				break;
+				case "details":
+					c.details ~= line ~ "\n";
+				break;
 				case "examples":
 					c.examples ~= line ~ "\n";
 				break;
@@ -954,7 +960,7 @@ DocComment parseDocumentationComment(string comment, Decl decl) {
 			}
 		}
 
-		c.details = remaining;
+		c.details ~= remaining;
 		c.synopsisEndedOnDoubleBlank = synopsisEndedOnDoubleBlank;
 	}
 
