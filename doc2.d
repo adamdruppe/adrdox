@@ -80,6 +80,7 @@ void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) 
 	copy(findStandardFile(stdfname), destname);
 }
 
+__gshared static Object directoriesForPackageMonitor = new Object; // intentional CTFE
 __gshared string[string] directoriesForPackage;
 string getDirectoryForPackage(string packageName) {
 
@@ -92,7 +93,7 @@ string getDirectoryForPackage(string packageName) {
 	int bestMatchDots = -1;
 
 	import std.path;
-	synchronized
+	synchronized(directoriesForPackageMonitor)
 	foreach(pkg, dir; directoriesForPackage) {
 		if(globMatch!(CaseSensitive.yes)(packageName, pkg)) {
 			int cnt;
@@ -3240,6 +3241,7 @@ import std.algorithm : startsWith, findSplitBefore;
 import std.string : strip;
 
 //Decl[][string] packages;
+__gshared static Object modulesByNameMonitor = new Object; // intentional CTF
 __gshared ModuleDecl[string] modulesByName;
 
 __gshared string specialPreprocessor;
@@ -3498,7 +3500,7 @@ void main(string[] args) {
 			pathGlob = gpi;
 		}
 
-		synchronized
+		synchronized(directoriesForPackageMonitor)
 		directoriesForPackage[pathGlob] = dir;
 	}
 
@@ -3645,15 +3647,16 @@ void main(string[] args) {
 				if(b.startsWith(cast(ubyte[])"// just docs:"))
 					sweet.root.justDocsTitle = (cast(string) b["// just docs:".length .. $].findSplitBefore(['\n'])[0].idup).strip;
 
-				synchronized
-				if(sweet.root.name !in modulesByName) {
-					moduleDecls ~= mod;
-					existingDecl = mod;
+				synchronized(modulesByNameMonitor) {
+					if(sweet.root.name !in modulesByName) {
+						moduleDecls ~= mod;
+						existingDecl = mod;
 
-					assert(mod !is null);
-					modulesByName[sweet.root.name] = mod;
-				} else {
-					existingDecl = modulesByName[sweet.root.name];
+						assert(mod !is null);
+						modulesByName[sweet.root.name] = mod;
+					} else {
+						existingDecl = modulesByName[sweet.root.name];
+					}
 				}
 			}
 
@@ -3758,6 +3761,7 @@ void main(string[] args) {
 			continue; // avoid infinite recursion
 		if(pkg is null)
 			pkg = "index";//continue; // to create an index.html listing all top level things
+		synchronized(modulesByNameMonitor)
 		if(pkg !in modulesByName) {
 			writeln("Making FAKE package for ", pkg);
 			config.fileName = "dummy";
@@ -3791,6 +3795,7 @@ void main(string[] args) {
 			//continue;
 			pkg = "index";
 		}
+		synchronized(modulesByNameMonitor)
 		if(auto a = pkg in modulesByName) {
 			(*a).addChild(decl);
 		} else assert(0, pkg ~ " " ~ decl.toString); // it should have make a fake package above
