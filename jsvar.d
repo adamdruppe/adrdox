@@ -1,5 +1,15 @@
 /*
 	FIXME:
+		overloads can be done as an object representing the overload set
+		tat opCall does the dispatch. Then other overloads can actually
+		be added more sanely.
+	
+	FIXME:
+		instantiate template members when reflection with certain
+		arguments if marked right...
+
+
+	FIXME:
 		pointer to member functions can give a way to wrap things
 
 		we'll pass it an opaque object as this and it will unpack and call the method
@@ -45,6 +55,11 @@
 	easy interop with a little scripting language that resembles a cross between
 	D and Javascript - just like you can write in D itself using this type.
 
+	Please note that function default arguments are NOT likely to work in the script.
+	You'd have to use a helper thing that I haven't written yet. opAssign can never
+	do it because that information is lost when it becomes a pointer. ParamDefault
+	is thus commented out for now.
+
 
 	Properties:
 	$(LIST
@@ -70,6 +85,16 @@ static import std.array;
 import std.traits;
 import std.conv;
 import std.json;
+
+version(jsvar_throw)
+	/++
+		Variable to decide if jsvar throws on certain invalid
+		operations or continues on propagating null vars.
+	+/
+	bool jsvar_throw = true;
+else
+	/// ditto
+	bool jsvar_throw = false;
 
 // uda for wrapping classes
 enum scriptable = "arsd_jsvar_compatible";
@@ -527,6 +552,24 @@ struct var {
 			this.opAssign(t);
 	}
 
+	// used by the script interpreter... does a .dup on array, new on class if possible, otherwise copies members.
+	public var _copy_new() {
+		if(payloadType() == Type.Object) {
+			var cp;
+			if(this._payload._object !is null) {
+				auto po = this._payload._object.new_(null);
+				cp._object = po;
+			}
+			return cp;
+		} else if(payloadType() == Type.Array) {
+			var cp;
+			cp = this._payload._array.dup;
+			return cp;
+		} else {
+			return this._copy();
+		}
+	}
+
 	public var _copy() {
 		final switch(payloadType()) {
 			case Type.Integral:
@@ -549,6 +592,7 @@ struct var {
 		}
 	}
 
+	/// `if(some_var)` will call this and give behavior based on the dynamic type. Shouldn't be too surprising.
 	public bool opCast(T:bool)() {
 		final switch(this._type) {
 			case Type.Object:
@@ -568,6 +612,7 @@ struct var {
 		}
 	}
 
+	/// You can foreach over a var.
 	public int opApply(scope int delegate(ref var) dg) {
 		foreach(i, item; this)
 			if(auto result = dg(item))
@@ -575,6 +620,7 @@ struct var {
 		return 0;
 	}
 
+	/// ditto
 	public int opApply(scope int delegate(var, ref var) dg) {
 		if(this.payloadType() == Type.Array) {
 			foreach(i, ref v; this._payload._array)
@@ -606,18 +652,39 @@ struct var {
 	}
 
 
+	/// Alias for [get]. e.g. `string s = cast(string) v;`
 	public T opCast(T)() {
 		return this.get!T;
 	}
 
+	/// Calls [get] for a type automatically. `int a; var b; b.putInto(a);` will auto-convert to `int`.
 	public auto ref putInto(T)(ref T t) {
 		return t = this.get!T;
 	}
 
-	// if it is var, we'll just blit it over
+	/++
+		Assigns a value to the var. It will do necessary implicit conversions
+		and wrapping.
+
+		You can make a method `toArsdJsvar` on your own objects to override this
+		default. It should return a [var].
+
+		History:
+			On April 20, 2020, I changed the default mode for class assignment
+			to [wrapNativeObject]. Previously it was [wrapOpaquely].
+
+			With the new [wrapNativeObject] behavior, you can mark methods
+			@[scriptable] to expose them to the script.
+	+/
 	public var opAssign(T)(T t) if(!is(T == var)) {
 		static if(__traits(compiles, this = t.toArsdJsvar())) {
-			this = t.toArsdJsvar();
+			static if(__traits(compiles, t is null)) {
+				if(t is null)
+					this = null;
+				else
+					this = t.toArsdJsvar();
+			} else
+				this = t.toArsdJsvar();
 		} else static if(isFloatingPoint!T) {
 			this._type = Type.Floating;
 			this._payload._floating = t;
@@ -633,16 +700,25 @@ struct var {
 				var ret;
 
 				ParameterTypeTuple!T fargs;
+
+				// default args? nope they can't work cuz it is assigning a function pointer by here. alas.
+				enum lol = static_foreach(fargs.length, 1, -1,
+					`t(`,``,` < args.length ? args[`,`].get!(typeof(fargs[`,`])) : typeof(fargs[`,`]).init,`,`)`);
+					//`t(`,``,` < args.length ? args[`,`].get!(typeof(fargs[`,`])) : ParamDefault!(T, `,`)(),`,`)`);
+				/+
 				foreach(idx, a; fargs) {
 					if(idx == args.length)
 						break;
 					cast(Unqual!(typeof(a))) fargs[idx] = args[idx].get!(typeof(a));
 				}
+				+/
 
 				static if(is(ReturnType!t == void)) {
-					t(fargs);
+					//t(fargs);
+					mixin(lol ~ ";");
 				} else {
-					ret = t(fargs);
+					//ret = t(fargs);
+					ret = mixin(lol);
 				}
 
 				return ret;
@@ -655,7 +731,10 @@ struct var {
 			// so prewrapped stuff can be easily passed.
 			this._type = Type.Object;
 			this._payload._object = t;
-		} else static if(is(T == class) || .isScriptableOpaque!T) {
+		} else static if(is(T == class)) {
+			this._type = Type.Object;
+			this._payload._object = wrapNativeObject(t);
+		} else static if(.isScriptableOpaque!T) {
 			// auto-wrap other classes with reference semantics
 			this._type = Type.Object;
 			this._payload._object = wrapOpaquely(t);
@@ -750,6 +829,8 @@ struct var {
 	public var opBinary(string op, T)(T t) {
 		var n;
 		if(payloadType() == Type.Object) {
+			if(this._payload._object is null)
+				return var(null);
 			var* operator = this._payload._object._peekMember("opBinary", true);
 			if(operator !is null && operator._type == Type.Function) {
 				return operator.call(this, op, t);
@@ -777,7 +858,7 @@ struct var {
 	public var apply(var _this, var[] args) {
 		if(this.payloadType() == Type.Function) {
 			if(this._payload._function is null) {
-				version(jsvar_throw)
+				if(jsvar_throw)
 					throw new DynamicTypeException(this, Type.Function);
 				else
 					return var(null);
@@ -785,7 +866,7 @@ struct var {
 			return this._payload._function(_this, args);
 		} else if(this.payloadType() == Type.Object) {
 			if(this._payload._object is null) {
-				version(jsvar_throw)
+				if(jsvar_throw)
 					throw new DynamicTypeException(this, Type.Function);
 				else
 					return var(null);
@@ -795,12 +876,13 @@ struct var {
 				return operator.apply(_this, args);
 		}
 
-		version(jsvar_throw)
-			throw new DynamicTypeException(this, Type.Function);
-
 		if(this.payloadType() == Type.Integral || this.payloadType() == Type.Floating) {
 			if(args.length)
 				return var(this.get!double * args[0].get!double);
+			else
+				return this;
+		} else if(jsvar_throw) {
+			throw new DynamicTypeException(this, Type.Function);
 		}
 
 		//return this;
@@ -833,13 +915,38 @@ struct var {
 		if(payloadType == Type.Object) {
 			if(auto wno = cast(WrappedNativeObject) this._payload._object) {
 				auto no = cast(T) wno.getObject();
-					if(no !is null)
-						return no;
+				if(no !is null)
+					return no;
 			}
 		}
 		return null;
 	}
 
+	/++
+		Gets the var converted to type `T` as best it can. `T` may be constructed
+		from `T.fromJsVar`, or through type conversions (coercing as needed). If
+		`T` happens to be a struct, it will automatically introspect to convert
+		the var object member-by-member.
+
+		History:
+			On April 21, 2020, I changed the behavior of
+
+			---
+			var a = null;
+			string b = a.get!string;
+			---
+
+			Previously, `b == "null"`, which would print the word
+			when writeln'd. Now, `b is null`, which prints the empty string,
+			which is a bit less user-friendly, but more consistent with
+			converting to/from D strings in general.
+
+			If you are printing, you can check `a.get!string is null` and print
+			null at that point if you like.
+
+			I also wrote the first draft of this documentation at that time,
+			even though the function has been public since the beginning.
+	+/
 	public T get(T)() if(!is(T == void)) {
 		static if(is(T == var)) {
 			return this;
@@ -880,13 +987,24 @@ struct var {
 						return wno.wrapping();
 					}
 					throw new DynamicTypeException(this, Type.Object); // FIXME: could be better
-				} else static if(is(T == struct) || is(T == class)) {
+				} else static if(is(T == struct) || is(T == class) || is(T == interface)) {
 					// first, we'll try to give them back the native object we have, if we have one
-					static if(is(T : Object)) {
-						if(auto wno = cast(WrappedNativeObject) this._payload._object) {
-							auto no = cast(T) wno.getObject();
-							if(no !is null)
-								return no;
+					static if(is(T : Object) || is(T == interface)) {
+						auto t = this;
+						// need to walk up the prototype chain to 
+						while(t != null) {
+							if(auto wno = cast(WrappedNativeObject) t._payload._object) {
+								auto no = cast(T) wno.getObject();
+
+								if(no !is null) {
+									auto sc = cast(ScriptableSubclass) no;
+									if(sc !is null)
+										sc.setScriptVar(this);
+
+									return no;
+								}
+							}
+							t = t.prototype;
 						}
 
 						// FIXME: this is kinda weird.
@@ -897,10 +1015,11 @@ struct var {
 						T t;
 						bool initialized = true;
 						static if(is(T == class)) {
-							static if(__traits(compiles, new T()))
+							static if(__traits(compiles, new T())) {
 								t = new T();
-							else
+							} else {
 								initialized = false;
+							}
 						}
 
 
@@ -914,7 +1033,7 @@ struct var {
 				} else static if(isSomeString!T) {
 					if(this._object !is null)
 						return this._object.toString();
-					return "null";
+					return null;// "null";
 				} else
 					return T.init;
 			case Type.Integral:
@@ -943,7 +1062,15 @@ struct var {
 				auto pl = this._payload._array;
 				static if(isSomeString!T) {
 					return to!string(pl);
-				} else static if(isArray!T) {
+				} else static if(is(T == E[N], E, size_t N)) {
+					T ret;
+					foreach(i; 0 .. N) {
+						if(i >= pl.length)
+							break;
+						ret[i] = pl[i].get!E;
+					}
+					return ret;
+				} else static if(is(T == E[], E)) {
 					T ret;
 					static if(is(ElementType!T == void)) {
 						static assert(0, "try wrapping the function to get rid of void[] args");
@@ -985,6 +1112,8 @@ struct var {
 			//break;
 		}
 	}
+
+	public T get(T)() if(is(T == void)) {}
 
 	public T nullCoalesce(T)(T t) {
 		if(_type == Type.Object && _payload._object is null)
@@ -1112,18 +1241,22 @@ struct var {
 		return var(null);
 	}
 
+	/// Forwards to [opIndex]
 	public @property ref var opDispatch(string name, string file = __FILE__, size_t line = __LINE__)() {
 		return this[name];
 	}
 
+	/// Forwards to [opIndexAssign]
 	public @property ref var opDispatch(string name, string file = __FILE__, size_t line = __LINE__, T)(T r) {
 		return this.opIndexAssign!T(r, name);
 	}
 
+	/// Looks up a sub-property of the object
 	public ref var opIndex(var name, string file = __FILE__, size_t line = __LINE__) {
 		return opIndex(name.get!string, file, line);
 	}
 
+	/// Sets a sub-property of the object
 	public ref var opIndexAssign(T)(T t, var name, string file = __FILE__, size_t line = __LINE__) {
 		return opIndexAssign(t, name.get!string, file, line);
 	}
@@ -1196,7 +1329,7 @@ struct var {
 		}
 
 		if(from is null) {
-			version(jsvar_throw)
+			if(jsvar_throw)
 				throw new DynamicTypeException(var(null), Type.Object, file, line);
 			else
 				return *(new var);
@@ -1242,10 +1375,12 @@ struct var {
 				*n = this["opIndex"](idx);
 			return *n;
 		}
-		version(jsvar_throw)
+		if(jsvar_throw) {
 			throw new DynamicTypeException(this, Type.Array, file, line);
-		var* n = new var();
-		return *n;
+		} else {
+			var* n = new var();
+			return *n;
+		}
 	}
 
 	public ref var opIndexAssign(T)(T t, size_t idx, string file = __FILE__, size_t line = __LINE__) {
@@ -1257,10 +1392,12 @@ struct var {
 		} else if(_type == Type.Object) {
 			return opIndexAssign(t, to!string(idx), file, line);
 		}
-		version(jsvar_throw)
+		if(jsvar_throw) {
 			throw new DynamicTypeException(this, Type.Array, file, line);
-		var* n = new var();
-		return *n;
+		} else {
+			var* n = new var();
+			return *n;
+		}
 	}
 
 	ref var _getOwnProperty(string name, string file = __FILE__, size_t line = __LINE__) {
@@ -1271,8 +1408,8 @@ struct var {
 					return *peek;
 			}
 		}
-		version(jsvar_throw)
-			throw new DynamicTypeException(this, Type.Object, file, line);
+		//if(jsvar_throw)
+			//throw new DynamicTypeException(this, Type.Object, file, line);
 		var* n = new var();
 		return *n;
 	}
@@ -1364,6 +1501,11 @@ struct var {
 	static var fromJson(string json) {
 		auto decoded = parseJSON(json);
 		return var.fromJsonValue(decoded);
+	}
+
+	static var fromJsonFile(string filename) {
+		import std.file;
+		return var.fromJson(readText(filename));
 	}
 
 	static var fromJsonValue(JSONValue v) {
@@ -1541,6 +1683,51 @@ class PrototypeObject {
 		return n;
 	}
 
+	bool isSpecial() { return false; }
+
+	PrototypeObject new_(PrototypeObject newThis) {
+		// if any of the prototypes are D objects, we need to try to copy them.
+		auto p = prototype;
+
+		PrototypeObject[32] stack;
+		PrototypeObject[] fullStack = stack[];
+		int stackPos;
+
+		while(p !is null) {
+
+			if(p.isSpecial()) {
+				auto n = new PrototypeObject();
+
+				auto proto = p.new_(n);
+
+				while(stackPos) {
+					stackPos--;
+					auto pr = fullStack[stackPos].copy();
+					pr.prototype = proto;
+					proto = pr;
+				}
+
+				n.prototype = proto;
+				n.name = this.name;
+				foreach(k, v; _properties) {
+					n._properties[k] = v._copy;
+				}
+
+				return n;
+			}
+
+			if(stackPos >= fullStack.length)
+				fullStack ~= p;
+			else
+				fullStack[stackPos] = p;
+			stackPos++;
+
+			p = p.prototype;
+		}
+
+		return copy();
+	}
+
 	PrototypeObject copyPropertiesFrom(PrototypeObject p) {
 		foreach(k, v; p._properties) {
 			this._properties[k] = v._copy;
@@ -1608,7 +1795,7 @@ class PrototypeObject {
 
 		// if we're here, the property was not found, so let's implicitly create it
 		if(throwOnFailure)
-			throw new Exception("no such property " ~ name, file, line);
+			throw new DynamicTypeException("no such property " ~ name, file, line);
 		var n;
 		this._properties[name] = n;
 		return this._properties[name];
@@ -1639,7 +1826,7 @@ class PrototypeObject {
 
 		// if we're here, the property was not found, so let's implicitly create it
 		if(throwOnFailure)
-			throw new Exception("no such property " ~ name, file, line);
+			throw new DynamicTypeException("no such property " ~ name, file, line);
 		this._properties[name] = t;
 		return this._properties[name];
 	}
@@ -1696,15 +1883,62 @@ class PropertyPrototype : PrototypeObject {
 	}
 }
 
+///
+struct ScriptLocation {
+	string scriptFilename; ///
+	int lineNumber; ///
+}
 
 class DynamicTypeException : Exception {
+	this(string msg, string file = __FILE__, size_t line = __LINE__) {
+		super(msg, file, line);
+	}
 	this(var v, var.Type required, string file = __FILE__, size_t line = __LINE__) {
 		import std.string;
 		if(v.payloadType() == required)
 			super(format("Tried to use null as a %s", required), file, line);
-		else
-			super(format("Tried to use %s as a %s", v.payloadType(), required), file, line);
+		else {
+			super(format("Tried to use %s%s as a %s", v == null ? "null ": "", v.payloadType(), required), file, line);
+		}
 	}
+
+	override void toString(scope void delegate(in char[]) sink) const {
+		import std.format;
+		if(varName.length)
+			sink(varName);
+		if(callStack.length) {
+			sink("arsd.jsvar.DynamicTypeException@");
+			sink(file);
+			sink("(");
+			sink(to!string(line));
+			sink("): ");
+			sink(msg);
+			foreach(cs; callStack)
+				sink(format("\n\t%s:%s", cs.scriptFilename, cs.lineNumber));
+
+			bool found;
+			void hiddenSink(in char[] str) {
+				// I just want to hide the call stack until the interpret call...
+				// since the script stack above is more meaningful to users.
+				//
+				// but then I will go back to the D functions once on the outside.
+				import std.string;
+				if(found)
+					sink(str);
+				else if(str.indexOf("arsd.script.interpret(") != -1)
+					found = true;
+			}
+
+			sink("\n--------");
+
+			super.toString(&hiddenSink);
+		} else {
+			super.toString(sink);
+		}
+	}
+
+	ScriptLocation[] callStack;
+	string varName;
 }
 
 template makeAscii() {
@@ -1719,6 +1953,253 @@ template makeAscii() {
 }
 
 package interface VarMetadata { }
+
+interface ScriptableSubclass {
+	void setScriptVar(var);
+	var  getScriptVar();
+	final bool methodOverriddenByScript(string name) {
+		PrototypeObject t = getScriptVar().get!PrototypeObject;
+		// the top one is the native object from subclassable so we don't want to go all the way there to avoid endless recursion
+		//import std.stdio; writeln("checking ", name , " ...", "wtf");
+		if(t !is null)
+		while(!t.isSpecial) {
+			if(t._peekMember(name, false) !is null)
+				return true;
+			t = t.prototype;
+		}
+		return false;
+	}
+}
+
+/++
+	EXPERIMENTAL
+
+	Allows you to make a class available to the script rather than just class objects.
+	You can subclass it in script and then call the methods again through the original
+	D interface. With caveats...
+
+
+	Assumes ALL $(I virtual) methods and constructors are scriptable, but requires
+	`@scriptable` to be present on final or static methods. This may change in the future.
+
+	Note that it has zero support for `@safe`, `pure`, `nothrow`, and other attributes
+	at this time and will skip that use those. I may be able to loosen this in the
+	future as well but I have no concrete plan to at this time. You can still mark
+	them as `@scriptable` to call them from the script, but they can never be overridden
+	by script code because it cannot verify those guarantees hold true.
+
+	Ditto on `const` and `immutable`.
+
+	Its behavior on overloads is currently undefined - it may keep only any random
+	overload as the only one and do dynamic type conversions to cram data into it.
+	This is likely to change in the future but for now try not to use this on classes
+	with overloaded methods.
+
+	It also does not wrap member variables unless explicitly marked `@scriptable`; it
+	is meant to communicate via methods.
+
+	History:
+	Added April 25, 2020
++/
+var subclassable(T)() if(is(T == class) || is(T == interface)) {
+	import std.traits;
+
+	static final class ScriptableT : T, ScriptableSubclass {
+		var _this;
+		void setScriptVar(var v) { _this = v; }
+		var getScriptVar() { return _this; }
+		bool _next_devirtualized;
+
+		// @scriptable size_t _nativeHandle_() { return cast(size_t) cast(void*) this;}
+
+		static if(__traits(compiles,  __traits(getOverloads, T, "__ctor")))
+		static foreach(ctor; __traits(getOverloads, T, "__ctor"))
+			@scriptable this(Parameters!ctor p) { super(p); }
+
+		static foreach(memberName; __traits(allMembers, T)) {
+		static if(__traits(isVirtualMethod, __traits(getMember, T, memberName)))
+		static if(memberName != "toHash")
+		// note: overload behavior undefined
+		static if(!(functionAttributes!(__traits(getMember, T, memberName)) & (FunctionAttribute.pure_ | FunctionAttribute.safe | FunctionAttribute.trusted | FunctionAttribute.nothrow_)))
+		mixin(q{
+			@scriptable
+			override ReturnType!(__traits(getMember, T, memberName))
+			}~memberName~q{
+			(Parameters!(__traits(getMember, T, memberName)) p)
+			{
+			//import std.stdio; writeln("calling ", T.stringof, ".", memberName, " - ", methodOverriddenByScript(memberName), "/", _next_devirtualized, " on ", cast(size_t) cast(void*) this);
+				if(_next_devirtualized || !methodOverriddenByScript(memberName))
+					return __traits(getMember, super, memberName)(p);
+				return _this[memberName].call(_this, p).get!(typeof(return));
+			}
+		});
+		}
+
+		// I don't want to necessarily call a constructor but I need an object t use as the prototype
+		// hence this faked one. hopefully the new operator will see void[] and assume it can have GC ptrs...
+		static ScriptableT _allocate_(PrototypeObject newThis) {
+			void[] store = new void[](__traits(classInstanceSize, ScriptableT));
+			store[] = typeid(ScriptableT).initializer[];
+			ScriptableT dummy = cast(ScriptableT) store.ptr;
+			dummy._this = var(newThis);
+			//import std.stdio; writeln("Allocating new ", cast(ulong) store.ptr);
+			return dummy;
+		}
+	}
+
+	ScriptableT dummy = ScriptableT._allocate_(null);
+
+	var proto = wrapNativeObject!(ScriptableT, true)(dummy);
+
+	var f = var.emptyObject;
+	f.prototype = proto;
+
+	return f;
+}
+
+/// Demonstrates tested capabilities of [subclassable]
+version(with_arsd_script)
+unittest {
+	interface IFoo {
+		string method();
+		int method2();
+		int args(int, int);
+	}
+	// note the static is just here because this
+	// is written in a unittest; it shouldn't actually
+	// be necessary under normal circumstances.
+	static class Foo : IFoo {
+		ulong handle() { return cast(ulong) cast(void*) this; }
+		string method() { return "Foo"; }
+		int method2() { return 10; }
+		int args(int a, int b) {
+			//import std.stdio; writeln(a, " + ", b, " + ", member_, " on ", cast(ulong) cast(void*) this);
+			return member_+a+b; }
+
+		int member_;
+		@property int member(int i) { return member_ = i; }
+		@property int member() { return member_; }
+
+		@scriptable final int fm() { return 56; }
+	}
+	static class Bar : Foo {
+		override string method() { return "Bar"; }
+	}
+	static class Baz : Bar {
+		override int method2() { return 20; }
+	}
+
+	static class WithCtor {
+		// constructors work but are iffy with overloads....
+		this(int arg) { this.arg = arg; }
+		@scriptable int arg; // this is accessible cuz it is @scriptable
+		int getValue() { return arg; }
+	}
+
+	var globals = var.emptyObject;
+	globals.Foo = subclassable!Foo;
+	globals.Bar = subclassable!Bar;
+	globals.Baz = subclassable!Baz;
+	globals.WithCtor = subclassable!WithCtor;
+
+	import arsd.script;
+
+	interpret(q{
+		// can instantiate D classes added via subclassable
+		var foo = new Foo();
+		// and call its methods...
+		assert(foo.method() == "Foo");
+		assert(foo.method2() == 10);
+
+		foo.member(55);
+
+		// proves the new operator actually creates new D
+		// objects as well to avoid sharing instance state.
+		var foo2 = new Foo();
+		assert(foo2.handle() != foo.handle());
+
+		// passing arguments works
+		assert(foo.args(2, 4) == 6 + 55); // (and sanity checks operator precedence)
+
+		var bar = new Bar();
+		assert(bar.method() == "Bar");
+		assert(bar.method2() == 10);
+
+		// this final member is accessible because it was marked @scriptable
+		assert(bar.fm() == 56);
+
+		// the script can even subclass D classes!
+		class Amazing : Bar {
+			// and override its methods
+			var inst = 99;
+			function method() {
+				return "Amazing";
+			}
+
+			// note: to access instance members or virtual call lookup you MUST use the `this` keyword
+			// otherwise the function will be called with scope limited to this class itself (similar to javascript)
+			function other() {
+				// this.inst is needed to get the instance variable (otherwise it would only look for a static var)
+				// and this.method triggers dynamic lookup there, so it will get children's overridden methods if there is one
+				return this.inst ~ this.method();
+			}
+
+			function args(a, b) {
+				// calling parent class method still possible
+				return super.args(a*2, b*2);
+			}
+		}
+
+		var amazing = new Amazing();
+		assert(amazing.method() == "Amazing");
+		assert(amazing.method2() == 10); // calls back to the parent class
+		amazing.member(5);
+
+		// this line I can paste down to interactively debug the test btw.
+		//}, globals); repl!true(globals); interpret(q{
+
+		assert(amazing.args(2, 4) == 12+5);
+
+		var wc = new WithCtor(5); // argument passed to constructor
+		assert(wc.getValue() == 5);
+
+		// confirm the property read works too
+		assert(wc.arg == 5);
+
+		// but property WRITING is currently not working though.
+
+
+		class DoubleChild : Amazing {
+			function method() {
+				return "DoubleChild";
+			}
+		}
+
+		// can also do a child of a child class
+		var dc = new DoubleChild();
+		assert(dc.method() == "DoubleChild");
+		assert(dc.other() == "99DoubleChild"); // the `this.method` means it uses the replacement now
+		assert(dc.method2() == 10); // back to the D grandparent
+		assert(dc.args(2, 4) == 12); // but the args impl from above
+	}, globals);
+
+	Foo foo = globals.foo.get!Foo; // get the native object back out
+	assert(foo.member == 55); // and see mutation via properties proving object mutability
+	assert(globals.foo.get!Bar is null); // cannot get the wrong class out of it
+	assert(globals.foo.get!Object !is null); // but can do parent classes / interfaces
+	assert(globals.foo.get!IFoo !is null);
+	assert(globals.bar.get!Foo !is null); // the Bar can also be a Foo
+
+	Bar amazing = globals.amazing.get!Bar; // instance of the script's class is still accessible through parent D class or interface
+	assert(amazing !is null); // object exists
+	assert(amazing.method() == "Amazing"); // calls the override from the script
+	assert(amazing.method2() == 10); // non-overridden function works as expected
+
+	IFoo iamazing = globals.amazing.get!IFoo; // and through just the interface works the same way
+	assert(iamazing !is null);
+	assert(iamazing.method() == "Amazing");
+	assert(iamazing.method2() == 10);
+}
 
 // just a base class we can reference when looking for native objects
 class WrappedNativeObject : PrototypeObject {
@@ -1735,16 +2216,27 @@ template helper(alias T) { alias helper = T; }
 
 	By default, it will wrap all methods and members with a public or greater protection level. The second template parameter can filter things differently. FIXME implement this
 
-	That may be done automatically with `opAssign` in the future.
+	History:
+		This became the default after April 24, 2020. Previously, [var.opAssign] would [wrapOpaquely] instead.
 +/
-WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
+WrappedNativeObject wrapNativeObject(Class, bool special = false)(Class obj) if(is(Class == class)) {
 	import std.meta;
-	return new class WrappedNativeObject {
+	static class WrappedNativeObjectImpl : WrappedNativeObject {
 		override Object getObject() {
 			return obj;
 		}
 
-		this() {
+		override bool isSpecial() { return special; }
+
+		static if(special)
+		override WrappedNativeObject new_(PrototypeObject newThis) {
+			return new WrappedNativeObjectImpl(obj._allocate_(newThis));
+		}
+
+		Class obj;
+
+		this(Class objIn) {
+			this.obj = objIn;
 			wrappedType = typeid(obj);
 			// wrap the other methods
 			// and wrap members as scriptable properties
@@ -1752,10 +2244,52 @@ WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
 			foreach(memberName; __traits(allMembers, Class)) static if(is(typeof(__traits(getMember, obj, memberName)) type)) {
 				static if(is(type == function)) {
 					foreach(idx, overload; AliasSeq!(__traits(getOverloads, obj, memberName))) static if(.isScriptable!(__traits(getAttributes, overload))()) {
-						auto helper = &__traits(getOverloads, obj, memberName)[idx];
-						_properties[memberName] = (Parameters!helper args) {
-							return __traits(getOverloads, obj, memberName)[idx](args);
+						var gen;
+						gen._function = delegate (var vthis_, var[] vargs) {
+							Parameters!(__traits(getOverloads, Class, memberName)[idx]) fargs;
+
+
+							enum lol = static_foreach(fargs.length, 1, -1,
+								`__traits(getOverloads, obj, memberName)[idx](`,``,` < vargs.length ? vargs[`,`].get!(typeof(fargs[`,`])) : ParamDefault!(__traits(getOverloads, Class, memberName)[idx], `,`)(),`,`)`);
+							/*
+							enum lol = static_foreach(fargs.length, 1, -1,
+								`__traits(getOverloads, obj, memberName)[idx](`,``,` < vargs.length ? vargs[`,`].get!(typeof(fargs[`,`])) :
+								typeof(fargs[`,`]).init,`,`)`);
+							*/
+
+							// FIXME: what if there are multiple @scriptable overloads?!
+							// FIXME: what about @properties?
+
+							static if(special) {
+								Class obj;
+								//if(vthis_.payloadType() != var.Type.Object) { import std.stdio; writeln("getwno on ", vthis_); }
+								// the native object might be a step or two up the prototype
+								// chain due to script subclasses, need to find it...
+								while(vthis_ != null) {
+									obj = vthis_.getWno!Class;
+									if(obj !is null)
+										break;
+									vthis_ = vthis_.prototype;
+								}
+
+								if(obj is null) throw new Exception("null native object");
+							}
+
+							static if(special) {
+								obj._next_devirtualized = true;
+								scope(exit) obj._next_devirtualized = false;
+							}
+
+							var ret;
+
+							static if(!is(typeof(__traits(getOverloads, obj, memberName)[idx](fargs)) == void))
+								ret = mixin(lol);
+							else
+								mixin(lol ~ ";");
+
+							return ret;
 						};
+						_properties[memberName] = gen;
 					}
 				} else {
 					static if(.isScriptable!(__traits(getAttributes, __traits(getMember, Class, memberName)))())
@@ -1770,7 +2304,9 @@ WrappedNativeObject wrapNativeObject(Class)(Class obj) if(is(Class == class)) {
 				}
 			}
 		}
-	};
+	}
+
+	return new WrappedNativeObjectImpl(obj);
 }
 
 import std.traits;
@@ -1853,7 +2389,8 @@ bool isScriptable(attributes...)() {
 bool isScriptableOpaque(T)() {
 	static if(is(typeof(T.isOpaqueStruct) == bool))
 		return T.isOpaqueStruct == true;
-	return false;
+	else
+		return false;
 }
 
 bool appearsNumeric(string n) {
@@ -1872,4 +2409,89 @@ bool appearsNumeric(string n) {
 /// BTW: structs by value can be put in vars with var.opAssign and var.get. It will generate an object with the same fields. The difference is changes to the jsvar won't be reflected in the original struct and native methods won't work if you do it that way.
 WrappedNativeObject wrapNativeObject(Struct)(Struct* obj) if(is(Struct == struct)) {
 	return null; // FIXME
+}
+
+/+
+	_IDX_
+
+	static_foreach(T.length, q{
+		mixin(q{
+		void
+		} ~ __traits(identifier, T[_IDX_]) ~ q{
+
+		}
+	});
++/
+
+private
+string static_foreach(size_t length, int t_start_idx, int t_end_idx, string[] t...) pure {
+	assert(__ctfe);
+	int slen;
+	int tlen;
+	foreach(idx, i; t[0 .. t_start_idx])
+		slen += i.length;
+	foreach(idx, i; t[t_start_idx .. $ + t_end_idx]) {
+		if(idx)
+			tlen += 5;
+		tlen += i.length;
+	}
+	foreach(idx, i; t[$ + t_end_idx .. $])
+		slen += i.length;
+
+	char[] a = new char[](tlen * length + slen);
+
+	int loc;
+	char[5] stringCounter;
+	stringCounter[] = "00000"[];
+
+	foreach(part; t[0 .. t_start_idx]) {
+		a[loc .. loc + part.length] = part[];
+		loc += part.length;
+	}
+
+	foreach(i; 0 .. length) {
+		foreach(idx, part; t[t_start_idx .. $ + t_end_idx]) {
+			if(idx) {
+				a[loc .. loc + stringCounter.length] = stringCounter[];
+				loc += stringCounter.length;
+			}
+			a[loc .. loc + part.length] = part[];
+			loc += part.length;
+		}
+
+		auto pos = stringCounter.length;
+		while(pos) {
+			pos--;
+			if(stringCounter[pos] == '9') {
+				stringCounter[pos] = '0';
+			} else {
+				stringCounter[pos] ++;
+				break;
+			}
+		}
+		while(pos)
+			stringCounter[--pos] = ' ';
+	}
+
+	foreach(part; t[$ + t_end_idx .. $]) {
+		a[loc .. loc + part.length] = part[];
+		loc += part.length;
+	}
+
+	return a;
+}
+
+// LOL this can't work because function pointers drop the default :(
+private
+auto ParamDefault(alias T, size_t idx)() {
+	static if(is(typeof(T) Params == __parameters)) {
+		auto fn(Params[idx .. idx + 1] args) {
+			return args[0];
+		}
+		static if(__traits(compiles, fn())) {
+			return fn();
+		} else {
+			return Params[idx].init;
+		}
+	} else static assert(0);
 }

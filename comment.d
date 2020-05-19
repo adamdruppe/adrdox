@@ -2504,15 +2504,24 @@ class MyFormatter(Sink) : Formatter!Sink {
 		putTag("<a href=\"http://dpldocs.info/out-contract\" class=\"lang-feature\">");
 		put("out");
 		putTag("</a>");
-		if (outStatement.parameter != tok!"")
-		{
-		    put(" (");
-		    format(outStatement.parameter);
-		    put(")");
-		}
 
 		//put(" ");
-		format(outStatement.blockStatement);
+		if(outStatement.expression) {
+			put(" (");
+			format(outStatement.parameter);
+			put("; ");
+			format(outStatement.expression);
+			put(")");
+		} else {
+			if (outStatement.parameter != tok!"")
+			{
+			    put(" (");
+			    format(outStatement.parameter);
+			    put(")");
+			}
+
+			format(outStatement.blockStatement);
+		}
 	}
 
 	override void format(const AssertExpression assertExpression)

@@ -2252,12 +2252,21 @@ class Formatter(Sink)
         **/
 
         put("out");
+	if(stmnt.expression) {
+		put(" (");
+		format(stmnt.parameter);
+		put("; ");
+		format(stmnt.expression);
+		put(")");
+		return;
+	}
         if (stmnt.parameter != tok!"")
         {
             put(" (");
             format(stmnt.parameter);
             put(")");
         }
+	if(stmnt.blockStatement)
         format(stmnt.blockStatement);
     }
 

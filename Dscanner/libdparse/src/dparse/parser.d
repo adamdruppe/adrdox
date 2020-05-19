@@ -4330,13 +4330,27 @@ class Parser
         const o = expect(tok!"out");
         mixin(nullCheck!`o`);
         node.outTokenLocation = o.index;
+
+/*
+	if tere's a semicolon in the parens, it is the short syntax.
+*/
+
         if (currentIs(tok!"("))
         {
             advance();
-            const ident = expect(tok!"identifier");
-            if (ident is null) { deallocate(node); return null; }
-            node.parameter = *ident;
-            expect(tok!")");
+	    if(currentIs(tok!"identifier")) {
+            	const ident = expect(tok!"identifier");
+            	node.parameter = *ident;
+	}
+	    if(currentIs(tok!";")) {
+			// short syntax......
+			advance();
+			node.expression = parseExpression;
+            		expect(tok!")");
+			return node;
+	    } else {
+            		expect(tok!")");
+	    }
         }
         mixin(nullCheck!`node.blockStatement = parseBlockStatement()`);
         if (node.blockStatement is null)

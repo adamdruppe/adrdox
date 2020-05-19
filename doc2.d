@@ -3385,9 +3385,9 @@ string[] scanFiles (string basedir) {
 		scope(exit) gi.unloadGitIgnore();
 		foreach (DirEntry de; dirEntries(dir, SpanMode.shallow)) {
 			try {
-				if (de.isDir) { scanSubDir(de.name); continue; }
 				if (de.baseName.length == 0) continue; // just in case
 				if (de.baseName[0] == '.') continue; // skip hidden files
+				if (de.isDir) { scanSubDir(de.name); continue; }
 				if (!de.baseName.globMatch("*.d")) continue;
 				if (/*de.isFile &&*/ !gi.match(de.name)) {
 					//writeln(de.name);
@@ -3581,7 +3581,7 @@ void main(string[] args) {
 				ele.attrs.src = "../" ~ ele.attrs.src;
 
 		auto code = Element.make("pre", Html(linkUpHtml(highlight(cast(string) mod.originalSource), mod, "../", true))).addClass("d_code highlighted");
-		addLineNumbering(code.requireSelector("pre"), true);
+		addLineNumbering(code, true);
 		auto content = annotatedSourceDocument.requireElementById("page-content");
 		content.addChild(code);
 
@@ -3660,13 +3660,13 @@ void main(string[] args) {
 				}
 			}
 
-
 			if(generate) {
+
 				if(sweet.root.name !in moduleDeclsGenerateByName) {
 					moduleDeclsGenerateByName[sweet.root.name] = existingDecl;
 					moduleDeclsGenerate ~= existingDecl;
 
-					if(annotateSource) {
+					if(generatingSource) {
 						generateAnnotatedSource(mod, gzip);
 					}
 				}

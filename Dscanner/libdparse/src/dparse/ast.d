@@ -2380,6 +2380,7 @@ public:
     /** */ size_t outTokenLocation;
     /** */ Token parameter;
     /** */ BlockStatement blockStatement;
+    Expression expression;
     mixin OpEquals;
 }
 
