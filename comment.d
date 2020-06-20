@@ -326,8 +326,6 @@ struct DocComment {
 					output.putTag("\">");
 					output.put(param[0 .. split]);
 					output.putTag("</a>");
-					output.putTag("</dt>");
-					output.putTag("<dd>");
 
 					static if(is(T == FunctionDeclaration) || is(T == Constructor))
 					if(functionDec !is null) {
@@ -341,12 +339,9 @@ struct DocComment {
 						}
 
 						if(paramAst) {
-							output.putTag("<div class=\"parameter-type-holder\">");
-							output.putTag("Type: ");
-							output.putTag("<span class=\"parameter-type\">");
+							output.putTag(" <span class=\"parameter-type\">");
 								f.format(paramAst.type);
 							output.putTag("</span>");
-							output.putTag("</div>");
 						}
 
 
@@ -365,6 +360,8 @@ struct DocComment {
 
 					}
 
+					output.putTag("</dt>");
+					output.putTag("<dd>");
 
 					output.putTag("<div class=\"documentation-comment\">");
 					output.putTag(formatDocumentationComment(param[split + 1 .. $], decl));

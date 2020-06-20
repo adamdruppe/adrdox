@@ -3,6 +3,15 @@ window.addEventListener("load", function() {
 	var lineWrappers = document.querySelectorAll(".with-line-wrappers");
 	for(var i = 0; i < lineWrappers.length; i++) {
 		var l = lineWrappers[i];
+
+		var codeblock = document.createElement("div");
+		codeblock.className = "codeblock";
+		l.parentNode.insertBefore(codeblock, l);
+
+		var header = document.createElement("header");
+		codeblock.appendChild(header);
+		codeblock.appendChild(l);
+
 		var btn = document.createElement("button");
 		btn.setAttribute("type", "button");
 		var canCopyToClipboard = document.queryCommandSupported("copy");
@@ -15,7 +24,7 @@ window.addEventListener("load", function() {
 				}
 		};})(l));
 		btn.textContent = canCopyToClipboard ? "Copy to Clipboard" : "Select All";
-		l.parentNode.insertBefore(btn, l);
+		header.appendChild(btn);
 
 		var btn = document.createElement("button");
 		btn.setAttribute("type", "button");
@@ -23,8 +32,7 @@ window.addEventListener("load", function() {
 			document.body.classList.toggle("hide-line-numbers");
 		});
 		btn.textContent = "Toggle Line Numbers";
-		l.parentNode.insertBefore(btn, l);
-
+		header.appendChild(btn);
 	}
 
 	/* // still sucks in firefox!
@@ -115,6 +123,7 @@ window.addEventListener("load", function() {
 		sn.insertBefore(search, sn.firstChild);
 	}
 
+	/*
 	function updateDynamicStyle() {
 		var thing = document.getElementById("page-content");
 		var newStyle = document.getElementById("dynamic-style");
@@ -126,7 +135,7 @@ window.addEventListener("load", function() {
 		}
 
 		var maxContentWidth = window.innerWidth;
-		/* 800 is the threshold for putting nav vertically */
+		// 800 is the threshold for putting nav vertically
 		if(maxContentWidth < 800)
 			maxContentWidth = 800;
 		else
@@ -146,6 +155,7 @@ window.addEventListener("load", function() {
 	updateDynamicStyle();
 
 	window.onresize = updateDynamicStyle;
+	*/
 
 	// Disable line numbers in IE because the copy/paste with them sucks - it includes all line numbers
 	// in the middle making it too hard to use. Copy/paste is more important than line displays.

@@ -1,4 +1,9 @@
 /*
+
+	FIXME: i kinda do want a catch type filter e.g. catch(Exception f)
+
+	FIXME: I also kinda want implicit construction of structs at times.
+
 	REPL plan:
 		easy movement to/from a real editor
 		can edit a specific function

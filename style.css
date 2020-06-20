@@ -77,15 +77,18 @@ html {
 }
 
 h1 {
-	font-size: 1.6rem;
+	font-size: 2.2rem;
 }
 
 h2 {
-	font-size: 1.21rem;
+	font-size: 1.6rem;
+	margin-top: 1.5em;
+	font-family: "Roboto Slab", sans-serif;
+	font-weight: normal;
 }
 
 h3 {
-	font-size: 1.1rem;
+	font-size: 1.26rem;
 }
 
 body {
@@ -162,14 +165,16 @@ pre {
 	min-width: 16em;
 	max-width: 16em;
 	order: 1;
-	padding: 0.25em;
+	padding-top: 0.25em;
+	padding-left: 1em;
+	padding-right: 0px;
 	min-height: 800px;
 	min-height: calc(100vh - 3em - 32px);
 
-	overflow: hidden;
-
 	border-right-style: solid;
 	border-right-width: 1px;
+	border-left-style: solid;
+	border-left-width: 1px;
 	box-sizing: border-box;
 }
 
@@ -177,7 +182,7 @@ pre {
 	flex: 1 1 auto;
 	order: 2;
 	padding: 0.25em;
-	padding-left: 2em;
+	padding-left: 1.75em;
 	box-sizing: border-box;
 	max-width: 960px;
 }
@@ -271,8 +276,9 @@ pre.d_code  { background-color: #fdf6e3; color: #002b36; padding: 0.25em; border
 .documentation-comment li,
 .documentation-comment p {
 	/* white-space: pre-line; */
-	max-width: 70ch;
-	font-size: 1.1rem;
+	max-width: 74ch;
+	/*font-size: 1.1rem;*/
+	font-size: 1.0rem;
 	line-height: 1.5;
 }
 
@@ -434,6 +440,100 @@ ol.overloads + .function-prototype {
 	background-color: #f8f8f8;
 }
 
+.parameter-descriptions .parameter-name {
+	margin-right: 1.5rem;
+	font-weight: bold;
+	padding: 0.25ex 0.75ex;
+}
+
+.parameter-descriptions dd {
+	margin-left: 1.5em;
+}
+
+.parameter-descriptions dd p:first-child {
+	margin-top: 0.5em;
+}
+
+.parameter-descriptions dt:not(:first-child) {
+	margin-top: 1.5em;
+}
+
+.codeblock {
+	border: solid 1px #ccc;
+	padding: 0;
+	margin: 0;
+}
+
+.codeblock header {
+	background-color: #e8e8e8;
+	padding: 0;
+	display: flex;
+	justify-content: flex-end;
+}
+
+.codeblock header:before {
+	display: inline-block;
+	content: "Example";
+	justify-content: flex-start;
+	flex-grow: 1;
+	padding: 0.25em 1em;
+	font-weight: bold;
+}
+
+.codeblock header button {
+/*  TODO: add :before class with icons here (copy, line numbers)  */
+	appearance: none;
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	margin: 0;
+	padding: 0 1em;
+	background-color: transparent;
+	border: none;
+	border-left: 1px solid #ccc;
+	cursor: pointer;
+}
+
+.codeblock header button:hover {
+	background-color: rgba(255, 255, 255, 0.5);
+}
+
+.codeblock header + pre {
+	border: none;
+	border-top: solid 1px #ccc;
+	margin: 0;
+	padding: 1em 0;
+	max-width: unset !important;;
+}
+
+.hide-line-numbers .codeblock .with-line-wrappers,
+.codeblock pre.d_code:not(.with-line-wrappers) {
+	padding: 1em;
+}
+
+.codeblock .with-line-wrappers .br {
+	margin-right: 1em;
+}
+
+.documentation-comment p {
+	hyphens: auto;
+}
+
+.declaration-prototype, .aggregate-prototype, .function-prototype {
+	margin-left: 0;
+	margin-right: 0;
+}
+
+
+
+tt.D, .inline-code {
+	color: black;
+	font-weight: 500;
+	background-color: #f2f2f2;
+	padding: 0px 0.5ex;
+	border-radius: 2px;
+}
+
+
 /*
 .toplevel.parameters-list > .parameter-item > .parameter-type-holder {
 	text-align: right;
@@ -490,13 +590,14 @@ ol.overloads + .function-prototype {
 table.enum-members {
 	border-collapse: collapse;
 	border: solid 1px #ccc;
+	min-width: 60%;
 }
 
 .enum-members th,
 .enum-members td {
 	border: solid 1px #ccc;
 	margin: 0px;
-	padding: 0.25em;
+	padding: 0.25em 0.5em;
 }
 
 .enum-members th {
@@ -536,6 +637,17 @@ table.enum-members {
 
 .enum-members .enum-attributes {
 	margin-top: 1em;
+}
+
+.enum-member .enum-attributes:empty {
+	display: none;
+}
+
+.enum-members tr.enum-member > td:nth-child(2) > div:only-child:empty:before {
+	display: inline;
+	content: "undocumented";
+	color: rgba(0, 0, 0, 0.4);
+	font-style: italic;
 }
 
 *:target {
@@ -752,16 +864,35 @@ tt.D,
 	display: block;
 	border-bottom: solid 1px #ccc;
 	margin-top: 1em;
+	margin-bottom: 0.25em;
 }
 
 #page-nav a {
 	display: block;
-	padding-left: 0.3em;
+	box-sizing: border-box;
+	padding: 1px 0.25em 1px 0.5em;
+	text-overflow: ellipsis;
+	overflow: hidden;
+	font-family: "Roboto Slab", sans-serif;
+}
+
+#page-nav a:hover {
+	position: relative;
+	overflow: visible;
+	z-index: 10;
+	background-color: rgb(245, 245, 245);
+	width: max-content;
 }
 
 #page-nav a.parent {
 	font-weight: bold;
 	font-size: 1.1rem;
+	line-height: 0.9;
+	overflow: visible;
+}
+
+#page-nav a.parent:first-child {
+	margin-top: 0.75em;
 }
 
 #page-nav a.parent + a.parent::before {
@@ -775,8 +906,8 @@ tt.D,
 
 pre[data-language=console],
 pre.console {
-	background-color: #333;
-	color: #ddd;
+	background-color: #222;
+	color: #eee;
 	padding: 0.5em;
 	border: solid 1px #ccc;
 }
@@ -986,10 +1117,15 @@ table.std_math.special-values caption {
 .annotated-prototype .overloads li {
 	display: block;
 	width: auto;
-	margin: 0em 1em;
 	padding: 0em 0.5em;
 	text-align: left;
 	overflow: hidden;
+
+	margin: 0;
+}
+
+.member-list .dt, .overload-option, pre {
+	max-width: unset;
 }
 
 .annotated-prototype .overloads li.active-overload-option {
@@ -1046,6 +1182,7 @@ table.std_math.special-values caption {
 #page-nav ul {
 	margin: 0px;
 	padding: 0px;
+	list-style: none;
 }
 
 .parameter-name > a[href^="#"],

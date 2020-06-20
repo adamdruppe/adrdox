@@ -693,8 +693,22 @@ void putSimplfiedReturnValue(MyOutputRange output, const FunctionDeclaration dec
 
 void putSimplfiedArgs(T)(MyOutputRange output, const T decl) {
 	// FIXME: do NOT show default values here
-	if(decl.parameters)
-		output.putTag(toHtml(decl.parameters).source);
+	if(decl.parameters) {
+		output.putTag("(");
+		foreach(idx, p; decl.parameters.parameters) {
+			if(idx)
+				output.putTag(", ");
+			output.putTag(toText(p.type));
+			output.putTag(" ");
+			output.putTag(toText(p.name));
+		}
+		if(decl.parameters.hasVarargs) {
+			if(decl.parameters.parameters.length)
+				output.putTag(", ");
+			output.putTag("...");
+		}
+		output.putTag(")");
+	}
 
 }
 
@@ -1043,8 +1057,8 @@ struct HeaderLink {
 string[string] pseudoFiles;
 bool usePseudoFiles = false;
 
-Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, HeaderLink[] headerLinks) {
-	if(!decl.docsShouldBeOutputted)
+Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, HeaderLink[] headerLinks, bool overrideOutput = false) {
+	if(!decl.docsShouldBeOutputted && !overrideOutput)
 		return null;
 
 	auto title = decl.name;
@@ -1091,6 +1105,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 				break;
 			// cut off package names that would be repeated
 			auto name = (p.isModule && p.parent) ? lastDotOnly(p.name) : p.name;
+			breadcrumbs.prependChild(new TextNode(" "));
 			breadcrumbs.prependChild(Element.make("a", name, p.link(true)).addClass("breadcrumb"));
 			p = p.parent;
 		}
@@ -1337,6 +1352,40 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		}
 	}
 
+	bool firstMitd = true;
+	foreach(d; decl.children) {
+		if(auto mi = cast(MixedInTemplateDecl) d) {
+			if(firstMitd) {
+				auto h2 = content.addChild("h2", "Mixed In Members");
+				h2.id = "mixed-in-members";
+				firstMitd = false;
+			}
+
+			//mi.name
+
+			string sp;
+			MyOutputRange or = MyOutputRange(&sp);
+			mi.getSimplifiedPrototype(or);
+			auto h3 = content.addChild("h3", Html("From " ~ sp));
+
+			auto thing = decl.lookupName(toText(mi.astNode.mixinTemplateName));
+
+			if(thing) {
+				auto dl = content.addChild("dl").addClass("member-list native");
+				foreach(child; thing.children) {
+					if(child.isDocumented) {
+						handleChildDecl(dl, child);
+
+						if(!minimalDescent)
+							writeHtml(child, forReal, gzip, headerTitle, headerLinks, true);
+					}
+				}
+			} else {
+
+			}
+		}
+	}
+
 	auto irList = decl.inheritsFrom;
 	if(irList.length) {
 		auto h2 = content.addChild("h2", "Inherited Members");
@@ -1448,6 +1497,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 				auto name = (p.isModule && p.parent) ? lastDotOnly(p.name) : p.name;
 				if(name == "index" && p.fakeDecl)
 					break;
+				nav.prependChild(new TextNode(" "));
 				nav.prependChild(Element.make("a", name, p.link(true))).addClass("parent");
 				p = p.parent;
 			}
@@ -1620,7 +1670,7 @@ void addLineNumbering(Element pre, bool id = false) {
 		html ~= "\n";
 		count++;
 	}
-	if(count < 5)
+	if(count < 15)
 		return; // no point cluttering the display with the sample is so small you can eyeball it instantly anyway
 	pre.innerHTML = html.stripRight;
 	pre.addClass("with-line-wrappers");
