@@ -1065,8 +1065,9 @@ Element getReferenceLink(string text, Decl decl, string realText = null) {
 			// classes may be thrown and as such can be referenced externally without import
 			// doing this as kinda a hack.
 			text = (*c).link;
-		} else
-			text ~= ".html";
+		} else {
+			text = text.handleCaseSensitivity ~ ".html";
+		}
 	}
 
 	auto element = Element.make("a");
