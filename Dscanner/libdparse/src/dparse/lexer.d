@@ -509,15 +509,18 @@ const(Token)[] getTokensForParser(ubyte[] sourceCode, LexerConfig config,
 		} else {
 			import std.string;
 			auto l = blockComment.lastIndexOf("\n");
+                        string replacement;
 			if(l != -1) {
+                                replacement = blockComment[l .. $];
 				blockComment = blockComment[0 .. l + 1];
 			} else {
+                                replacement = blockComment[$-2 .. $];
 				blockComment = blockComment[0 .. $-2]; // just cut off the */ or +/
 			}
 			if(blockComment[0 .. 3] == "/**")
-				blockComment ~= c ~ "\n*/";
+				blockComment ~= c ~ replacement;
 			else if(blockComment[0 .. 3] == "/++")
-				blockComment ~= c ~ "\n+/";
+				blockComment ~= c ~ replacement;
 			else assert(0);
 
 		}

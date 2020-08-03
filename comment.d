@@ -503,8 +503,10 @@ string preprocessComment(string comment, Decl decl) {
 	if(commentType == '*' || commentType == '+') {
 		comment = comment[0 .. $-1]; // trim off the closing /
 		bool closingSpamFound;
-		while(comment.length && comment[$-1] == commentType) {
-			comment = comment[0 .. $-1]; // trim off other closing spam
+		auto tidx = 0;
+		while(comment.length && comment[$-1 - tidx] == commentType) {
+			//comment = comment[0 .. $-1]; // trim off other closing spam
+			tidx++;
 			closingSpamFound = true;
 		}
 
@@ -517,10 +519,47 @@ string preprocessComment(string comment, Decl decl) {
 			     */
 			// into just "Resolve host name.\n Returns: false if unable to resolve."
 			// give or take some irrelevant whitespace.
+
+
+			// new algorithm in response to github issue # 36
+
+			auto li = lastIndexOf(comment, "\n");
+			if(li != -1) {
+				// the closing line must be only whitespace and the marker to consider this
+				size_t spot = size_t.max;
+				foreach(idx, ch; comment[li + 1 .. $]) {
+					if(!(ch == ' ' || ch == '\t' || ch == commentType)) {
+						spot = size_t.max;
+						// "foo +/" on the end
+						// need to cut off the + from the end
+						// since the final / was already cut
+						comment = comment[0 .. $-1];
+						break;
+					} else {
+						if(spot == size_t.max && ch == commentType)
+							spot = idx + 1;
+					}
+				}
+
+				if(spot != size_t.max) {
+					closingSpam = comment[li + 1 .. li + 1 + spot];
+					comment = comment[0 .. li];
+				}
+			} else {
+				// single liner, strip off the closing spam
+				// need to cut off the + from the end
+				// since the final / was already cut
+				comment = comment[0 .. $-1];
+
+			}
+
+			// old algorithm
+			/+
 			while(comment.length && (comment[$-1] == '\t' || comment[$-1] == ' ')) {
 				closingSpam = comment[$-1] ~ closingSpam;
 				comment = comment[0 .. $-1]; // trim off other closing spam
 			}
+			+/
 
 			if(closingSpam.length == 0)
 				closingSpam = " "; // some things use the " *" leader, but still end with "*/" on a line of its own
@@ -532,7 +571,7 @@ string preprocessComment(string comment, Decl decl) {
 	if(commentType == '/')
 		poop = "///";
 	else
-		poop = closingSpam ~ commentType ~ " ";
+		poop = closingSpam;//closingSpam ~ commentType ~ " ";
 
 	string newComment;
 	foreach(line; comment.splitter("\n")) {
