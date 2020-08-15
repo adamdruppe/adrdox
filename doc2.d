@@ -60,8 +60,14 @@ string findStandardFile(bool dofail=true) (string stdfname) {
 	import std.path : buildPath, dirName;
 	if (!stdfname.exists) {
 		if (stdfname.length && stdfname[0] != '/') {
-			string newname = buildPath(thisExePath.dirName, stdfname);
-			if (newname.exists) return newname;
+			auto path = thisExePath;
+			static foreach (i; 0..2) {
+				{
+					path = path.dirName;
+					string newname = buildPath(path, stdfname);
+					if (newname.exists) return newname;
+				}
+			}
 		}
 		static if (dofail) throw new Exception("standard file '" ~stdfname ~ "' not found!");
 	}
