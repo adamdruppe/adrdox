@@ -5,6 +5,12 @@ import std.file;
 
 import arsd.dom;
 
+string makeDataUrl(string mimeType, in void[] data) {
+    import std.base64;
+	auto data64 = Base64.encode(cast(const(ubyte[])) data);
+	return "data:" ~ mimeType ~ ";base64," ~ cast(string)(data64);
+}
+
 // requires latex and dvipng to be installed on your system already, it just
 // calls out to them in the shell
 Element mathToImgHtml(string mathCode) {
@@ -50,7 +56,6 @@ $ `~mathCode~` $
 		auto file = read(prefix ~ ".png");
 		remove(prefix ~ ".png");
 
-		import arsd.cgi;
 		auto img = Element.make("img");
 		img.alt = mathCode;
 		img.src = makeDataUrl("image/png", file);

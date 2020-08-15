@@ -411,19 +411,18 @@ mixin template Lexer(Token, alias defaultTokenFunction,
 
     static string generateMask(const ubyte[] arr)
     {
-        import std.string : format;
         ulong u;
         for (size_t i = 0; i < arr.length && i < 8; i++)
         {
             u |= (cast(ulong) arr[i]) << (i * 8);
         }
-        return format("0x%016x", u);
+
+	return toHex(u);
     }
 
     private static string generateByteMask(size_t l)
     {
-        import std.string : format;
-        return format("0x%016x", ulong.max >> ((8 - l) * 8));
+    	return toHex(ulong.max >> ((8 - l) * 8));
     }
 
     private static size_t calcSplitCount(size_t a, size_t b) pure nothrow
@@ -472,12 +471,11 @@ mixin template Lexer(Token, alias defaultTokenFunction,
     private static string generateStatementsStep(string[] allTokens,
         string[] pseudoTokens, char[] chars, size_t i, string indent = "")
     {
-        import std.string : format;
         string code;
         if (i > 0)
         {
             size_t p = chars.length / 2;
-            code ~= indent ~ format("if (f < 0x%02x) // %s \n%s{\n", chars[p], chars[p], indent);
+            code ~= indent ~ "if (f < "~toHex(chars[p])~") {\n";
             code ~= generateStatementsStep(allTokens, pseudoTokens, chars[0 .. p], i - 1, indent ~ "    ");
             code ~= indent ~ "}\n" ~ indent ~ "else\n" ~ indent ~ "{\n";
             code ~= generateStatementsStep(allTokens, pseudoTokens, chars[p .. $], i - 1, indent ~ "    ");
@@ -500,7 +498,7 @@ mixin template Lexer(Token, alias defaultTokenFunction,
                         end++;
                     break;
                 }
-                code ~= format("%scase 0x%02x:\n", indent, c);
+                code ~= indent ~ "case "~toHex(c)~":\n";
                 code ~= printCase(allTokens[begin .. end], pseudoTokens, indent ~ "    ");
             }
             code ~= indent ~ "default: goto _defaultTokenFunction;\n";
@@ -859,4 +857,35 @@ public nothrow pure @safe @nogc:
      * The current _line number.
      */
     size_t line;
+}
+
+nothrow @safe
+private void toHexInternal(char[] where, ubyte b) {
+        if(b < 16)
+                where[0] = '0';
+        else {
+                ubyte t = (b & 0xf0) >> 4;
+                if(t >= 10)
+                        where[0] = cast(char) ('A' + t - 10);
+                else
+                        where[0] = cast(char) ('0' + t);
+                b &= 0x0f;
+        }
+        if(b >= 10)
+                where[1] = cast(char) ('A' + b - 10);
+        else
+                where[1] = cast(char) ('0' + b);
+}
+
+private void toHexInternal(char[] where, ulong b) {
+        foreach(i; 0 .. 8)
+                toHexInternal(where[i * 2 .. i * 2 + 2], cast(ubyte) (b >> ((7-i) * 8)));
+}
+
+string toHex(ulong w) {
+	char[18]  buffer;
+	buffer[0] = '0';
+	buffer[1] = 'x';
+	toHexInternal(buffer[2 .. $], w);
+	return buffer.idup;
 }
