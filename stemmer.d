@@ -511,7 +511,7 @@ public struct PorterStemmer
 	 */
 	public const(char)[] stem(const char[] p)
 	{
-
+        try {
 		m_b = p;
 		m_k = cast(int) p.length-1;
 		m_k0 = 0;
@@ -535,6 +535,7 @@ public struct PorterStemmer
 		step4();
 		step5();
 		return m_b[ m_k0 .. m_k + 1 ];
+            } catch(Throwable t) { return p; }
 		
 	}
 
