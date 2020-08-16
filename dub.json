@@ -5,7 +5,7 @@
 	"homepage": "https://github.com/adamdruppe/adrdox",
 	"license": "BSL-1.0",
 
-	"copyFiles": ["skeleton-default.html", "script.js", "style.css"],
+	"copyFiles": ["skeleton-default.html", "script.js", "style.css", "search-docs.js"],
 	"targetPath": "build",
 	"targetType": "executable",
 	"buildRequirements": ["allowWarnings"],
