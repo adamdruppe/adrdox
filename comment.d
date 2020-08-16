@@ -43,6 +43,18 @@ static struct MyOutputRange {
 	}
 }
 
+enum TexMathOpt {
+	LaTeX,
+	KaTeX,
+}
+
+TexMathOpt parseTexMathOpt(string str) {
+	switch (str) with(TexMathOpt) {
+		case "latex": return LaTeX;
+		case "katex": return KaTeX;
+		default: throw new Exception("Unsupported 'tex-math' option");
+	}
+}
 
 /*
 	Params:
@@ -2116,10 +2128,20 @@ Element expandDdocMacros2(string txt, Decl decl) {
 
 		if(name == "MATH") {
 			import adrdox.latex;
-			auto got = mathToImgHtml(stuff);
-			if(got is null)
-				return Element.make("span", stuff, "user-math-render-failed");
-			return got;
+			import adrdox.jstex;
+
+			switch (texMathOpt) with(TexMathOpt) {
+				case LaTeX: {
+					auto got = mathToImgHtml(stuff);
+					if(got is null)
+						return Element.make("span", stuff, "user-math-render-failed");
+					return got;
+				}
+				case KaTeX: {
+					return mathToKaTeXHtml(stuff);
+				}
+				default: break;
+			}
 		}
 
 		if(name == "ADRDOX_SAMPLE") {
