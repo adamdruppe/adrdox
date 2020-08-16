@@ -2,6 +2,7 @@ module adrdox.main;
 
 __gshared string skeletonFile = "skeleton.html";
 __gshared string outputDirectory = "generated-docs";
+__gshared TexMathOpt texMathOpt = TexMathOpt.LaTeX;
 
 __gshared bool writePrivateDocs = false;
 __gshared bool documentInternal = false;
@@ -1083,6 +1084,16 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	auto document = new Document();
 	import std.file;
 	document.parseUtf8(readText(findStandardFile(skeletonFile)), true, true);
+
+	switch (texMathOpt) with (TexMathOpt) {
+		case KaTeX: {
+			import adrdox.jstex;
+			prepareForKaTeX(document);
+			break;
+		}
+		default: break;
+	}
+
 	document.title = title ~ " (" ~ decl.fullyQualifiedName ~ ")";
 
 	if(headerTitle.length)
@@ -3510,6 +3521,8 @@ void main(string[] args) {
 	bool copyStandardFiles = true;
 	string headerTitle;
 
+	string texMath = "latex";
+
 	string[] headerLinks;
 	HeaderLink[] headerLinksParsed;
 
@@ -3541,6 +3554,7 @@ void main(string[] args) {
 		"minimal-descent", "Performs minimal descent into generating sub-pages", &minimalDescent,
 		"case-insensitive-filenames", "Adjust generated filenames for case-insensitive file systems", &caseInsensitiveFilenames,
 		"skip-existing", "Skip file generation for modules where the html already exists in the output dir", &skipExisting,
+		"tex-math", "How TeX math should be processed (latex|katex, default=latex)", &texMath,
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
 		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput);
@@ -3571,6 +3585,8 @@ void main(string[] args) {
 		return;
 	}
 
+	texMathOpt = parseTexMathOpt(texMath);
+
 	foreach(l; headerLinks) {
 		auto idx = l.indexOf("=");
 		if(idx == -1)
@@ -3596,6 +3612,17 @@ void main(string[] args) {
 			copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
 			copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
 			copyStandardFileTo(outputDirectory ~ "search-docs.js", "search-docs.js");
+
+			switch (texMathOpt) with (TexMathOpt) {
+				case KaTeX: {
+					import adrdox.jstex;
+					foreach (file; filesForKaTeX) {
+						copyStandardFileTo(outputDirectory ~ file, "katex/" ~ file);
+					}
+					break;
+				}
+				default: break;
+			}
 		}
 
 		/*

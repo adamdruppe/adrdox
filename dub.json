@@ -5,12 +5,12 @@
 	"homepage": "https://github.com/adamdruppe/adrdox",
 	"license": "BSL-1.0",
 
-	"copyFiles": ["skeleton-default.html", "script.js", "style.css", "search-docs.js"],
+	"copyFiles": ["skeleton-default.html", "script.js", "style.css", "search-docs.js", "katex"],
 	"targetPath": "build",
 	"targetType": "executable",
 	"buildRequirements": ["allowWarnings"],
 
 	"sourcePaths": ["Dscanner/libdparse/src"],
-	"sourceFiles": ["doc2.d", "latex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d", "jsvar.d", "script.d", "color.d"],
+	"sourceFiles": ["doc2.d", "latex.d", "jstex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d", "jsvar.d", "script.d", "color.d"],
 	"stringImportPaths": ["."]
 }
