@@ -11,6 +11,6 @@
 	"buildRequirements": ["allowWarnings"],
 
 	"sourcePaths": ["Dscanner/libdparse/src"],
-	"sourceFiles": ["doc2.d", "latex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d", "jsvar.d", "script.d", "html.d", "color.d"],
+	"sourceFiles": ["doc2.d", "latex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d", "jsvar.d", "script.d", "color.d"],
 	"stringImportPaths": ["."]
 }
