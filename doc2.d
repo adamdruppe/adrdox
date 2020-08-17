@@ -1,5 +1,6 @@
 module adrdox.main;
 
+__gshared string dataDirectory;
 __gshared string skeletonFile = "skeleton.html";
 __gshared string outputDirectory = "generated-docs";
 __gshared TexMathOpt texMathOpt = TexMathOpt.LaTeX;
@@ -55,20 +56,51 @@ string handleCaseSensitivity(string s) {
 	return ugh;
 }
 
+bool checkDataDirectory(string stdpath) {
+	import std.file : exists;
+	import std.path : buildPath;
+
+	string[] stdfiles = ["script.js",
+											 "style.css",
+											 "search-docs.js",
+											 "search-docs.html",
+											 "skeleton-default.html"];
+
+	foreach (stdfile; stdfiles) {
+		if (!buildPath(stdpath, stdfile).exists) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool detectDataDirectory(ref string dataDir) {
+	import std.file : thisExePath;
+	import std.path : buildPath, dirName;
+
+	string exeDir = thisExePath.dirName;
+
+	string[] stdpaths = [exeDir,
+											 exeDir.dirName,
+											 buildPath(exeDir.dirName, "share/adrdox")];
+
+	foreach (stdpath; stdpaths) {
+		if (checkDataDirectory(stdpath)) {
+			dataDir = stdpath;
+			return true;
+		}
+	}
+	return false;
+}
+
 // returns empty string if file not found
 string findStandardFile(bool dofail=true) (string stdfname) {
-	import std.file : exists, thisExePath;
-	import std.path : buildPath, dirName;
+	import std.file : exists;
+	import std.path : buildPath;
 	if (!stdfname.exists) {
 		if (stdfname.length && stdfname[0] != '/') {
-			auto path = thisExePath;
-			static foreach (i; 0..2) {
-				{
-					path = path.dirName;
-					string newname = buildPath(path, stdfname);
-					if (newname.exists) return newname;
-				}
-			}
+			string newname = buildPath(dataDirectory, stdfname);
+			if (newname.exists) return newname;
 		}
 		static if (dofail) throw new Exception("standard file '" ~stdfname ~ "' not found!");
 	}
@@ -3529,6 +3561,7 @@ void main(string[] args) {
 	bool skipExisting = false;
 
 	string[] globPathInput;
+	string dataDirPath;
 
 	int jobs = 0;
 	
@@ -3557,7 +3590,8 @@ void main(string[] args) {
 		"tex-math", "How TeX math should be processed (latex|katex, default=latex)", &texMath,
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
-		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput);
+		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput,
+		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath);
 
 	foreach(gpi; globPathInput) {
 		auto idx = gpi.indexOf("=");
@@ -3572,6 +3606,34 @@ void main(string[] args) {
 
 		synchronized(directoriesForPackageMonitor)
 		directoriesForPackage[pathGlob] = dir;
+	}
+
+	if (checkDataDirectory(dataDirPath)) {
+		// use data direcotory from command-line
+		dataDirectory = dataDirPath;
+	} else {
+		import std.process: environment;
+
+		if (dataDirPath.length > 0) {
+			writeln("Invalid data directory given from command line: " ~ dataDirPath);
+		}
+
+		// try get data directory from environment
+		dataDirPath = environment.get("ADRDOX_DATA_DIR");
+
+		if (checkDataDirectory(dataDirPath)) {
+			// use data directory from environment
+			dataDirectory = dataDirPath;
+		} else {
+			if (dataDirPath.length > 0) {
+				writeln("Invalid data directory given from environment variable: " ~ dataDirPath);
+			}
+
+			// try detect data directory automatically
+			if (!detectDataDirectory(dataDirectory)) {
+				throw new Exception("Unable to determine data directory.");
+			}
+		}
 	}
 
 	generatingSource = annotateSource;
