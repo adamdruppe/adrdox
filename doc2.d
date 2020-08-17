@@ -4083,7 +4083,8 @@ void main(string[] args) {
 		// write out the landing page for JS search,
 		// see the comment in the source of that html
 		// for more details
-		writeFile(outputDirectory ~ "search-docs.html", import("search-docs.html"), gzip);
+		auto searchDocsHtml = std.file.readText(findStandardFile("search-docs.html"));
+		writeFile(buildPath(outputDirectory, "search-docs.html"), searchDocsHtml, gzip);
 
 
 		// the search index is a HTML page containing some script
