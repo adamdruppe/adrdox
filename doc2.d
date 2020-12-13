@@ -3815,7 +3815,7 @@ int main(string[] args) {
 	if (opt.helpWanted || args.length == 1) {
 		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2018\n" ~
 			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
-		return;
+		return 0;
 	}
 
 	texMathOpt = parseTexMathOpt(texMath);
