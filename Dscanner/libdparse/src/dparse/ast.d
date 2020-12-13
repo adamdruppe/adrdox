@@ -1704,6 +1704,10 @@ public:
     /** */ BodyStatement bodyStatement;
     /** */ OutStatement outStatement;
     /** */ InStatement inStatement;
+
+
+	bool hadABody;
+
     mixin OpEquals;
 }
 
@@ -2401,6 +2405,8 @@ public:
     /** */ TypeSuffix[] cstyle;
     AtAttribute[] atAttributes;
 
+    string comment;
+
     mixin OpEquals;
 }
 
@@ -2974,6 +2980,7 @@ public:
     /** */ TemplateAliasParameter templateAliasParameter;
     /** */ TemplateTupleParameter templateTupleParameter;
     /** */ TemplateThisParameter templateThisParameter;
+    string comment;
     mixin OpEquals;
 }
 

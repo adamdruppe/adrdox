@@ -1,5 +1,8 @@
 module adrdox.main;
 
+// version=with_http_server
+// version=with_postgres
+
 __gshared string dataDirectory;
 __gshared string skeletonFile = "skeleton.html";
 __gshared string outputDirectory = "generated-docs";
@@ -14,7 +17,6 @@ version(linux)
 	__gshared bool caseInsensitiveFilenames = false;
 else
 	__gshared bool caseInsensitiveFilenames = true;
-
 
 /*
 
@@ -38,6 +40,11 @@ import dparse.ast;
 
 import arsd.dom;
 import arsd.docgen.comment;
+
+version(with_postgres)
+	import arsd.postgres;
+else
+	private alias PostgreSql = typeof(null);
 
 import std.algorithm :sort, canFind;
 
@@ -207,7 +214,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			if(ir.decl is null)
 				output.put(ir.plainText);
 			else
-				output.putTag(`<a class="xref parent-class" href=`~ir.decl.link~`>`~ir.decl.name~`</a> `);
+				output.putTag(`<a class="xref parent-class" href="`~ir.decl.link~`">`~ir.decl.name~`</a> `);
 		}
 
 		if(classDec.templateParameters)
@@ -229,7 +236,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 					continue;
 				output.putTag("<div class=\"aggregate-member\">");
 				if(child.isDocumented())
-					output.putTag("<a href=\""~child.link~"\"");
+					output.putTag("<a href=\""~child.link~"\">");
 				child.getAggregatePrototype(output);
 				if(child.isDocumented())
 					output.putTag("</a>");
@@ -1100,6 +1107,9 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	if(!decl.docsShouldBeOutputted && !overrideOutput)
 		return null;
 
+	if(cast(ImportDecl) decl)
+		return null; // never write imports, it can overwrite the actual thing
+
 	auto title = decl.name;
 	bool justDocs = false;
 	if(auto mod = cast(ModuleDecl) decl) {
@@ -1175,6 +1185,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 
 	s = null;
 	decl.getAnnotatedPrototype(output);
+	//import std.stdio; writeln(s);
+	//content.addChild("div", Html(linkUpHtml(s, decl)), "annotated-prototype");
 	content.addChild("div", Html(s), "annotated-prototype");
 
 	Element lastDt;
@@ -1404,25 +1416,31 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	bool firstMitd = true;
 	foreach(d; decl.children) {
 		if(auto mi = cast(MixedInTemplateDecl) d) {
-			if(firstMitd) {
-				auto h2 = content.addChild("h2", "Mixed In Members");
-				h2.id = "mixed-in-members";
-				firstMitd = false;
-			}
-
-			//mi.name
-
-			string sp;
-			MyOutputRange or = MyOutputRange(&sp);
-			mi.getSimplifiedPrototype(or);
-			auto h3 = content.addChild("h3", Html("From " ~ sp));
 
 			auto thing = decl.lookupName(toText(mi.astNode.mixinTemplateName));
 
 			if(thing) {
-				auto dl = content.addChild("dl").addClass("member-list native");
+				Element dl;
 				foreach(child; thing.children) {
-					if(child.isDocumented) {
+					if(mi.isPrivate && !child.isExplicitlyNonPrivate)
+						continue;
+					if(child.docsShouldBeOutputted) {
+						if(dl is null) {
+							if(firstMitd) {
+								auto h2 = content.addChild("h2", "Mixed In Members");
+								h2.id = "mixed-in-members";
+								firstMitd = false;
+							}
+
+							//mi.name
+
+							string sp;
+							MyOutputRange or = MyOutputRange(&sp);
+							mi.getSimplifiedPrototype(or);
+							auto h3 = content.addChild("h3", Html("From " ~ sp));
+
+							dl = content.addChild("dl").addClass("member-list native");
+						}
 						handleChildDecl(dl, child);
 
 						if(!minimalDescent)
@@ -1760,6 +1778,8 @@ Decl[] declsByUda(string uda, Decl start = null) {
 }
 
 abstract class Decl {
+	private int databaseId;
+
 	bool fakeDecl = false;
 	bool alreadyGenerated = false;
 	abstract string name();
@@ -1774,10 +1794,34 @@ abstract class Decl {
 	abstract void getAnnotatedPrototype(MyOutputRange);
 	abstract void getSimplifiedPrototype(MyOutputRange);
 
+	final string externNote() {
+		bool hadABody;
+		if(auto f = cast(FunctionDecl) this) {
+			if(f.astNode && f.astNode.functionBody)
+				hadABody = f.astNode.functionBody.hadABody;
+		}
+
+		if(hadABody)
+			return ". Be warned that the author may not have intended to support it.";
+
+		switch(externWhat) {
+			case "C":
+			case "C++":
+			case "Windows":
+			case "Objective-C":
+				return " but is binding to " ~ externWhat ~ ". You might be able to learn more by searching the web for its name.";
+			case "System":
+				return " but is binding to an external library. You might be able to learn more by searching the web for its name.";
+			case null:
+			default:
+				return ".";
+		}
+	}
+
 	DocComment parsedDocComment_;
 	final @property DocComment parsedDocComment() {
 		if(parsedDocComment_ is DocComment.init)
-			parsedDocComment_ = parseDocumentationComment(comment, this);
+			parsedDocComment_ = parseDocumentationComment(comment.length ? comment : "/++\nUndocumented in source"~externNote~"\n+/", this);
 		return parsedDocComment_;
 	}
 
@@ -1833,8 +1877,8 @@ abstract class Decl {
 		if(documentUndocumented)
 			return true;
 
-		if(comment.length) // hack
-		return comment.length > 0; // cool, not a hack
+		if(rawComment.length) // hack
+		return rawComment.length > 0; // cool, not a hack
 
 		// if it has any documented children, we want to pretend this is documented too
 		// since then it will be possible to navigate to it
@@ -1876,18 +1920,62 @@ abstract class Decl {
 		return protection == tok!"private";
 	}
 
+	bool isExplicitlyNonPrivate() {
+		IdType protection;
+		bool hadOne;
+		foreach (a; attributes) {
+			if (a.attr && isProtection(a.attr.attribute.type)) {
+				protection = a.attr.attribute.type;
+				hadOne = true;
+			}
+		}
+
+		return hadOne && protection != tok!"private" && protection != tok!"package";
+
+	}
+
+	string externWhat() {
+		LinkageAttribute attr;
+		foreach (a; attributes) {
+			if(a.attr && a.attr.linkageAttribute)
+				attr = cast() a.attr.linkageAttribute;
+		}
+
+		if(attr is null)
+			return null;
+		auto text = attr.identifier.text;
+		if(text == "Objective")
+			text = "Objective-C";
+		else
+			text = text ~ (attr.hasPlusPlus ? "++" : "");
+
+		return text;
+	}
+
 	bool docsShouldBeOutputted() {
+		if(this.rawComment.indexOf("$(NEVER_DOCUMENT)") != -1)
+			return false;
 		if((!this.isPrivate || writePrivateDocs) && this.isDocumented)
 			return true;
-		else if(this.comment.indexOf("$(ALWAYS_DOCUMENT)") != -1)
+		else if(this.rawComment.indexOf("$(ALWAYS_DOCUMENT)") != -1)
 			return true;
 		return false;
 	}
 
 	final bool hasUda(string name) {
-		foreach(a; attributes)
+		foreach(a; attributes) {
 			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.identifier.text == name)
 				return true;
+			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.argumentList)
+				foreach(at; a.attr.atAttribute.argumentList.items) {
+					if(auto e = cast(UnaryExpression) at)
+					if(auto pe = e.primaryExpression)
+					if(auto i = pe.identifierOrTemplateInstance)
+					if(i.identifier.text == name)
+						return true;
+				}
+
+		}
 		return false;
 	}
 
@@ -1895,12 +1983,7 @@ abstract class Decl {
 	// FIXME: it would be nice to inherit documentation from interfaces too.
 
 	bool isProperty() {
-		foreach (a; attributes) {
-			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.identifier.text == "property")
-				return true;
-		}
-
-		return false;
+		return hasUda("property"); // property isn't actually a UDA, but adrdox doesn't care.
 	}
 
 	bool isAggregateMember() {
@@ -2386,6 +2469,12 @@ class ModuleDecl : Decl {
 	override bool isModule() { return true; }
 	override bool isArticle() { return justDocsTitle.length > 0; }
 
+	override bool docsShouldBeOutputted() {
+		if(this.justDocsTitle !is null)
+			return true;
+		return super.docsShouldBeOutputted();
+	}
+
 	override string declarationType() {
 		return isArticle() ? "Article" : "module";
 	}
@@ -2439,7 +2528,7 @@ class AliasDecl : Decl {
 		void cool() {
 			output.putTag("<div class=\"declaration-prototype\">");
 			if(parent !is null && !parent.isModule) {
-				output.putTag("<div class=\"parent-prototype\"");
+				output.putTag("<div class=\"parent-prototype\">");
 				parent.getSimplifiedPrototype(output);
 				output.putTag("</div><div>");
 				getPrototype(output, true);
@@ -2539,10 +2628,13 @@ class VariableDecl : Decl {
 		return it;
 	}
 
-	override void getAnnotatedPrototype(MyOutputRange output) {
+	override void getAnnotatedPrototype(MyOutputRange outputFinal) {
+		string t;
+		MyOutputRange output = MyOutputRange(&t);
+
 		output.putTag("<div class=\"declaration-prototype\">");
 		if(parent !is null && !parent.isModule) {
-			output.putTag("<div class=\"parent-prototype\"");
+			output.putTag("<div class=\"parent-prototype\">");
 			parent.getSimplifiedPrototype(output);
 			output.putTag("</div><div>");
 			auto f = new MyFormatter!(typeof(output))(output);
@@ -2555,6 +2647,8 @@ class VariableDecl : Decl {
 			getSimplifiedPrototypeInternal(output, true);
 		}
 		output.putTag("</div>");
+
+		outputFinal.putTag(linkUpHtml(t, this));
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
@@ -3091,11 +3185,15 @@ class Looker : ASTVisitor {
 		return s; // probably a documented unittest of the module itself
 	}
 
-	void visitInto(D, T)(const(T) t) {
+	void visitInto(D, T)(const(T) t, bool keepAttributes = true) {
 		auto d = new D(t, attributes[$-1]);
 		stack[$-1].addChild(d);
 		stack ~= d;
+		if(!keepAttributes)
+			pushAttributes();
 		t.accept(this);
+		if(!keepAttributes)
+			popAttributes();
 		stack = stack[0 .. $-1];
 
 		static if(is(D == ClassDecl))
@@ -3146,7 +3244,7 @@ class Looker : ASTVisitor {
 		visitInto!EponymousTemplateDecl(dec);
 	}
 	override void visit(const MixinTemplateDeclaration dec) {
-		visitInto!MixinTemplateDecl(dec.templateDeclaration);
+		visitInto!MixinTemplateDecl(dec.templateDeclaration, false);
 	}
 	override void visit(const EnumDeclaration dec) {
 		visitInto!EnumDecl(dec);
@@ -3523,7 +3621,7 @@ void writeFile(string filename, string content, bool gzip) {
 __gshared bool generatingSource;
 __gshared bool blogMode = false;
 
-void main(string[] args) {
+int main(string[] args) {
 	import std.stdio;
 	import std.path : buildPath;
 	import std.getopt;
@@ -3541,6 +3639,8 @@ void main(string[] args) {
 
 	bool makeHtml = true;
 	bool makeSearchIndex = false;
+	string postgresConnectionString = null;
+	string postgresVersionId = null;
 
 	string[] preloadArgs;
 
@@ -3578,6 +3678,8 @@ void main(string[] args) {
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
 		"genSearchIndex|i", "Generate search index, default: false", &makeSearchIndex,
+		"postgresConnectionString", "Specify the postgres database to save search index to. If specified, you must also specify postgresVersionId", &postgresConnectionString,
+		"postgresVersionId", "Specify the version_id to associate saved terms to. If specified, you must also specify postgresConnectionString", &postgresVersionId,
 		"gzip|z", "Gzip generated files as they are created", &gzip,
 		"copy-standard-files", "Copy standard JS/CSS files into target directory (default: true)", &copyStandardFiles,
 		"blog-mode", "Use adrdox as a static site generator for a blog", &blogMode,
@@ -3592,6 +3694,69 @@ void main(string[] args) {
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
 		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput,
 		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath);
+
+	if (opt.helpWanted || args.length == 1) {
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2020\n" ~
+			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
+		return 0;
+	}
+
+	PostgreSql searchDb;
+
+	if(postgresVersionId.length || postgresConnectionString.length) {
+		import std.stdio;
+		version(with_postgres) {
+			if(postgresVersionId.length == 0) {
+				stderr.writeln("Required command line option `postgresVersionId` not set.");
+				return 1;
+			}
+			if(postgresConnectionString.length == 0) {
+				stderr.writeln("Required command line option `postgresConnectionString` not set. It must minimally reference an existing database like \"dbname=adrdox\".");
+				return 1;
+			}
+
+			searchDb = new PostgreSql(postgresConnectionString);
+
+			try {
+				foreach(res; searchDb.query("SELECT schema_version FROM adrdox_schema")) {
+					if(res[0] != "1") {
+						stderr.writeln("Unsupported adrdox_schema version. Maybe update your adrdox?");
+						return 1;
+					}
+				}
+			} catch(DatabaseException e) {
+				// probably table not existing, let's try to create it.
+				try {
+					searchDb.query(import("db.sql"));
+				} catch(Exception e) {
+					stderr.writeln("Database schema check failed: ", e.msg);
+					stderr.writeln("Maybe try recreating the database and/or ensuring your user has full access.");
+					return 1;
+				}
+			}
+
+			if(postgresVersionId == "auto") {
+				// automatically determine one based on each file name; deferred for later.
+				// FIXME
+			} else {
+				bool found = false;
+				foreach(res; searchDb.query("SELECT id FROM package_version WHERE id = ?", postgresVersionId))
+					found = true;
+
+				if(!found) {
+					stderr.writeln("package_version ID ", postgresVersionId, " does not exist in the database");
+					return 1;
+				}
+
+				// delete the existing stuff so we do a full update in this run
+				searchDb.query("DELETE FROM auto_generated_tags WHERE package_version_id = ?", postgresVersionId);
+			}
+
+		} else {
+			stderr.writeln("PostgreSql support not compiled in. Recompile adrdox with -version=with_postgres and try again.");
+			return 1;
+		}
+	}
 
 	foreach(gpi; globPathInput) {
 		auto idx = gpi.indexOf("=");
@@ -3640,12 +3805,6 @@ void main(string[] args) {
 
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
-
-	if (opt.helpWanted || args.length == 1) {
-		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2018\n" ~
-			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
-		return;
-	}
 
 	texMathOpt = parseTexMathOpt(texMath);
 
@@ -3891,7 +4050,7 @@ void main(string[] args) {
 			writeln("not found ", locateSymbol);
 		else
 			writeln(decl.lineNumber);
-		return;
+		return 0;
 	}
 
 	// create dummy packages for those not found in the source
@@ -4036,12 +4195,23 @@ void main(string[] args) {
 		writeln("\n\nListening on http port 8999....");
 
 		cgiMainImpl(["server", "--port", "8999"]);
-		return;
+		return 0;
 	}
 
 	import std.parallelism;
 	if(jobs > 1)
 	defaultPoolThreads = jobs;
+
+	version(linux)
+	if(makeSearchIndex && makeHtml) {
+		import core.sys.posix.unistd;
+		if(fork()) {
+			makeSearchIndex = false; // this fork focuses on html
+			//mustWait = true;
+		} else {
+			makeHtml = false; // and this one does the search
+		}
+	}
 
 	if(makeHtml) {
 		bool[string] alreadyTried;
@@ -4108,13 +4278,13 @@ void main(string[] args) {
 
 		index.writeln("<listing>");
 		foreach(decl; moduleDeclsGenerate) {
+			if(decl.fakeDecl)
+				continue;
 			writeln("Listing ", decl.name);
 
-			writeIndexXml(decl, index, id);
+			writeIndexXml(decl, index, id, postgresVersionId, searchDb);
 		}
 		index.writeln("</listing>");
-
-		id = 0;
 
 		// also making the search index
 		foreach(decl; moduleDeclsGenerate) {
@@ -4122,10 +4292,13 @@ void main(string[] args) {
 				continue;
 			writeln("Generating search for ", decl.name);
 
-			generateSearchIndex(decl, id);
+			generateSearchIndex(decl, searchDb);
 		}
 
 		writeln("Writing search...");
+
+		if(searchDb)
+			searchDb.flushSearchDatabase();
 
 		index.writeln("<index>");
 		foreach(term, arr; searchTerms) {
@@ -4153,6 +4326,8 @@ void main(string[] args) {
 	//import std.stdio;
 	//writeln("press any key to continue");
 	//readln();
+
+	return 0;
 }
 
 struct FileProxy {
@@ -4221,20 +4396,83 @@ string[] splitIdentifier(string name) {
 }
 
 SearchResult[][string] searchTerms;
+string searchInsertToBeFlushed;
+string postgresVersionIdGlobal; // total hack!!!
 
-void generateSearchIndex(Decl decl, ref int id) {
-	if(!decl.docsShouldBeOutputted)
+void saveSearchTerm(PostgreSql searchDb, string term, SearchResult sr, bool isDeep = false) {
+	if(searchDb is null || !isDeep) {
+		searchTerms[term] ~= sr; // save the things for offline xml too
+	}
+	version(with_postgres) {
+		if(searchDb !is null) {
+			if(searchInsertToBeFlushed.length > 4096)
+				searchDb.flushSearchDatabase();
+
+			if(searchInsertToBeFlushed.length)
+				searchInsertToBeFlushed ~= ", ";
+			searchInsertToBeFlushed ~= "('";
+			searchInsertToBeFlushed ~= searchDb.escape(term);
+			searchInsertToBeFlushed ~= "', ";
+			searchInsertToBeFlushed ~= to!string(sr.declId);
+			searchInsertToBeFlushed ~= ", ";
+			searchInsertToBeFlushed ~= to!string(sr.score);
+			searchInsertToBeFlushed ~= ", ";
+			searchInsertToBeFlushed ~= to!string(postgresVersionIdGlobal);
+			searchInsertToBeFlushed ~= ")";
+		}
+	}
+}
+
+void flushSearchDatabase(PostgreSql searchDb) {
+	if(searchDb is null)
+		return;
+	else version(with_postgres) {
+		if(searchInsertToBeFlushed.length) {
+			searchDb.query("INSERT INTO auto_generated_tags (tag, d_symbols_id, score, package_version_id) VALUES " ~ searchInsertToBeFlushed);
+
+			searchInsertToBeFlushed = searchInsertToBeFlushed[$..$];
+			//searchInsertToBeFlushed.assumeSafeAppend;
+		}
+	}
+}
+
+void generateSearchIndex(Decl decl, PostgreSql searchDb) {
+	/*
+	if((*cast(void**) decl) is null)
+		return;
+	scope(exit) {
+		(cast(ubyte*) decl)[0 .. typeid(decl).initializer.length] = 0;
+	}
+	*/
+
+	if(decl.databaseId == 0)
 		return;
 
+	if(!decl.docsShouldBeOutputted)
+		return;
+	if(cast(ImportDecl) decl)
+		return; // never write imports, it can overwrite the actual thing
+
 	// this needs to match the id in index.xml!
-	auto tid = ++id;
+	const tid = decl.databaseId;
+
+// FIXME: if it is undocumented in source, give it a score penalty.
 
 	// exact match on FQL is always a great match
-	searchTerms[decl.fullyQualifiedName] ~= SearchResult(tid, 50);
+	searchDb.saveSearchTerm(decl.fullyQualifiedName, SearchResult(tid, 50));
+
+	// names like GC.free should be a solid match too
+
+	string partialName;
+	if(!decl.isModule)
+		partialName = decl.fullyQualifiedName[decl.parentModule.name.length + 1 .. $];
+
+	if(partialName.length)
+	searchDb.saveSearchTerm(partialName, SearchResult(tid, 35));
 
 	if(decl.name != "this") {
 		// exact match on specific name is worth something too
-		searchTerms[decl.name] ~= SearchResult(tid, 25);
+		searchDb.saveSearchTerm(decl.name, SearchResult(tid, 25));
 
 		if(decl.isModule) {
 			// module names like std.stdio should match stdio strongly,
@@ -4242,7 +4480,7 @@ void generateSearchIndex(Decl decl, ref int id) {
 			// returns.
 			int score = 25;
 			foreach_reverse(part; decl.name.split(".")) {
-				searchTerms[part] ~= SearchResult(tid, score);
+				searchDb.saveSearchTerm(part, SearchResult(tid, score));
 				score -= 10;
 				if(score <= 0)
 					break;
@@ -4250,86 +4488,110 @@ void generateSearchIndex(Decl decl, ref int id) {
 		}
 
 		// and so is fuzzy match
-		if(decl.name != decl.name.toLower)
-			searchTerms[decl.name.toLower] ~= SearchResult(tid, 15);
+		if(decl.name != decl.name.toLower) {
+			searchDb.saveSearchTerm(decl.name.toLower, SearchResult(tid, 15));
+		}
+		if(partialName.length && partialName != decl.name)
+		if(partialName != partialName.toLower)
+			searchDb.saveSearchTerm(partialName.toLower, SearchResult(tid, 20));
 
 		// and so is partial word match
 		auto splitNames = splitIdentifier(decl.name);
 		if(splitNames.length) {
 			foreach(name; splitNames) {
-				searchTerms[name] ~= SearchResult(tid, 6);
+				searchDb.saveSearchTerm(name, SearchResult(tid, 6));
 				if(name != name.toLower)
-					searchTerms[name.toLower] ~= SearchResult(tid, 3);
+					searchDb.saveSearchTerm(name.toLower, SearchResult(tid, 3));
 			}
 		}
 	}
 
 	// and we want to match parent names, though worth less.
+	version(none) {
 	Decl parent = decl.parent;
 	while(parent !is null) {
-		searchTerms[parent.name] ~= SearchResult(tid, 5);
+		searchDb.saveSearchTerm(parent.name, SearchResult(tid, 5));
 		if(parent.name != parent.name.toLower)
-			searchTerms[parent.name.toLower] ~= SearchResult(tid, 2);
+			searchDb.saveSearchTerm(parent.name.toLower, SearchResult(tid, 2));
 
 		auto splitNames = splitIdentifier(parent.name);
 		if(splitNames.length) {
 			foreach(name; splitNames) {
-				searchTerms[name] ~= SearchResult(tid, 3);
+				searchDb.saveSearchTerm(name, SearchResult(tid, 3));
 				if(name != name.toLower)
-					searchTerms[name.toLower] ~= SearchResult(tid, 2);
+					searchDb.saveSearchTerm(name.toLower, SearchResult(tid, 2));
 			}
 		}
 
 
 		parent = parent.parent;
 	}
+	}
 
-	Document document;
-	//if(decl.fullyQualifiedName in generatedDocuments)
-		//document = generatedDocuments[decl.fullyQualifiedName];
-	//else
-		document = writeHtml(decl, false, false, null, null);
-	assert(document !is null);
+	bool deepSearch = searchDb !is null;
 
-	// FIXME: pulling this from the generated html is a bit inefficient.
+	if(deepSearch) {
+		Document document;
+		//if(decl.fullyQualifiedName in generatedDocuments)
+			//document = generatedDocuments[decl.fullyQualifiedName];
+		//else
+			document = null;// writeHtml(decl, false, false, null, null);
+		//assert(document !is null);
 
-	// tags are worth a lot
-	foreach(tag; document.querySelectorAll(".tag"))
-		searchTerms[tag.attrs.name] ~= SearchResult(tid, to!int(tag.attrs.value.length ? tag.attrs.value : "0"));
+		// FIXME: pulling this from the generated html is a bit inefficient.
 
-	// and other names that are referenced are worth quite a bit.
-	foreach(tag; document.querySelectorAll(".xref"))
-		searchTerms[tag.innerText] ~= SearchResult(tid, tag.hasClass("parent-class") ? 10 : 5);
-	foreach(tag; document.querySelectorAll("a[data-ident][title]"))
-		searchTerms[tag.dataset.ident] ~= SearchResult(tid, 3);
-	foreach(tag; document.querySelectorAll("a.hid[title]"))
-		searchTerms[tag.innerText] ~= SearchResult(tid, 3);
+		bool[const(char)[]] wordsUsed;
 
-	// and full-text search
-	import ps = PorterStemmer;
-	ps.PorterStemmer s;
-	bool[const(char)[]] wordsUsed;
-	foreach(tag; document.querySelectorAll(".documentation-comment")) {
-		foreach(word; getWords(tag.innerText)) {
-			auto w = s.stem(word.toLower);
-			if(w.isIrrelevant())
-				continue;
-			if(w in wordsUsed)
-				continue;
-			wordsUsed[w] = true;
-			searchTerms[s.stem(word.toLower)] ~= SearchResult(tid, 1);
+		// tags are worth a lot
+		version(none)
+		foreach(tag; document.querySelectorAll(".tag")) {
+			if(tag.attrs.name in wordsUsed) continue;
+			wordsUsed[tag.attrs.name] = true;
+			searchDb.saveSearchTerm(tag.attrs.name, SearchResult(tid, to!int(tag.attrs.value.length ? tag.attrs.value : "0")), true);
 		}
+
+		// and other names that are referenced are worth quite a bit.
+		version(none)
+		foreach(tag; document.querySelectorAll(".xref")) {
+			if(tag.innerText in wordsUsed) continue;
+			wordsUsed[tag.innerText] = true;
+			searchDb.saveSearchTerm(tag.innerText, SearchResult(tid, tag.hasClass("parent-class") ? 10 : 5), true);
+		}
+		/*
+		foreach(tag; document.querySelectorAll("a[data-ident][title]"))
+			searchDb.saveSearchTerm(tag.dataset.ident, SearchResult(tid, 3), true);
+		foreach(tag; document.querySelectorAll("a.hid[title]"))
+			searchDb.saveSearchTerm(tag.innerText, SearchResult(tid, 3), true);
+		*/
+
+		// and full-text search. limited to first paragraph for speed reasons, hoping it is good enough for practical purposes
+		import ps = PorterStemmer;
+		ps.PorterStemmer s;
+		//foreach(tag; document.querySelectorAll(".documentation-comment.synopsis > p")){ //:first-of-type")) {
+			//foreach(word; getWords(tag.innerText)) {
+			foreach(word; getWords(decl.parsedDocComment.ddocSummary ~ "\n" ~ decl.parsedDocComment.synopsis)) {
+				auto w = s.stem(word.toLower);
+				if(w.length < 3) continue;
+				if(w.isIrrelevant())
+					continue;
+				if(w in wordsUsed)
+					continue;
+				wordsUsed[w] = true;
+				searchDb.saveSearchTerm(s.stem(word.toLower).idup, SearchResult(tid, 1), true);
+			}
+		//}
 	}
 
 	foreach(child; decl.children)
-		generateSearchIndex(child, id);
+		generateSearchIndex(child, searchDb);
 }
 
 bool isIrrelevant(in char[] s) {
-	foreach(w; irrelevantWordList)
-		if(w == s)
-			return true;
-	return false;
+	switch(s) {
+		foreach(w; irrelevantWordList)
+			case w: return true;
+		default: return false;
+	}
 }
 
 // These are common words in English, which I'm generally
@@ -4337,6 +4599,11 @@ bool isIrrelevant(in char[] s) {
 // aren't relevant keywords
 import std.meta;
 alias irrelevantWordList = AliasSeq!(
+    "undocumented",
+    "source",
+    "intended",
+    "author",
+    "warned",
     "the",
     "of",
     "and",
@@ -4458,22 +4725,66 @@ string[] getWords(string text) {
 
 import std.stdio : File;
 
-void writeIndexXml(Decl decl, FileProxy index, ref int id) {
+int getNestingLevel(Decl decl) {
+	int count = 0;
+	while(decl && !decl.isModule) {
+		decl = decl.parent;
+		count++;
+	}
+	return count;
+}
+
+void writeIndexXml(Decl decl, FileProxy index, ref int id, string postgresVersionId, PostgreSql searchDb) {
 //import std.stdio;writeln(decl.fullyQualifiedName, " ", decl.isPrivate, " ", decl.isDocumented);
 	if(!decl.docsShouldBeOutputted)
 		return;
+	if(cast(ImportDecl) decl)
+		return; // never write imports, it can overwrite the actual thing
 
 	auto cc = decl.parsedDocComment;
 
+	auto desc = formatDocumentationComment(cc.ddocSummary, decl);
+
+	.postgresVersionIdGlobal = postgresVersionId;
+
+	if(searchDb is null)
+		decl.databaseId = ++id;
+	else version(with_postgres) {
+
+		// this will leave stuff behind w/o the delete line but it is sooooo slow to rebuild this that reusing it is a big win for now
+		// searchDb.query("DELETE FROM d_symbols WHERE package_version_id = ?", postgresVersionId);
+		foreach(res; searchDb.query("SELECT id FROM d_symbols WHERE package_version_id = ? AND fully_qualified_name = ?", postgresVersionId, decl.fullyQualifiedName)) {
+			decl.databaseId = res[0].to!int;
+		}
+
+		if(decl.databaseId == 0)
+		foreach(res; searchDb.query("INSERT INTO d_symbols
+			(package_version_id, name, nesting_level, module_name, fully_qualified_name, url_name, summary)
+			VALUES
+			(?, ?, ?, ?, ?, ?, ?)
+			RETURNING id",
+			postgresVersionId,
+			decl.name,
+			getNestingLevel(decl),
+			decl.parentModule.name,
+			decl.fullyQualifiedName,
+			decl.link,
+			desc
+		))
+		{
+			decl.databaseId = res[0].to!int;
+		}
+	}
+
 	// the id needs to match the search index!
-	index.write("<decl id=\"" ~ to!string(++id) ~ "\" type=\""~decl.declarationType~"\">");
+	index.write("<decl id=\"" ~ to!string(decl.databaseId) ~ "\" type=\""~decl.declarationType~"\">");
 
 	index.write("<name>" ~ xmlEntitiesEncode(decl.name) ~ "</name>");
-	index.write("<desc>" ~ xmlEntitiesEncode(formatDocumentationComment(cc.ddocSummary, decl)) ~ "</desc>");
+	index.write("<desc>" ~ xmlEntitiesEncode(desc) ~ "</desc>");
 	index.write("<link>" ~ xmlEntitiesEncode(decl.link) ~ "</link>");
 
 	foreach(child; decl.children)
-		writeIndexXml(child, index, id);
+		writeIndexXml(child, index, id, postgresVersionId, searchDb);
 
 	index.write("</decl>");
 }

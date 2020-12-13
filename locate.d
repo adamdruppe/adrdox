@@ -1,12 +1,12 @@
 // FIXME: add +proj and -proj to adjust project results
 
+// dmdi -g -debug -version=vps locate stemmer.d -oflocate_vps -version=scgi
+
 // my local config assumes this will be on port 9653
 
 module adrdox.locate;
 
 import arsd.postgres;
-
-//  # dpldocs: if one request, go right to it. and split camel case and ry rearranging words. File.size returned nothing
 
 import ps = PorterStemmer;
 import arsd.cgi;
@@ -19,144 +19,143 @@ import std.string : toLower, replace, split;
 
 PostgreSql db_;
 
+enum projectAdjustment = 0;
+
 PostgreSql db() {
-	if(db_ is null)
-		db_ = new PostgreSql("dbname=dpldocs user=me");
+	if(db_ is null) {
+		db_ = new PostgreSql("dbname=adrdox");
+	}
 	return db_;
 }
 
-class ProjectSearcher {
-	int projectId;
-	this(string path, string name, int projectAdjustment) {
+TermElement[] resultsByTerm(string term) {
+	TermElement[] ret;
+	foreach(row; db.query("SELECT d_symbols_id, score FROM auto_generated_tags WHERE tag = ? ORDER BY score DESC LIMIT 15", term))
+		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
+	return ret;
+}
 
-		//foreach(row; db.query("SELECT id FROM projects WHERE name = ?", name))
-			//projectId = to!int(row[0]);
-
-		projectId = 1;
-
-		this.projectName = name;
-		this.projectAdjustment = projectAdjustment;
+DeclElement getDecl(int i) {
+	foreach(row; db.query("
+		SELECT
+			d_symbols.*,
+			dub_package.url_name AS package_subdomain
+		FROM
+			d_symbols
+		INNER JOIN
+			package_version ON package_version.id = d_symbols.package_version_id
+		INNER JOIN
+			dub_package ON dub_package.id = package_version.dub_package_id
+		WHERE
+			d_symbols.id = ?
+			AND
+			is_latest = true
+		", i)) {
+		return DeclElement(row["fully_qualified_name"], row["summary"], row["url_name"], row["id"].to!int, "", 0, row["package_subdomain"]);
 	}
+	return DeclElement.init;
+}
 
-	string projectName;
-	int projectAdjustment = 0;
+static struct TermElement {
+	int declId;
+	int score;
+}
 
-	TermElement[] resultsByTerm(string term) {
-		TermElement[] ret;
-		// FIXME: project id?!?!?
-		foreach(row; db.query("SELECT declId, score FROM terms WHERE term = ? ORDER BY score DESC LIMIT 15", term))
-			ret ~= TermElement(to!int(row[0]), to!int(row[1]));
-		return ret;
-	}
+static struct DeclElement {
+	string name;
+	string description; // actually HTML
+	string link;
+	int id;
+	string type;
+	int parent;
+	string packageName;
+}
 
-	DeclElement getDecl(int i) {
-		foreach(row; db.query("SELECT * FROM decls WHERE id = ? AND project_id = ?", i, projectId)) {
-			return DeclElement(row["name"], row["description"], row["link"], row["id"].to!int, row["type"], row["parent"].length ? row["parent"].to!int : 0);
+static struct Magic {
+	int declId;
+	int score;
+	DeclElement decl;
+}
+
+Magic[] getPossibilities(string search) {
+	int[int] declScores;
+
+	int[int] declHits;
+
+	ps.PorterStemmer s;
+
+	auto terms = search.split(" ");// ~ search.split(".");
+	// filter empty terms
+	for(int i = 0; i < terms.length; i++) {
+		if(terms[i].length == 0) {
+			terms[i] = terms[$-1];
+			terms = terms[0 .. $-1];
+			i--;
 		}
-		return DeclElement.init;
 	}
 
-	static struct TermElement {
-		int declId;
-		int score;
-	}
-
-	static struct DeclElement {
-		string name;
-		string description; // actually HTML
-		string link;
-		int id;
-		string type;
-		int parent;
-	}
-
-	static struct Magic {
-		int declId;
-		int score;
-		DeclElement decl;
-		ProjectSearcher searcher;
-	}
-
-	Magic[] getPossibilities(string search) {
-		int[int] declScores;
-
-		int[int] declHits;
-
-		ps.PorterStemmer s;
-
-		auto terms = search.split(" ");// ~ search.split(".");
-		// filter empty terms
-		for(int i = 0; i < terms.length; i++) {
-			if(terms[i].length == 0) {
-				terms[i] = terms[$-1];
-				terms = terms[0 .. $-1];
-				i--;
-			}
+	void addHit(TermElement item, size_t idx) {
+		if(idx == 0) {
+			declScores[item.declId] += item.score;
+			return;
 		}
-
-		void addHit(TermElement item, size_t idx) {
-			if(idx == 0) {
-				declScores[item.declId] += item.score;
-				return;
-			}
-			if(item.declId in declScores) {
-				declScores[item.declId] += 25; // hit both terms
-				declScores[item.declId] += item.score;
-			} else {
-				// only hit one term...
-				declScores[item.declId] += item.score / 2;
-			}
+		if(item.declId in declScores) {
+			declScores[item.declId] += 25; // hit both terms
+			declScores[item.declId] += item.score;
+		} else {
+			// only hit one term...
+			declScores[item.declId] += item.score / 2;
 		}
+	}
 
-		// On each term, we want to check for exact match and fuzzy match / natural language match.
-		// FIXME: if something matches both it should be really strong. see time_t vs "time_t std.datetime"
-		foreach(idx, term; terms) {
-			assert(term.length > 0);
+	// On each term, we want to check for exact match and fuzzy match / natural language match.
+	// FIXME: if something matches both it should be really strong. see time_t vs "time_t std.datetime"
+	foreach(idx, term; terms) {
+		assert(term.length > 0);
 
-			foreach(item; resultsByTerm(term)) {
-				addHit(item, idx);
-				declHits[item.declId] |= 1 << idx;
-			}
-			auto l = term.toLower;
-			if(l != term)
+		foreach(item; resultsByTerm(term)) {
+			addHit(item, idx);
+			declHits[item.declId] |= 1 << idx;
+		}
+		auto l = term.toLower;
+		if(l != term)
 			foreach(item; resultsByTerm(l)) {
 				addHit(item, idx);
 				declHits[item.declId] |= 1 << idx;
 			}
-			auto st = s.stem(term.toLower).idup;
-			if(st != l)
+		auto st = s.stem(term.toLower).idup;
+		if(st != l)
 			foreach(item; resultsByTerm(st)) {
 				addHit(item, idx);
 				declHits[item.declId] |= 1 << idx;
 			}
+	}
+
+	Magic[] magic;
+
+	foreach(decl, score; declScores) {
+		auto hits = declHits[decl];
+		foreach(idx, term; terms) {
+			if(!(hits & (1 << idx)))
+				score /= 2;
 		}
+		magic ~= Magic(decl, score + projectAdjustment, getDecl(decl));
+	}
 
-		Magic[] magic;
-
-		foreach(decl, score; declScores) {
-			auto hits = declHits[decl];
-			foreach(idx, term; terms) {
-				if(!(hits & (1 << idx)))
-					score /= 2;
+	if(magic.length == 0) {
+		foreach(term; terms) {
+			if(term.length == 0) continue;
+			term = term.toLower();
+			foreach(row; db.query("SELECT id, fully_qualified_name FROM d_symbols WHERE fully_qualified_name LIKE ?", term[0 .. 1] ~ "%")) {
+				string name = row[1];
+				int id = row[0].to!int;
+				import std.algorithm;
+				name = name.toLower;
+				auto dist = cast(int) levenshteinDistance(name, term);
+				if(dist <= 2)
+					magic ~= Magic(id, projectAdjustment + (3 - dist), getDecl(id));
 			}
-			magic ~= Magic(decl, score + projectAdjustment, getDecl(decl), this);
 		}
-
-		if(magic.length == 0) {
-			foreach(term; terms) {
-				if(term.length == 0) continue;
-				term = term.toLower();
-				//foreach(row; db.query("SELECT id, term FROM terms WHERE score >= 10")) {
-				foreach(row; db.query("SELECT id, name FROM decls WHERE name LIKE ?", term[0 .. 1] ~ "%")) {
-					string name = row[1];
-					int id = row[0].to!int;
-					import std.algorithm;
-					name = name.toLower;
-					auto dist = cast(int) levenshteinDistance(name, term);
-					if(dist <= 2)
-						magic ~= Magic(id, projectAdjustment + (3 - dist), getDecl(id), this);
-				}
-			}
 		}
 
 		// boosts based on topography
@@ -175,54 +174,11 @@ class ProjectSearcher {
 		return magic;
 	}
 
-}
-
-__gshared ProjectSearcher[] projectSearchers;
-
-shared static this() {
-	version(vps) {
-		version(embedded_httpd)
-			processPoolSize = 2;
-
-		import std.file;
-
-		foreach(dirName; dirEntries("/dpldocs/", SpanMode.shallow)) {
-			string filename;
-			filename = dirName ~ "/master/adrdox-generated/search-results.html.gz";
-			if(!exists(filename)) {
-				filename = null;
-				foreach(fn; dirEntries(dirName, "search-results.html.gz", SpanMode.depth)) {
-					filename = fn;
-					break;
-				}
-			}
-
-			if(filename.length) {
-				try {
-				projectSearchers ~= new ProjectSearcher(filename, dirName["/dpldocs/".length .. $], 0);
-				import std.stdio; writeln("Loading ", filename);
-				} catch(Exception e) {
-				import std.stdio; writeln("FAILED ", filename, "\n", e);
-
-				}
-			}
-		}
-
-		import std.stdio;
-		writeln("Ready");
-
-	} else {
-		projectSearchers ~= new ProjectSearcher("experimental-docs/search-results.html", "", 5);
-		//projectSearchers ~= new ProjectSearcher("experimental-docs/std.xml", "Standard Library", 5);
-		//projectSearchers ~= new ProjectSearcher("experimental-docs/arsd.xml", "arsd", 4);
-		//projectSearchers ~= new ProjectSearcher("experimental-docs/vibe.xml", "Vibe.d", 0);
-		//projectSearchers ~= new ProjectSearcher("experimental-docs/dmd.xml", "DMD", 0);
-	}
-}
-
 import std.uri;
 
 void searcher(Cgi cgi) {
+
+	auto search = cgi.request("q", cgi.request("searchTerm", cgi.queryString));
 
 	version(vps) {
 		string path = cgi.requestUri;
@@ -235,6 +191,12 @@ void searcher(Cgi cgi) {
 		if(path.length && path[0] == '/')
 			path = path[1 .. $];
 
+                if(path.length == 0 && search.length == 0) {
+			import std.file;
+
+			cgi.write(std.file.read("/dpldocs-build/search-home.html"), true);
+			return;
+                }
 
 
 		if(path == "script.js") {
@@ -253,8 +215,10 @@ void searcher(Cgi cgi) {
 		}
 	}
 
-	auto search = cgi.request("q", cgi.request("searchTerm", cgi.queryString));
 	alias searchTerm = search;
+
+	if(search.length == 0 && path.length)
+		search = path;
 
 	if(search.length == 0) {
 		cgi.setResponseLocation("/");
@@ -312,20 +276,23 @@ void searcher(Cgi cgi) {
 			return;
 		default:
 			// just continue
-			if(std.file.exists("experimental-docs/" ~ searchTerm ~ ".1.html")) {
+			version(vps) { } else {
+			if(std.file.exists("/var/www/dpldocs.info/experimental-docs/" ~ searchTerm ~ ".1.html")) {
 				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".1.html");
 				return;
 			}
-			if(std.file.exists("experimental-docs/" ~ searchTerm ~ ".html")) {
+			if(std.file.exists("/var/www/dpldocs.info/experimental-docs/" ~ searchTerm ~ ".html")) {
 				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".html");
 				return;
+			}
+				// redirect to vps
+				if("local" !in cgi.get)
+				cgi.setResponseLocation("//search.dpldocs.info/?q=" ~ std.uri.encodeComponent(searchTerm));
 			}
 	}
 
 
-	ProjectSearcher.Magic[] magic;
-	foreach(searcher; projectSearchers)
-		magic ~= searcher.getPossibilities(search);
+	Magic[] magic = getPossibilities(search);
 
 	sort!((a, b) => a.score > b.score)(magic);
 
@@ -366,7 +333,7 @@ void searcher(Cgi cgi) {
 	auto ml = pc.addChild("dl");
 	ml.className = "member-list";
 
-	string getFqn(ProjectSearcher searcher, ProjectSearcher.DeclElement i) {
+	string getFqn(DeclElement i) {
 		string n;
 		while(true) {
 			if(n) n = "." ~ n;
@@ -375,7 +342,7 @@ void searcher(Cgi cgi) {
 				break;
 			if(i.parent == 0)
 				break;
-			i = searcher.getDecl(i.parent);
+			i = getDecl(i.parent);
 			if(i.id == 0)
 				break;
 		}
@@ -388,16 +355,16 @@ void searcher(Cgi cgi) {
 		auto decl = item.decl;
 		if(decl.id == 0) continue; // should never happen
 		version(vps)
-			auto link = "http://"~item.searcher.projectName~".dpldocs.info/" ~ decl.link;
+			auto link = "http://"~decl.packageName~".dpldocs.info/" ~ decl.link;
 		else
 			auto link = "http://dpldocs.info/experimental-docs/" ~ decl.link;
-		auto fqn = getFqn(item.searcher, decl);
+		auto fqn = getFqn(decl);
 		if(fqn in alreadyPresent)
 			continue;
 		alreadyPresent[fqn] = true;
 		auto dt = ml.addChild("dt");
 		dt.addClass("search-result");
-		dt.addChild("span", item.searcher.projectName).addClass("project-name");
+		dt.addChild("span", decl.packageName).addClass("project-name");
 		dt.addChild("br");
 		dt.addChild("a", fqn.replace(".", ".\u200B"), link);
 		dt.dataset.score = to!string(item.score);

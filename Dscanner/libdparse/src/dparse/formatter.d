@@ -2031,7 +2031,8 @@ class Formatter(Sink)
                 put(", ");
                 format(linkageAttribute.identifierChain);
             }
-        }
+        } else if(linkageAttribute.identifier.text == "Objective")
+            put("-C");
         put(")");
     }
 

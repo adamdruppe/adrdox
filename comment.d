@@ -311,6 +311,34 @@ struct DocComment {
 	void writeDetails(T = FunctionDeclaration)(MyOutputRange output, const T functionDec = null, Decl.ProcessedUnittest[] utInfo = null) {
 		auto f = new MyFormatter!(typeof(output))(output, decl);
 
+		string[] params = this.params;
+
+
+		static if(is(T == FunctionDeclaration) || is(T == Constructor)) {
+		if(functionDec !is null) {
+			auto dec = functionDec;
+			if(dec.templateParameters && dec.templateParameters.templateParameterList)
+			foreach(parameter; dec.templateParameters.templateParameterList.items) {
+				if(auto name = getIdent(parameter.templateTypeParameter))
+					if(name.length && parameter.comment.length) params ~= name ~ "=" ~ preprocessComment(parameter.comment, decl);
+				if(auto name = getIdent(parameter.templateValueParameter))
+					if(name.length && parameter.comment.length) params ~= name ~ "=" ~ preprocessComment(parameter.comment, decl);
+				if(auto name = getIdent(parameter.templateAliasParameter))
+					if(name.length && parameter.comment.length) params ~= name ~ "=" ~ preprocessComment(parameter.comment, decl);
+				if(auto name = getIdent(parameter.templateTupleParameter))
+					if(name.length && parameter.comment.length) params ~= name ~ "=" ~ preprocessComment(parameter.comment, decl);
+				if(parameter.templateThisParameter)
+				if(auto name = getIdent(parameter.templateThisParameter.templateTypeParameter))
+					if(name.length && parameter.comment.length) params ~= name ~ "=" ~ preprocessComment(parameter.comment, decl);
+			}
+			foreach(p; functionDec.parameters.parameters) {
+				auto name = p.name.text;
+				if(name.length && p.comment.length)
+					params ~= name ~ "=" ~ preprocessComment(p.comment, decl);
+			}
+		}
+		}
+
 		if(params.length) {
 			int count = 0;
 			foreach(param; params) {
@@ -591,6 +619,8 @@ string preprocessComment(string comment, Decl decl) {
 		if(line.length >= poop.length && line.startsWith(poop)) {
 			if(line.length > poop.length && line[poop.length] == ' ')
 				newComment ~= line[poop.length + 1 .. $];
+			else if(line.length > poop.length && line[poop.length] == '/' && poop != "/")
+				newComment ~= line;
 			else
 				newComment ~= line[poop.length .. $];
 		}
@@ -1880,6 +1910,7 @@ static this() {
 		"XREF_PACK" : `<a href="std.$1.$2.$3.html">std.$1.$2.$3</a>`,
 		"MYREF" : `<a href="$(FULLY_QUALIFIED_NAME).$0.html">$0</a>`,
 		"LREF" : `<a class="symbol-reference" href="$(MODULE_NAME).$0.html">$0</a>`,
+		// FIXME: OBJECTREF
 		"LREF2" : "MAGIC",
 		"MREF" : `MAGIC`,
 		"WEB" : `<a href="http://$1">$2</a>`,
@@ -1891,6 +1922,7 @@ static this() {
 		"D_STRING" : `<tt>$1</tt>`,
 		"D_CODE_STRING" : `<tt>$1</tt>`,
 		"D_CODE" : `<pre>$0</pre>`,
+		"HIGHLIGHT" : `<span class="specially-highlighted">$0</span>`,
 		"HTTPS" : `<a href="https://$1">$2</a>`,
 
 		"RES": `<i>result</i>`,
@@ -1924,6 +1956,7 @@ static this() {
 		"SUB": "<span>$1<sub>$2</sub></span>",
 		"SQRT" : "\u221a",
 		"SUPERSCRIPT": "<sup>$1</sup>",
+		"SUBSCRIPT": "<sub>$1</sub>",
 		"POWER": "<span>$1<sup>$2</sup></span>",
 		"NAN": "<span class=\"nan\">NaN</span>",
 		"PLUSMN": "\u00b1",
@@ -1946,6 +1979,7 @@ static this() {
 		"D_STRING" : 1,
 		"D_CODE_STRING": 1,
 		"D_CODE": 1,
+		"HIGHLIGHT": 1,
 		"HTTPS": 2,
 		"DIVC" : 1,
 		"LINK2" : 2,
@@ -1971,6 +2005,7 @@ static this() {
 		"SUB": 2,
 		"SQRT" : 1,
 		"SUPERSCRIPT": 1,
+		"SUBSCRIPT": 1,
 		"POWER": 2,
 		"NAN": 1,
 		"PLUSMN": 1,
@@ -2104,6 +2139,7 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			return Element.make("magic-command").setAttribute("class", stuff);
 
 		if(name == "EMBED_UNITTEST") {
+			// FIXME: use /// Documents: Foo.bar to move a test over to something else
 			auto id = stuff.strip;
 			foreach(ref ut; decl.getProcessedUnittests()) {
 				if(ut.comment.canFind("$(ID " ~ id ~ ")")) {

@@ -1,6 +1,17 @@
+// dmd -g -ofscripttest -unittest -main script.d jsvar.d && ./scripttest
 /*
 
 	FIXME: i kinda do want a catch type filter e.g. catch(Exception f)
+		and perhaps overloads
+
+
+
+	For type annotations, maybe it can statically match later, but right now
+	it just forbids any assignment to that variable that isn't that type.
+
+	I'll have to define int, float, etc though as basic types.
+
+
 
 	FIXME: I also kinda want implicit construction of structs at times.
 
@@ -38,6 +49,9 @@
 	your existing knowledge from Javascript will carry over, making it hopefully easy to use right out of the box.
 	See the [#examples] to quickly get the feel of the script language as well as the interop.
 
+	I haven't benchmarked it, but I expect it is pretty slow. My goal is to see what is possible for easy interoperability
+	with dynamic functionality and D rather than speed.
+
 
 	$(TIP
 		A goal of this language is to blur the line between D and script, but
@@ -68,6 +82,7 @@
 
 	OVERVIEW
 	$(LIST
+	* Can subclass D objects in script. See [http://dpldocs.info/this-week-in-d/Blog.Posted_2020_04_27.html#subclasses-in-script
 	* easy interop with D thanks to arsd.jsvar. When interpreting, pass a var object to use as globals.
 		This object also contains the global state when interpretation is done.
 	* mostly familiar syntax, hybrid of D and Javascript
@@ -223,6 +238,8 @@ make sure superclass ctors are called
 
 
 	History:
+		September 1, 2020: added overloading for functions and type matching in `catch` blocks among other bug fixes
+
 		April 28, 2020: added `#{}` as an alternative to the `json!q{}` syntax for object literals. Also fixed unary `!` operator.
 
 		April 26, 2020: added `switch`, fixed precedence bug, fixed doc issues and added some unittests
@@ -1294,9 +1311,14 @@ class CastExpression : Expression {
 
 	override InterpretResult interpret(PrototypeObject sc) {
 		var n = e1.interpret(sc).value;
-		foreach(possibleType; CtList!("int", "long", "float", "double", "real", "char", "dchar", "string", "int[]", "string[]", "float[]")) {
-			if(type == possibleType)
+		switch(type) {
+			foreach(possibleType; CtList!("int", "long", "float", "double", "real", "char", "dchar", "string", "int[]", "string[]", "float[]")) {
+			case possibleType:
 				n = mixin("cast(" ~ possibleType ~ ") n");
+			break;
+			}
+			default:
+				// FIXME, we can probably cast other types like classes here.
 		}
 
 		return InterpretResult(n, sc);
@@ -1306,6 +1328,7 @@ class CastExpression : Expression {
 class VariableDeclaration : Expression {
 	string[] identifiers;
 	Expression[] initializers;
+	string[] typeSpecifiers;
 
 	this() {}
 
@@ -1314,7 +1337,12 @@ class VariableDeclaration : Expression {
 		foreach(i, ident; identifiers) {
 			if(i)
 				s ~= ", ";
-			s ~= "var " ~ ident;
+			s ~= "var ";
+			if(typeSpecifiers[i].length) {
+				s ~= typeSpecifiers[i];
+				s ~= " ";
+			}
+			s ~= ident;
 			if(initializers[i] !is null)
 				s ~= " = " ~ initializers[i].toString();
 		}
@@ -1334,6 +1362,67 @@ class VariableDeclaration : Expression {
 			}
 		}
 		return InterpretResult(n, sc);
+	}
+}
+
+class FunctionDeclaration : Expression {
+	DotVarExpression where;
+	string ident;
+	FunctionLiteralExpression expr;
+
+	this(DotVarExpression where, string ident, FunctionLiteralExpression expr) {
+		this.where = where;
+		this.ident = ident;
+		this.expr = expr;
+	}
+
+	override InterpretResult interpret(PrototypeObject sc) {
+		var n = expr.interpret(sc).value;
+
+		var replacement;
+
+		if(expr.isMacro) {
+			// can't overload macros
+			replacement = n;
+		} else {
+			var got;
+
+			if(where is null) {
+				got = sc._getMember(ident, false, false);
+			} else {
+				got = where.interpret(sc).value;
+			}
+
+			OverloadSet os = got.get!OverloadSet;
+			if(os is null) {
+				os = new OverloadSet;
+			}
+
+			os.addOverload(OverloadSet.Overload(expr.arguments ? toTypes(expr.arguments.typeSpecifiers, sc) : null, n));
+
+			replacement = var(os);
+		}
+
+		if(where is null) {
+			sc._getMember(ident, false, false) = replacement;
+		} else {
+			where.setVar(sc, replacement, false, true);
+		}
+
+		return InterpretResult(n, sc);
+	}
+
+	override string toString() {
+		string s = (expr.isMacro ? "macro" : "function") ~ " ";
+		s ~= ident;
+		s ~= "(";
+		if(expr.arguments !is null)
+			s ~= expr.arguments.toString();
+
+		s ~= ") ";
+		s ~= expr.functionBody.toString();
+
+		return s;
 	}
 }
 
@@ -1898,6 +1987,53 @@ unittest {
 	});
 }
 
+unittest {
+	// overloads
+	interpret(q{
+		function foo(int a) { return 10 + a; }
+		function foo(float a) { return 100 + a; }
+		function foo(string a) { return "string " ~ a; }
+
+		assert(foo(4) == 14);
+		assert(foo(4.5) == 104.5);
+		assert(foo("test") == "string test");
+
+		// can redefine specific override
+		function foo(int a) { return a; }
+		assert(foo(4) == 4);
+		// leaving others in place
+		assert(foo(4.5) == 104.5);
+		assert(foo("test") == "string test");
+	});
+}
+
+unittest {
+	// catching objects
+	interpret(q{
+		class Foo {}
+		class Bar : Foo {}
+
+		var res = try throw new Bar(); catch(Bar b) { 2 } catch(e) { 1 };
+		assert(res == 2);
+
+		var res = try throw new Foo(); catch(Bar b) { 2 } catch(e) { 1 };
+		assert(res == 1);
+
+		var res = try throw Foo; catch(Foo b) { 2 } catch(e) { 1 };
+		assert(res == 2);
+	});
+}
+
+unittest {
+	// ternary precedence
+	interpret(q{
+		assert(0 == 0 ? true : false == true);
+		assert((0 == 0) ? true : false == true);
+		// lol FIXME
+		//assert(((0 == 0) ? true : false) == true);
+	});
+}
+
 class ForeachExpression : Expression {
 	VariableDeclaration decl;
 	Expression subject;
@@ -2150,10 +2286,39 @@ class ThrowExpression : Expression {
 	}
 }
 
+bool isCompatibleType(var v, string specifier, PrototypeObject sc) {
+	var t = toType(specifier, sc);
+	auto score = typeCompatibilityScore(v, t);
+	return score > 0;
+}
+
+var toType(string specifier, PrototypeObject sc) {
+	switch(specifier) {
+		case "int", "long": return var(0);
+		case "float", "double": return var(0.0);
+		case "string": return var("");
+		default:
+			auto got = sc._peekMember(specifier, true);
+			if(got)
+				return *got;
+			else
+				return var.init;
+	}
+}
+
+var[] toTypes(string[] specifiers, PrototypeObject sc) {
+	var[] arr;
+	foreach(s; specifiers)
+		arr ~= toType(s, sc);
+	return arr;
+}
+
+
 class ExceptionBlockExpression : Expression {
 	Expression tryExpression;
 
 	string[] catchVarDecls;
+	string[] catchVarTypeSpecifiers;
 	Expression[] catchExpressions;
 
 	Expression[] finallyExpressions;
@@ -2164,12 +2329,30 @@ class ExceptionBlockExpression : Expression {
 		assert(tryExpression !is null);
 		assert(catchVarDecls.length == catchExpressions.length);
 
+		void caught(var ex) {
+			if(catchExpressions.length)
+			foreach(i, ce; catchExpressions) {
+				if(catchVarTypeSpecifiers[i].length == 0 || isCompatibleType(ex, catchVarTypeSpecifiers[i], sc)) {
+					auto catchScope = new PrototypeObject();
+					catchScope.prototype = sc;
+					catchScope._getMember(catchVarDecls[i], false, false) = ex;
+
+					result = ce.interpret(catchScope);
+					break;
+				}
+			} else
+				result = InterpretResult(ex, sc);
+		}
+
 		if(catchExpressions.length || (catchExpressions.length == 0 && finallyExpressions.length == 0))
 			try {
 				result = tryExpression.interpret(sc);
 			} catch(NonScriptCatchableException e) {
 				// the script cannot catch these so it continues up regardless
 				throw e;
+			} catch(ScriptException e) {
+				// FIXME: what about the other information here? idk.
+				caught(e.payload);
 			} catch(Exception e) {
 				var ex = var.emptyObject;
 				ex.type = typeid(e).name;
@@ -2177,16 +2360,7 @@ class ExceptionBlockExpression : Expression {
 				ex.file = e.file;
 				ex.line = e.line;
 
-				// FIXME: this only allows one but it might be nice to actually do different types at some point
-				if(catchExpressions.length)
-				foreach(i, ce; catchExpressions) {
-					auto catchScope = new PrototypeObject();
-					catchScope.prototype = sc;
-					catchScope._getMember(catchVarDecls[i], false, false) = ex;
-
-					result = ce.interpret(catchScope);
-				} else
-					result = InterpretResult(ex, sc);
+				caught(ex);
 			} finally {
 				foreach(fe; finallyExpressions)
 					result = fe.interpret(sc);
@@ -2404,6 +2578,7 @@ Expression parsePart(MyTokenStreamHere)(ref MyTokenStreamHere tokens) {
 						//tokens.popFront();
 						auto parenthetical = new ParentheticalExpression(parseExpression(tokens));
 						tokens.requireNextToken(ScriptToken.Type.symbol, ")");
+
 						return parenthetical;
 					case "[":
 						// array literal
@@ -2615,6 +2790,7 @@ Expression parseAddend(MyTokenStreamHere)(ref MyTokenStreamHere tokens) {
 				case ",": // possible FIXME these are passed on to the next thing
 				case ";":
 				case ":": // idk
+				case "?":
 					return e1;
 
 				case "|>":
@@ -2632,15 +2808,6 @@ Expression parseAddend(MyTokenStreamHere)(ref MyTokenStreamHere tokens) {
 				case "||":
 					tokens.popFront();
 					e1 = new BinaryExpression(peek.str, e1, parseExpression(tokens));
-					break;
-				case "?": // is this the right precedence?
-					auto e = new TernaryExpression();
-					e.condition = e1;
-					tokens.requireNextToken(ScriptToken.Type.symbol, "?");
-					e.ifTrue = parseExpression(tokens);
-					tokens.requireNextToken(ScriptToken.Type.symbol, ":");
-					e.ifFalse = parseExpression(tokens);
-					e1 = e;
 					break;
 				case "~":
 					// FIXME: make sure this has the right associativity
@@ -2863,12 +3030,14 @@ Expression parseExpression(MyTokenStreamHere)(ref MyTokenStreamHere tokens, bool
 					tokens.requireNextToken(ScriptToken.Type.symbol, ")");
 					auto bod = parseExpression(tokens);
 
-					expressions ~= new AssignExpression(
+					expressions ~= new FunctionDeclaration(
 						new DotVarExpression(
 							new VariableExpression("__proto"),
 							new VariableExpression(ident.str),
 							false),
-						new FunctionLiteralExpression(args, bod, staticScopeBacking));
+						ident.str,
+						new FunctionLiteralExpression(args, bod, staticScopeBacking)
+					);
 				} else throw new ScriptCompileException("Unexpected " ~ tokens.front.str ~ " when reading class decl", tokens.front.scriptFilename, tokens.front.lineNumber);
 			}
 
@@ -3014,22 +3183,39 @@ Expression parseExpression(MyTokenStreamHere)(ref MyTokenStreamHere tokens, bool
 			tokens.popFront();
 			e.tryExpression = parseExpression(tokens, true);
 
-			bool hadSomething = false;
+			bool hadFinally = false;
 			while(tokens.peekNextToken(ScriptToken.Type.keyword, "catch")) {
-				if(hadSomething)
-					throw new ScriptCompileException("Only one catch block is allowed currently ", tokens.front.scriptFilename, tokens.front.lineNumber);
-				hadSomething = true;
+				if(hadFinally)
+					throw new ScriptCompileException("Catch must come before finally", tokens.front.scriptFilename, tokens.front.lineNumber);
 				tokens.popFront();
 				tokens.requireNextToken(ScriptToken.Type.symbol, "(");
 				if(tokens.peekNextToken(ScriptToken.Type.keyword, "var"))
 					tokens.popFront();
+
 				auto ident = tokens.requireNextToken(ScriptToken.Type.identifier);
-				e.catchVarDecls ~= ident.str;
-				tokens.requireNextToken(ScriptToken.Type.symbol, ")");
+				if(tokens.empty) throw new ScriptCompileException("Catch specifier not closed", ident.scriptFilename, ident.lineNumber);
+				auto next = tokens.front;
+				if(next.type == ScriptToken.Type.identifier) {
+					auto type = ident;
+					ident = next;
+
+					e.catchVarTypeSpecifiers ~= type.str;
+					e.catchVarDecls ~= ident.str;
+
+					tokens.popFront();
+
+					tokens.requireNextToken(ScriptToken.Type.symbol, ")");
+				} else {
+					e.catchVarTypeSpecifiers ~= null;
+					e.catchVarDecls ~= ident.str;
+					if(next.type != ScriptToken.Type.symbol || next.str != ")")
+						throw new ScriptCompileException("ss Unexpected " ~ next.str ~ " when expecting ')'", next.scriptFilename, next.lineNumber);
+					tokens.popFront();
+				}
 				e.catchExpressions ~= parseExpression(tokens);
 			}
 			while(tokens.peekNextToken(ScriptToken.Type.keyword, "finally")) {
-				hadSomething = true;
+				hadFinally = true;
 				tokens.popFront();
 				e.finallyExpressions ~= parseExpression(tokens);
 			}
@@ -3038,8 +3224,19 @@ Expression parseExpression(MyTokenStreamHere)(ref MyTokenStreamHere tokens, bool
 				//throw new ScriptCompileException("Parse error, missing finally or catch after try", tryToken.lineNumber);
 
 			ret = e;
-		} else
+		} else {
 			ret = parseAddend(tokens);
+		}
+
+		if(!tokens.empty && tokens.peekNextToken(ScriptToken.Type.symbol, "?")) {
+			auto e = new TernaryExpression();
+			e.condition = ret;
+			tokens.requireNextToken(ScriptToken.Type.symbol, "?");
+			e.ifTrue = parseExpression(tokens);
+			tokens.requireNextToken(ScriptToken.Type.symbol, ":");
+			e.ifFalse = parseExpression(tokens);
+			ret = e;
+		}
 	} else {
 		//assert(0);
 		// return null;
@@ -3079,12 +3276,34 @@ VariableDeclaration parseVariableDeclaration(MyTokenStreamHere)(ref MyTokenStrea
 	if(tokens.empty)
 		throw new ScriptCompileException("Parse error, dangling var at end of file", firstToken.scriptFilename, firstToken.lineNumber);
 
+	string type;
+
+	auto next = tokens.front;
+	tokens.popFront;
+	if(tokens.empty)
+		throw new ScriptCompileException("Parse error, incomplete var declaration at end of file", firstToken.scriptFilename, firstToken.lineNumber);
+	auto next2 = tokens.front;
+
+	ScriptToken typeSpecifier;
+
+	/* if there's two identifiers back to back, it is a type specifier. otherwise just a name */
+
+	if(next.type == ScriptToken.Type.identifier && next2.type == ScriptToken.Type.identifier) {
+		// type ident;
+		typeSpecifier = next;
+		next = next2;
+		// get past the type
+		tokens.popFront();
+	} else {
+		// no type, just carry on with the next thing
+	}
+
 	Expression initializer;
-	auto identifier = tokens.front;
+	auto identifier = next;
 	if(identifier.type != ScriptToken.Type.identifier)
 		throw new ScriptCompileException("Parse error, found '"~identifier.str~"' when expecting var identifier", identifier.scriptFilename, identifier.lineNumber);
 
-	tokens.popFront();
+	//tokens.popFront();
 
 	tryTermination:
 	if(tokens.empty)
@@ -3103,16 +3322,18 @@ VariableDeclaration parseVariableDeclaration(MyTokenStreamHere)(ref MyTokenStrea
 			tokens.popFront();
 			decl.identifiers ~= identifier.str;
 			decl.initializers ~= initializer;
+			decl.typeSpecifiers ~= typeSpecifier.str;
 			goto anotherVar;
 		} else if(peek.str == termination) {
 			decl.identifiers ~= identifier.str;
 			decl.initializers ~= initializer;
+			decl.typeSpecifiers ~= typeSpecifier.str;
 			//tokens = tokens[1 .. $];
 			// we're done!
 		} else
-			throw new ScriptCompileException("Parse error, unexpected '"~peek.str~"' when reading var declaration", peek.scriptFilename, peek.lineNumber);
+			throw new ScriptCompileException("Parse error, unexpected '"~peek.str~"' when reading var declaration symbol", peek.scriptFilename, peek.lineNumber);
 	} else
-		throw new ScriptCompileException("Parse error, unexpected '"~peek.str~"' when reading var declaration", peek.scriptFilename, peek.lineNumber);
+		throw new ScriptCompileException("Parse error, unexpected non-symbol '"~peek.str~"' when reading var declaration", peek.scriptFilename, peek.lineNumber);
 
 	return decl;
 }
@@ -3169,11 +3390,9 @@ Expression parseStatement(MyTokenStreamHere)(ref MyTokenStreamHere tokens, strin
 
 						// a ; should NOT be required here btw
 
-						auto e = new VariableDeclaration();
-						e.identifiers ~= ident.str;
-						e.initializers ~= exp;
-
 						exp.isMacro = token.str == "macro";
+
+						auto e = new FunctionDeclaration(null, ident.str, exp);
 
 						return e;
 
@@ -3181,6 +3400,10 @@ Expression parseStatement(MyTokenStreamHere)(ref MyTokenStreamHere tokens, strin
 						tokens.pushFront(token); // put it back since everyone expects us to have done that
 						goto case; // handle it like any other expression
 					}
+
+				case "true":
+				case "false":
+
 				case "json!{":
 				case "#{":
 				case "[":
@@ -3218,6 +3441,7 @@ Expression parseStatement(MyTokenStreamHere)(ref MyTokenStreamHere tokens, strin
 				case "continue":
 				case "break":
 				case "return":
+
 					return parseExpression(tokens);
 				// unary prefix operators
 				case "!":

@@ -132,6 +132,21 @@ ${ADRDOX_SAMPLE
 	${I this has unbalanced paren :) }
 }
 
+$(H3 List of supported simple formatting macros)
+
+${ADRDOX_SAMPLE
+    $(B Bold text)
+    $(I Italic text)
+    $(HIGHLIGHT Highlighted text)
+    $(SUPERSCRIPT Superscript)
+    $(SUBSCRIPT Subscript)
+    $(DIV HTML division, intended for using
+          ID and CLASS for more
+          flexible css customization)
+}
+
+Others may or may not work due to legacy compatibility, but I may remove them without notice so you should not use any not explicitly listed somewhere in this document.
+
 $(H2 Code snippets)
 
 $(H3 Inline code)
@@ -294,6 +309,8 @@ $(CONSOLE
 )
 
 Note that most special syntax works inside `$(CONSOLE)`, but Ddoc-style code samples, delimited with `---`, does not. This is because that breaks things more often than it is useful.
+
+In particular, using the `$(HIGHLIGHT)` macro inside CONSOLE may be helpful.
 
 $(H3 Documented unittests)
 
@@ -731,6 +748,8 @@ $(LIST
 	* `Macros:` are read, but ignored.
 )
 
+Note that as an extension to ddoc, I also support doc comments on params as if it was written in the `Params:` section.
+
 $(H3 Meta subsections)
 
 The following sections, if present, will be grouped under the `Meta` header:
@@ -904,6 +923,10 @@ $(H2 Always Documenting Something)
 
 If you want something to always be documented, even if it is private, add `$(ALWAYS_DOCUMENT)` to its comment somewhere.
 
+$(H2 Never Documenting Something)
+
+If you want something to NEVER be documented, even if adrdox is run with --document-undocumented and other switches, add `$(NEVER_DOCUMENT)` to its comment somewhere. You should use this very rarely.
+
 $(H2 Documentable Constructs)
 
 adrdox allows documenting more language constructs than ddoc. It lets you document public imports, postblits, destructors, anonymous enums, and more. Try putting a doc comment on almost anything and see what happens!
@@ -912,13 +935,13 @@ adrdox allows documenting more language constructs than ddoc. It lets you docume
 module adrdox.syntax;
 
 /+
-/// penis
+/// first
 struct A {
-	/// vagina
+	/// second
 	union {
-		/// ass
+		/// third
 		int a;
-		/// hole
+		/// fourth
 		int b;
 	}
 }
@@ -949,3 +972,6 @@ I intend for this to be used to show syntax translations, but any time where a s
 		1 = [a_huge_complex_function#note-1]
 +/
 void a_huge_complex_function() {}
+
+///
+void test() {}

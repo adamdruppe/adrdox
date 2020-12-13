@@ -2496,6 +2496,7 @@ class Parser
         if (currentIs(tok!"identifier") && peekIsOneOf(tok!",", tok!"=", tok!"}"))
         {
             node.comment = current.comment;
+            comment = null;
             mixin(tokenCheck!(`node.name`, `identifier`));
             if (currentIs(tok!"="))
             {
@@ -2506,6 +2507,7 @@ class Parser
         else if (typeAllowed)
         {
             node.comment = current.comment;
+            comment = null;
             mixin(nullCheck!`node.type = parseType()`);
             mixin(tokenCheck!(`node.name`, `identifier`));
             mixin(nullCheck!`expect(tok!"=")`);
@@ -2612,6 +2614,7 @@ class Parser
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!EnumMember;
         node.comment = current.comment;
+        comment = null;
 
 
         while (moreTokens())
@@ -2954,7 +2957,9 @@ class Parser
         {
 
 		hackFunctionBody();
-		return new FunctionBody();
+		auto fb = new FunctionBody();
+                fb.hadABody = true;
+                return fb;
 
             if ((node.blockStatement = parseBlockStatement()) is null)
             {
@@ -2982,7 +2987,10 @@ class Parser
                 mixin(nullCheck!`node.bodyStatement = parseBodyDoStatement()`);
 	    else if(currentIs(tok!"{")) {
 		hackFunctionBody();
-		return new FunctionBody();
+
+		auto fb = new FunctionBody();
+                fb.hadABody = true;
+                return fb;
 	    }
         }
 	if(minimize_memory) {
@@ -3880,7 +3888,11 @@ class Parser
         const ident = expect(tok!"identifier");
         if (ident is null) { deallocate(node); return null; }
         node.identifier = *ident;
-        if (currentIs(tok!"++"))
+        if (currentIs(tok!"-"))
+        {
+            advance(); // skip the -
+            advance(); // skip the C
+        } else if (currentIs(tok!"++"))
         {
             advance();
             node.hasPlusPlus = true;
@@ -4371,6 +4383,8 @@ class Parser
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!Parameter;
+
+        node.comment = current.comment;
 
         while (moreTokens())
 	{
@@ -5913,6 +5927,9 @@ class Parser
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!TemplateParameter;
+
+        node.comment = current.comment;
+
         switch (current.type)
         {
         case tok!"alias":
@@ -5946,7 +5963,7 @@ class Parser
     TemplateParameterList parseTemplateParameterList()
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
-        return parseCommaSeparatedRule!(TemplateParameterList, TemplateParameter)();
+        return parseCommaSeparatedRule!(TemplateParameterList, TemplateParameter)(true);
     }
 
     /**
@@ -6453,6 +6470,7 @@ class Parser
         case tok!"return":
         case tok!"typedef":
         case tok!"__parameters":
+        case tok!"__vector":
         case tok!"const":
         case tok!"immutable":
         case tok!"inout":
