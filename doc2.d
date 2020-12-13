@@ -114,6 +114,12 @@ string findStandardFile(bool dofail=true) (string stdfname) {
 	return stdfname;
 }
 
+string outputFilePath(string[] names...) {
+	import std.path : buildPath;
+	names = outputDirectory ~ names;
+	return buildPath(names);
+}
+
 void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) {
 	import std.file;
 	if (exists(destname)) {
@@ -1705,9 +1711,9 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			if(overloadLink.length)
 				pseudoFiles[overloadLink] = redirectToOverloadHtml(declLink);
 		} else {
-			writeFile(outputDirectory ~ declLink, document.toString(), gzip);
+			writeFile(outputFilePath(declLink), document.toString(), gzip);
 			if(overloadLink.length)
-				writeFile(outputDirectory ~ overloadLink, redirectToOverloadHtml(declLink), gzip);
+				writeFile(outputFilePath(overloadLink), redirectToOverloadHtml(declLink), gzip);
 		}
 
 		import std.stdio;
@@ -3806,6 +3812,12 @@ int main(string[] args) {
 	if (outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
 
+	if (opt.helpWanted || args.length == 1) {
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2018\n" ~
+			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
+		return;
+	}
+
 	texMathOpt = parseTexMathOpt(texMath);
 
 	foreach(l; headerLinks) {
@@ -3830,33 +3842,21 @@ int main(string[] args) {
 			mkdir(outputDirectory);
 
 		if(copyStandardFiles) {
-			copyStandardFileTo(outputDirectory ~ "style.css", "style.css");
-			copyStandardFileTo(outputDirectory ~ "script.js", "script.js");
-			copyStandardFileTo(outputDirectory ~ "search-docs.js", "search-docs.js");
+			copyStandardFileTo(outputFilePath("style.css"), "style.css");
+			copyStandardFileTo(outputFilePath("script.js"), "script.js");
+			copyStandardFileTo(outputFilePath("search-docs.js"), "search-docs.js");
 
 			switch (texMathOpt) with (TexMathOpt) {
 				case KaTeX: {
 					import adrdox.jstex;
 					foreach (file; filesForKaTeX) {
-						copyStandardFileTo(outputDirectory ~ file, "katex/" ~ file);
+						copyStandardFileTo(outputFilePath(file), "katex/" ~ file);
 					}
 					break;
 				}
 				default: break;
 			}
 		}
-
-		/*
-		if(!exists(skeletonFile) && exists("skeleton-default.html"))
-			copy("skeleton-default.html", skeletonFile);
-
-		if(!exists(outputDirectory))
-			mkdir(outputDirectory);
-		if(!exists(outputDirectory ~ "style.css") || (timeLastModified(outputDirectory ~ "style.css") < timeLastModified("style.css")))
-			copy("style.css", outputDirectory ~ "style.css");
-		if(!exists(outputDirectory ~ "script.js") || (timeLastModified(outputDirectory ~ "script.js") < timeLastModified("script.js")))
-			copy("script.js", outputDirectory ~ "script.js");
-		*/
 	}
 
 	// FIXME: maybe a zeroth path just grepping for a module declaration in located files
@@ -3909,12 +3909,13 @@ int main(string[] args) {
 
 		annotatedSourceDocument.title = mod.name ~ " source code";
 
-		if(!usePseudoFiles && !exists(outputDirectory ~ "source"))
-			mkdir(outputDirectory ~ "source");
+		auto outputSourcePath = outputFilePath("source");
+		if(!usePseudoFiles && !outputSourcePath.exists)
+			mkdir(outputSourcePath);
 		if(usePseudoFiles)
 			pseudoFiles["source/" ~ mod.name ~ ".d.html"] = annotatedSourceDocument.toString();
 		else
-			writeFile(outputDirectory ~ "source/" ~ mod.name ~ ".d.html", annotatedSourceDocument.toString(), gzip);
+			writeFile(outputFilePath("source", mod.name ~ ".d.html"), annotatedSourceDocument.toString(), gzip);
 	}
 
 	void process(string arg, bool generate) {
@@ -4086,7 +4087,7 @@ int main(string[] args) {
 			// only generate a fake one if the real one isn't already there
 			// like perhaps the real one was generated before but just not loaded
 			// this time.
-			if(!std.file.exists(outputDirectory ~ mod.link))
+			if(!std.file.exists(outputFilePath(mod.link)))
 				moduleDeclsGenerate ~= mod;
 		}
 	}
@@ -4221,7 +4222,7 @@ int main(string[] args) {
 				//continue; // it will be written in the list of children. actually i want to do it all here.
 
 			// FIXME: make search index in here if we can
-			if(!skipExisting || !std.file.exists(outputDirectory ~ decl.link(true) ~ (gzip ?".gz":""))) {
+			if(!skipExisting || !std.file.exists(outputFilePath(decl.link(true) ~ (gzip ?".gz":"")))) {
 				if(decl.name in alreadyTried)
 					return;
 				alreadyTried[decl.name] = true;
@@ -4254,12 +4255,12 @@ int main(string[] args) {
 		// see the comment in the source of that html
 		// for more details
 		auto searchDocsHtml = std.file.readText(findStandardFile("search-docs.html"));
-		writeFile(buildPath(outputDirectory, "search-docs.html"), searchDocsHtml, gzip);
+		writeFile(outputFilePath("search-docs.html"), searchDocsHtml, gzip);
 
 
 		// the search index is a HTML page containing some script
 		// and the index XML. See the source of search-docs.js for more info.
-		index = FileProxy(buildPath(outputDirectory, "search-results.html"), gzip);
+		index = FileProxy(outputFilePath("search-results.html"), gzip);
 
 		auto skeletonDocument = new Document();
 		skeletonDocument.parseUtf8(std.file.readText(skeletonFile), true, true);
