@@ -1710,13 +1710,16 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		string overloadLink;
 		string declLink = decl.link(true, &overloadLink);
 
+		if(declLink == ".html")
+			return document;
+
 		if(usePseudoFiles) {
 			pseudoFiles[declLink] = document.toString();
-			if(overloadLink.length)
+			if(overloadLink.length && overloadLink != ".html")
 				pseudoFiles[overloadLink] = redirectToOverloadHtml(declLink);
 		} else {
 			writeFile(outputFilePath(declLink), document.toString(), gzip);
-			if(overloadLink.length)
+			if(overloadLink.length && overloadLink != ".html")
 				writeFile(outputFilePath(overloadLink), redirectToOverloadHtml(declLink), gzip);
 		}
 
