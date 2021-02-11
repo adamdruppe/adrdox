@@ -309,10 +309,14 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		}
 		*/
 
-		content.addChild("h2", "Values").attrs.id = "values";
+		Element table;
 
-		auto table = content.addChild("table").addClass("enum-members");
-		table.appendHtml("<tr><th>Value</th><th>Meaning</th></tr>");
+		if(members.length) {
+			content.addChild("h2", "Values").attrs.id = "values";
+
+			table = content.addChild("table").addClass("enum-members");
+			table.appendHtml("<tr><th>Value</th><th>Meaning</th></tr>");
+		}
 
 		foreach(member; members) {
 			auto memberComment = formatDocumentationComment(preprocessComment(member.comment, decl), decl);
@@ -2604,6 +2608,10 @@ class VariableDecl : Decl {
 		this.attributes = attributes;
 		this.ident = Token.init;
 		this.initializer = null;
+
+		foreach(a; astNode.attributes)
+			this.attributes ~= new VersionOrAttribute(a);
+		filterDuplicateAttributes();
 	}
 
 	const(Token) ident;
@@ -2615,6 +2623,33 @@ class VariableDecl : Decl {
 		this.ident = ident;
 		this.isEnum = isEnum;
 		this.initializer = initializer;
+
+		foreach(a; astNode.attributes)
+			this.attributes ~= new VersionOrAttribute(a);
+		filterDuplicateAttributes();
+	}
+
+	void filterDuplicateAttributes() {
+		const(VersionOrAttribute)[] filtered;
+		foreach(idx, a; attributes) {
+			bool isdup;
+			foreach(b; attributes[idx + 1 .. $]) {
+				if(a is b)
+					continue;
+
+				if(cast(FakeAttribute) a || cast(FakeAttribute) b)
+					continue;
+
+				if(a.attr is b.attr)
+					isdup = true;
+				else if(toText(a.attr) == toText(b.attr))
+					isdup = true;
+			}
+			if(!isdup)
+				filtered ~= a;
+		}
+
+		this.attributes = filtered;
 	}
 
 	bool isEnum;
@@ -3363,6 +3398,7 @@ class Looker : ASTVisitor {
 
 	// FIXME ????
 	override void visit(const VersionCondition sb) {
+		import std.conv;
 		attributes[$-1] ~= new VersionFakeAttribute(toText(sb.token));
 		sb.accept(this);
 	}
@@ -3384,13 +3420,15 @@ class Looker : ASTVisitor {
 
 	override void visit(const ConditionalDeclaration bs) {
 		pushAttributes();
-		if(attributes.length > 2)
+		if(attributes.length >= 2)
 			attributes[$-1] = attributes[$-2]; // inherit from the previous scope here
 		size_t previousConditions;
 		if(bs.compileCondition) {
 			previousConditions = attributes[$-1].length;
 			bs.compileCondition.accept(this);
 		}
+		// WTF FIXME FIXME
+		// http://dpldocs.info/experimental-docs/asdf.bar.html
 
 		if(bs.trueDeclarations)
 			foreach(td; bs.trueDeclarations)

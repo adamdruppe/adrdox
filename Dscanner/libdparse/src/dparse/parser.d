@@ -937,7 +937,14 @@ class Parser
         	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
 		expect(tok!")");
 	} else {
-        	mixin(nullCheck!`node.argumentList = parseArgumentList()`);
+            if(currentIs(tok!"identifier")) {
+                node.argumentList = new ArgumentList;
+                ExpressionNode wtf = parseUnaryExpression();
+                node.argumentList.items ~= wtf;
+
+        	//mixin(nullCheck!`node.argumentList = parseArgumentList()`);
+            } else
+                error("( or identifier expected");
 	}
 
 	    // I don't think any of this following spam is necessary and I know it isn't correct, let's just use this one thing and see how it goes
@@ -3631,6 +3638,12 @@ class Parser
 		mixin(nullCheck!`node.expression = parseExpression()`);
 		if (node.expression is null)
 		    return null;
+             version(none)
+	     if(currentIs(tok!",")) {
+		advance();
+                parseExpression(); // FIXME: probably should store this but it is the string message
+
+             }
 		expect(tok!")");
 	} else {
 		mixin(nullCheck!`node.blockStatement = parseBlockStatement()`);
