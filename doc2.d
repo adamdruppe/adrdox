@@ -1496,7 +1496,6 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			h2.removeFromTree();
 	}
 
-
 	decl.addSupplementalData(content);
 
 	s = null;
@@ -1750,7 +1749,7 @@ void addLineNumbering(Element pre, bool id = false) {
 		html ~= "\n";
 		count++;
 	}
-	if(count < 15)
+	if(count < 55)
 		return; // no point cluttering the display with the sample is so small you can eyeball it instantly anyway
 	pre.innerHTML = html.stripRight;
 	pre.addClass("with-line-wrappers");
@@ -3205,7 +3204,7 @@ mixin template CtorFrom(T) {
 
 }
 
-ClassDecl[string] allClasses;
+__gshared ClassDecl[string] allClasses;
 
 class Looker : ASTVisitor {
 	alias visit = ASTVisitor.visit;
@@ -3240,6 +3239,7 @@ class Looker : ASTVisitor {
 			popAttributes();
 		stack = stack[0 .. $-1];
 
+		if(specialPreprocessor == "gtk")
 		static if(is(D == ClassDecl))
 			allClasses[d.name] = d;
 	}

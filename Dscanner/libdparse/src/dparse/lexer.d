@@ -2035,8 +2035,7 @@ public pure nothrow @nogc:
         buckets = (cast(Node**) calloc((Node*).sizeof, bucketCount))[0 .. bucketCount];
     }
 
-    version(none)
-    ~this()
+    void freeItAll()
     {
         Block* current = rootBlock;
         while (current !is null)

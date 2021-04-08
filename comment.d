@@ -36,8 +36,8 @@ static struct MyOutputRange {
 		if(s.length == 0)
 			return;
 		//foreach(ch; s) {
-			assert(s.length);
-			assert(s.indexOf("</body>") == -1);
+			//assert(s.length);
+			//assert(s.indexOf("</body>") == -1);
 		//}
 		(*output) ~= s;
 	}
@@ -170,7 +170,7 @@ struct LinkReferenceInfo {
 	}
 }
 
-string[string] globalLinkReferences;
+__gshared string[string] globalLinkReferences;
 
 void loadGlobalLinkReferences(string text) {
 	foreach(line; text.splitLines) {
@@ -1173,6 +1173,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 		div = Element.make(tagName);
 
 	string currentParagraph;
+	currentParagraph.reserve(2048);
 	void putch(char c) {
 		currentParagraph ~= c;
 	}
@@ -1236,6 +1237,7 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 		}
 		currentTag = "p";
 		currentParagraph = null;
+		currentParagraph.reserve(2048);
 		currentClass = null;
 	}
 
@@ -1681,6 +1683,7 @@ Html extractDdocCodeExample(string comment, ref size_t idx) {
 
 	LexerConfig config;
 	StringCache stringCache = StringCache(128);
+    	scope(exit) stringCache.freeItAll();
 
 	config.stringBehavior = StringBehavior.source;
 	config.whitespaceBehavior = WhitespaceBehavior.include;
@@ -1733,11 +1736,11 @@ Html extractDdocCodeExample(string comment, ref size_t idx) {
 	return Html(outdent(highlight(comment.stripRight)));
 }
 
-string[string] ddocMacros;
-int[string] ddocMacroInfo;
-int[string] ddocMacroBlocks;
+immutable string[string] ddocMacros;
+immutable int[string] ddocMacroInfo;
+immutable int[string] ddocMacroBlocks;
 
-static this() {
+shared static this() {
 	ddocMacroBlocks = [
 		"ADRDOX_SAMPLE" : 1,
 		"LIST": 1,
@@ -1776,6 +1779,7 @@ static this() {
 		"P" : 1,
 		"PRE" : 1,
 		"BLOCKQUOTE" : 1,
+		"CITE" : 1,
 		"DL" : 1,
 		"DT" : 1,
 		"DD" : 1,
@@ -1831,6 +1835,7 @@ static this() {
 		"H6" : "<h6 class=\"user-header\">$0</h6>",
 
 		"BLOCKQUOTE" : "<blockquote>$0</blockquote>", // FIXME?
+		"CITE" : "<cite>$0</cite>", // FIXME?
 
 		"HR" : "<hr />",
 
@@ -2102,8 +2107,8 @@ Element expandDdocMacros2(string txt, Decl decl) {
 		foreach(name, n; numberOfArguments)
 			availableNumberOfArguments[name] = n;
 	} else {
-		availableMacros = macros;
-		availableNumberOfArguments = numberOfArguments;
+		availableMacros = cast(string[string]) macros;
+		availableNumberOfArguments = cast(int[string]) numberOfArguments;
 	}
 
 	auto idx = 0;
@@ -2461,11 +2466,13 @@ string outdent(string s) {
 // http://ethanschoonover.com/solarized
 string highlight(string sourceCode)
 {
+
     import std.array;
     import dparse.lexer;
     string ret;
 
     StringCache cache = StringCache(StringCache.defaultBucketCount);
+    scope(exit) cache.freeItAll();
     LexerConfig config;
     config.stringBehavior = StringBehavior.source;
     auto tokens = byToken(cast(ubyte[]) sourceCode, config, &cache);
