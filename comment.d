@@ -1748,6 +1748,7 @@ shared static this() {
 		"SMALL_TABLE" : 1,
 		"TABLE_ROWS" : 1,
 		"EMBED_UNITTEST": 1,
+		"UNDOCUMENTED": 1,
 
 		"TIP":1,
 		"NOTE":1,
@@ -1904,6 +1905,8 @@ shared static this() {
 
 		"SCRIPT" : "",
 
+		"UNDOCUMENTED": "<span class=\"undocumented-note\">$0</span>",
+
 		// Useless crap that should just be replaced
 		"REF_SHORT" : `<a href="$2.$3.$1.html">$1</a>`,
 		"SHORTREF" : `<a href="$2.$3.$1.html">$1</a>`,
@@ -1973,6 +1976,7 @@ shared static this() {
 
 	ddocMacroInfo = [ // number of arguments expected, if needed
 		"EMBED_UNITTEST": 1,
+		"UNDOCUMENTED": 1,
 		"BOOKTABLE" : 1,
 		"T2" : 1,
 		"LEADINGROWN" : 2,

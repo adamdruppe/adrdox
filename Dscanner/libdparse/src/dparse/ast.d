@@ -1283,6 +1283,34 @@ public:
         }
     }
 
+    void setSupplementalComment(string supplementalComment) {
+    	if(supplementalComment is null)
+		return;
+
+	foreach(decl; declarations)
+		decl.setSupplementalComment(supplementalComment);
+
+        foreach (Type; DeclarationTypes)
+        {
+		static if(__traits(compiles, Type.init.comment)) {
+            const(Type)* value = storage.peek!Type;
+            if (value)
+            {
+                static if (isArray!Type)
+                    foreach (item; *(cast(Type*) value)) {
+			if(item.comment is null)
+                        item.comment = supplementalComment;// ~ item.comment;
+		    }
+                else if (*value !is null) {
+                    auto v = *(cast(Type*) value);
+		    if(v.comment is null)
+		    v.comment = supplementalComment;// ~ v.comment;
+		}
+            }
+	    }
+        }
+    }
+
     private import std.variant:Algebraic;
     private import std.typetuple:TypeTuple;
 
@@ -3335,6 +3363,7 @@ public:
     }
     /** */ size_t versionIndex;
     /** */ Token token;
+
     mixin OpEquals;
 }
 

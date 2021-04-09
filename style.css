@@ -1571,3 +1571,16 @@ tt.D.highlighted a {
 .quickindex td, .quickindex th {
 	padding-left: 0.3em;
 }
+
+.undocumented-note {
+	color: #999;
+}
+
+.deprecated-decl {
+	color: #c00;
+	font-weight: bold;
+}
+
+.conditional-compilation-attributes {
+	font-size: 90%;
+}

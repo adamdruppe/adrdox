@@ -1601,6 +1601,10 @@ class Parser
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!ConditionalDeclaration;
+
+	string supplementalComment = comment;
+	comment = null;
+
         mixin(nullCheck!`node.compileCondition = parseCompileCondition()`);
 
         Declaration[] trueDeclarations;
@@ -1610,10 +1614,11 @@ class Parser
             while (moreTokens() && !currentIs(tok!"}"))
             {
                 auto b = setBookmark();
-                auto d = parseDeclaration();
+                auto d = parseDeclaration(false);
                 if (d !is null)
                 {
                     abandonBookmark(b);
+		    d.setSupplementalComment(supplementalComment);
                     trueDeclarations ~= d;
                 }
                 else
@@ -1629,6 +1634,8 @@ class Parser
 
         auto dec = parseDeclaration(suppressMessages > 0);
         mixin(nullCheck!`dec`);
+
+	dec.setSupplementalComment(supplementalComment);
         trueDeclarations ~= dec;
         node.trueDeclarations = ownArray(trueDeclarations);
 
@@ -3120,11 +3127,18 @@ class Parser
         mixin(nullCheck!`node.parameters = parseParameters()`);
         if (node.parameters is null) { deallocate(node); return null; }
 
+	/+
+	if(comment) {
+		import std.stdio; writeln("omgomg ", comment);
+	}
+	+/
+
         while (moreTokens() && currentIsMemberFunctionAttribute())
             memberFunctionAttributes ~= parseMemberFunctionAttribute();
 
         if (isTemplate && currentIs(tok!"if"))
             mixin(nullCheck!`node.constraint = parseConstraint()`);
+
 
         if (currentIs(tok!";"))
             advance();
@@ -6919,6 +6933,7 @@ class Parser
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
         auto node = allocate!VersionCondition;
         const v = expect(tok!"version");
+
         mixin(nullCheck!`v`);
         node.versionIndex = v.index;
         mixin(nullCheck!`expect(tok!"(")`);

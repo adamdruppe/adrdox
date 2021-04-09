@@ -505,7 +505,7 @@ const(Token)[] getTokensForParser(ubyte[] sourceCode, LexerConfig config,
             {
 	    	string c = lexer.front.text[3 .. $]; // just take the /// off entirely
 		if(blockComment.length == 0) {
-			blockComment = "/++" ~ c ~ "+/"; // just rewrite to this
+			blockComment = "/++" ~ c ~ "\n+/"; // just rewrite to this
 		} else {
 			import std.string;
 			auto l = blockComment.lastIndexOf("\n");

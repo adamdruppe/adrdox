@@ -633,8 +633,13 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 			if(auto fakeAttr = cast(const MemberFakeAttribute) a) {
 				formatter.format(fakeAttr.attr);
 				writer.put(" ");
+			} else if(auto dbg = cast(const FakeAttribute) a) {
+				writer.putTag(dbg.toHTML);
 			} else {
-				formatter.format(a.attr);
+				if(a.attr && a.attr.deprecated_)
+					writer.putTag(`<span class="deprecated-decl">deprecated</span>`);
+				else if(a.attr)
+					formatter.format(a.attr);
 				writer.put(" ");
 			}
 		}
@@ -681,6 +686,14 @@ class VersionOrAttribute {
 	const(VersionOrAttribute) invertedClone() const {
 		return new VersionOrAttribute(attr);
 	}
+
+	override string toString() const {
+		return attr ? toText(attr) : "null";
+	}
+}
+
+interface ConditionFakeAttribute {
+	string toHTML() const;
 }
 
 class FakeAttribute : VersionOrAttribute {
@@ -703,9 +716,13 @@ class MemberFakeAttribute : FakeAttribute {
 		if(attr.atAttribute is null) return true;
 		return phelper(attr.atAttribute);
 	}
+
+	override string toString() const {
+		return attr ? toText(attr) : "null";
+	}
 }
 
-class VersionFakeAttribute : FakeAttribute {
+class VersionFakeAttribute : FakeAttribute, ConditionFakeAttribute {
 	string cond;
 	bool inverted;
 	this(string condition, bool inverted = false) {
@@ -731,7 +748,85 @@ class VersionFakeAttribute : FakeAttribute {
 		element.appendText(")");
 		return element.toString;
 	}
+
+	override string toString() const {
+		return (inverted ? "!" : "") ~ cond;
+	}
 }
+
+class DebugFakeAttribute : FakeAttribute, ConditionFakeAttribute {
+	string cond;
+	bool inverted;
+	this(string condition, bool inverted = false) {
+		cond = condition;
+		this.inverted = inverted;
+	}
+
+	override const(DebugFakeAttribute) invertedClone() const {
+		return new DebugFakeAttribute(cond, !inverted);
+	}
+
+	override bool isBuiltIn() const {
+		return false;
+	}
+
+	override string toHTML() const {
+		auto element = Element.make("span");
+		if(cond.length) {
+			element.addChild("span", "debug", "lang-feature");
+			element.appendText("(");
+			if(inverted)
+				element.appendText("!");
+			element.addChild("span", cond);
+			element.appendText(")");
+		} else {
+			if(inverted)
+				element.addChild("span", "!debug", "lang-feature");
+			else
+				element.addChild("span", "debug", "lang-feature");
+		}
+		return element.toString;
+	}
+
+	override string toString() const {
+		return (inverted ? "!" : "") ~ cond;
+	}
+}
+
+class StaticIfFakeAttribute : FakeAttribute, ConditionFakeAttribute {
+	string cond;
+	bool inverted;
+	this(string condition, bool inverted = false) {
+		cond = condition;
+		this.inverted = inverted;
+	}
+
+	override const(StaticIfFakeAttribute) invertedClone() const {
+		return new StaticIfFakeAttribute(cond, !inverted);
+	}
+
+	override bool isBuiltIn() const {
+		return false;
+	}
+
+	override string toHTML() const {
+		auto element = Element.make("span");
+		element.addChild("span", "static if", "lang-feature");
+		element.appendText("(");
+		if(inverted)
+			element.appendText("!(");
+		element.addChild("span", cond);
+		if(inverted)
+			element.appendText(")");
+		element.appendText(")");
+		return element.toString;
+	}
+
+	override string toString() const {
+		return (inverted ? "!" : "") ~ cond;
+	}
+}
+
 
 void putSimplfiedReturnValue(MyOutputRange output, const FunctionDeclaration decl) {
 	if (decl.hasAuto && decl.hasRef)
@@ -912,6 +1007,7 @@ string specialPreprocess(string comment, Decl decl) {
 
 				if(t in modulesByName)
 					return t ~ "." ~ mod;
+				synchronized(allClassesMutex)
 				if(auto c = mod in allClasses)
 					return c.fullyQualifiedName;
 
@@ -1096,6 +1192,8 @@ string specialPreprocess(string comment, Decl decl) {
 
 			// their code blocks
 			comment = replace(comment, `|[<!-- language="C" -->`, "```c\n");
+			comment = replace(comment, `|[<!-- language="plain" -->`, "```\n");
+			comment = replace(comment, `|[`, "```\n");
 			comment = replace(comment, `]|`, "\n```");
 		break;
 		default:
@@ -1207,6 +1305,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		auto cc = child.parsedDocComment;
 		string sp;
 		MyOutputRange or = MyOutputRange(&sp);
+		if(child.isDeprecated)
+			or.putTag("<span class=\"deprecated-decl\">deprecated</span> ");
 		child.getSimplifiedPrototype(or);
 
 		auto printableName = child.name;
@@ -1526,10 +1626,12 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		if(decl.parent) {
 			auto iterate = decl.parent.children;
 
-			if(!decl.isModule && decl.parent.isModule && decl.parent.children.length == 1) {
-				// we are an only child of a module, show the module's nav instead
-				if(decl.parent.parent !is null)
-					iterate = decl.parent.parent.children;
+			if(!decl.isModule) {
+				if(auto emc = decl.parent.eponymousModuleChild()) {
+					// we are an only child of a module, show the module's nav instead
+					if(decl.parent.parent !is null)
+						iterate = decl.parent.parent.children;
+				}
 			}
 
 			foreach(child; iterate) {
@@ -1832,8 +1934,9 @@ abstract class Decl {
 
 	DocComment parsedDocComment_;
 	final @property DocComment parsedDocComment() {
-		if(parsedDocComment_ is DocComment.init)
-			parsedDocComment_ = parseDocumentationComment(comment.length ? comment : "/++\nUndocumented in source"~externNote~"\n+/", this);
+		if(parsedDocComment_ is DocComment.init) {
+			parsedDocComment_ = parseDocumentationComment(this.rawComment().length ? this.comment() : "/++\n$(UNDOCUMENTED Undocumented in source"~externNote~")\n+/", this);
+		}
 		return parsedDocComment_;
 	}
 
@@ -1889,8 +1992,8 @@ abstract class Decl {
 		if(documentUndocumented)
 			return true;
 
-		if(rawComment.length) // hack
-		return rawComment.length > 0; // cool, not a hack
+		if(this.rawComment.length) // hack
+		return this.rawComment.length > 0; // cool, not a hack
 
 		// if it has any documented children, we want to pretend this is documented too
 		// since then it will be possible to navigate to it
@@ -1998,6 +2101,14 @@ abstract class Decl {
 		return hasUda("property"); // property isn't actually a UDA, but adrdox doesn't care.
 	}
 
+	bool isDeprecated() {
+		foreach(a; attributes) {
+			if(a.attr && a.attr.deprecated_)
+				return true;
+		}
+		return false;
+	}
+
 	bool isAggregateMember() {
 		return parent ? !parent.isModule : false; // FIXME?
 	}
@@ -2047,10 +2158,35 @@ abstract class Decl {
 		return this.parent.children[lastNonDitto .. stop];
 	}
 
+	Decl eponymousModuleChild() {
+		if(!this.isModule)
+			return null;
+
+		auto name = this.name();
+		auto dot = name.lastIndexOf(".");
+		name = name[dot + 1 .. $];
+
+		Decl emc;
+		foreach(child; this.children) {
+			if(cast(ImportDecl) child)
+				continue;
+			if(emc !is null)
+				return null; // not only child
+			emc = child;
+		}
+
+		// only if there is only the one child AND they have the same name does it count
+		if(emc !is null && emc.name == name)
+			return emc;
+		return null;
+	}
+
 	string link(bool forFile = false, string* masterOverloadName = null) {
 		auto linkTo = this;
-		if(!forFile && this.isModule && this.children.length == 1) {
-			linkTo = this.children[0];
+		if(!forFile) {
+			if(auto emc = this.eponymousModuleChild()) {
+				linkTo = emc;
+			}
 		}
 
 		auto n = linkTo.fullyQualifiedName();
@@ -2795,6 +2931,19 @@ class FunctionDecl : Decl {
 	}
 
 	override void getAggregatePrototype(MyOutputRange output) {
+		bool hadAttrs;
+		foreach(attr; attributes)
+			if(auto cfa = cast(ConditionFakeAttribute) attr) {
+				if(!hadAttrs) {
+					output.putTag("<div class=\"conditional-compilation-attributes\">");
+					hadAttrs = true;
+				}
+				output.putTag(cfa.toHTML);
+				output.putTag("<br />\n");
+			}
+		if(hadAttrs)
+			output.putTag("</div>");
+
 		if(isStatic()) {
 			output.putTag("<span class=\"storage-class\">static</span> ");
 		}
@@ -3140,9 +3289,9 @@ mixin template CtorFrom(T) {
 				auto ps = previousSibling;
 				while(ps && ps.rawComment.length == 0)
 					ps = ps.previousSibling;
-				return ps ? ps.comment : rawComment();
+				return ps ? ps.comment : this.rawComment();
 			} else
-				return rawComment();
+				return this.rawComment();
 		}
 	}
 
@@ -3175,7 +3324,7 @@ mixin template CtorFrom(T) {
 			return false;
 		else {
 			import std.string;
-			auto l = strip(toLower(preprocessComment(rawComment, this)));
+			auto l = strip(toLower(preprocessComment(this.rawComment, this)));
 			if(l.length && l[$-1] == '.')
 				l = l[0 .. $-1];
 			return l == "ditto";
@@ -3204,6 +3353,7 @@ mixin template CtorFrom(T) {
 
 }
 
+private __gshared Object allClassesMutex = new Object;
 __gshared ClassDecl[string] allClasses;
 
 class Looker : ASTVisitor {
@@ -3241,6 +3391,7 @@ class Looker : ASTVisitor {
 
 		if(specialPreprocessor == "gtk")
 		static if(is(D == ClassDecl))
+		synchronized(allClassesMutex)
 			allClasses[d.name] = d;
 	}
 
@@ -3393,6 +3544,12 @@ class Looker : ASTVisitor {
 
 	}
 
+	/*
+	override void visit(const Deprecated d) {
+		attributes[$-1]
+	}
+	*/
+
 	override void visit(const StructBody sb) {
 		pushAttributes();
 		sb.accept(this);
@@ -3404,6 +3561,16 @@ class Looker : ASTVisitor {
 		import std.conv;
 		attributes[$-1] ~= new VersionFakeAttribute(toText(sb.token));
 		sb.accept(this);
+	}
+
+	override void visit(const DebugCondition dc) {
+		attributes[$-1] ~= new DebugFakeAttribute(toText(dc.identifierOrInteger));
+		dc.accept(this);
+	}
+
+	override void visit(const StaticIfCondition sic) {
+		attributes[$-1] ~= new StaticIfFakeAttribute(toText(sic.assignExpression));
+		sic.accept(this);
 	}
 
 	override void visit(const BlockStatement bs) {
@@ -3434,23 +3601,25 @@ class Looker : ASTVisitor {
 		// http://dpldocs.info/experimental-docs/asdf.bar.html
 
 		if(bs.trueDeclarations)
-			foreach(td; bs.trueDeclarations)
-				td.accept(this);
+			foreach(const Declaration td; bs.trueDeclarations) {
+				visit(td);
+			}
 
 		if(bs.falseDeclaration) {
 			auto slice = attributes[$-1][previousConditions .. $];
 			attributes[$-1] = attributes[$-1][0 .. previousConditions];
 			foreach(cond; slice)
 				attributes[$-1] ~= cond.invertedClone;
-			bs.falseDeclaration.accept(this);
+			visit(bs.falseDeclaration);
 		}
 		popAttributes();
 	}
 
 	override void visit(const Declaration dec) {
 		auto originalAttributes = attributes[$ - 1];
-		foreach(a; dec.attributes)
+		foreach(a; dec.attributes) {
 			attributes[$ - 1] ~= new VersionOrAttribute(a);
+		}
 		dec.accept(this);
 		if (dec.attributeDeclaration is null)
 			attributes[$ - 1] = originalAttributes;
@@ -3711,7 +3880,9 @@ int main(string[] args) {
 	string dataDirPath;
 
 	int jobs = 0;
-	
+
+	bool debugPrint;
+
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
 		std.getopt.config.bundling,
@@ -3740,6 +3911,7 @@ int main(string[] args) {
 		"special-preprocessor", "Run a special preprocessor on comments. Only supported right now are gtk and dwt", &specialPreprocessor,
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
 		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput,
+		"debug-print", "Print debugging information", &debugPrint,
 		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath);
 
 	if (opt.helpWanted || args.length == 1) {
@@ -3980,6 +4152,11 @@ int main(string[] args) {
 
 			auto sweet = new Looker(b, baseName(arg));
 			sweet.visit(m);
+
+
+			if(debugPrint) {
+				debugPrintAst(m);
+			}
 
 			ModuleDecl existingDecl;
 
@@ -4816,6 +4993,16 @@ void writeIndexXml(Decl decl, FileProxy index, ref int id, string postgresVersio
 		{
 			decl.databaseId = res[0].to!int;
 		}
+		else
+		{
+			searchDb.query("UPDATE d_symbols
+			SET
+				url_name = ?,
+				summary = ?
+			WHERE
+			id = ?
+			", decl.link, desc, decl.databaseId);
+		}
 	}
 
 	// the id needs to match the search index!
@@ -4992,6 +5179,14 @@ string toId(string txt) {
 	return id.strip;
 }
 
+void debugPrintAst(T)(T m) {
+	import std.stdio;
+	import dscanner.astprinter;
+	auto printer = new XMLPrinter;
+	printer.visit(m);
+
+	writeln(new XmlDocument(printer.output).toPrettyString);
+}
 
 
 /*

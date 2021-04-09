@@ -19,8 +19,6 @@ import std.string : toLower, replace, split;
 
 PostgreSql db_;
 
-enum projectAdjustment = 0;
-
 PostgreSql db() {
 	if(db_ is null) {
 		db_ = new PostgreSql("dbname=adrdox");
@@ -77,7 +75,21 @@ static struct Magic {
 	DeclElement decl;
 }
 
-Magic[] getPossibilities(string search) {
+int getProjectAdjustment(DeclElement details, string preferredProject) {
+	int projectAdjustment;
+	if(preferredProject.length) {
+		if(preferredProject == details.packageName)
+			projectAdjustment = 150;
+	}
+	if(details.packageName == "phobos" || details.packageName == "druntime")
+		projectAdjustment += 50;
+	if(details.packageName == "arsd-official")
+		projectAdjustment += 30;
+
+	return projectAdjustment;
+}
+
+Magic[] getPossibilities(string search, string preferredProject) {
 	int[int] declScores;
 
 	int[int] declHits;
@@ -139,7 +151,9 @@ Magic[] getPossibilities(string search) {
 			if(!(hits & (1 << idx)))
 				score /= 2;
 		}
-		magic ~= Magic(decl, score + projectAdjustment, getDecl(decl));
+		auto details = getDecl(decl);
+		int projectAdjustment = getProjectAdjustment(details, preferredProject);
+		magic ~= Magic(decl, score + projectAdjustment, details);
 	}
 
 	if(magic.length == 0) {
@@ -152,8 +166,11 @@ Magic[] getPossibilities(string search) {
 				import std.algorithm;
 				name = name.toLower;
 				auto dist = cast(int) levenshteinDistance(name, term);
-				if(dist <= 2)
-					magic ~= Magic(id, projectAdjustment + (3 - dist), getDecl(id));
+				if(dist <= 2) {
+					auto details = getDecl(id);
+					int projectAdjustment = getProjectAdjustment(details, preferredProject);
+					magic ~= Magic(id, projectAdjustment + (3 - dist), details);
+				}
 			}
 		}
 		}
@@ -292,7 +309,7 @@ void searcher(Cgi cgi) {
 	}
 
 
-	Magic[] magic = getPossibilities(search);
+	Magic[] magic = getPossibilities(search, cgi.request("project"));
 
 	sort!((a, b) => a.score > b.score)(magic);
 
@@ -355,9 +372,11 @@ void searcher(Cgi cgi) {
 		auto decl = item.decl;
 		if(decl.id == 0) continue; // should never happen
 		version(vps)
-			auto link = "http://"~decl.packageName~".dpldocs.info/" ~ decl.link;
+			auto link = "//"~decl.packageName~".dpldocs.info/" ~ decl.link;
 		else
-			auto link = "http://dpldocs.info/experimental-docs/" ~ decl.link;
+			auto link = "//dpldocs.info/experimental-docs/" ~ decl.link;
+		if(decl.link.length && decl.link[0] == '/')
+			link = decl.link;
 		auto fqn = getFqn(decl);
 		if(fqn in alreadyPresent)
 			continue;

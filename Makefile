@@ -1,4 +1,4 @@
-LIBDPARSE=Dscanner/libdparse/src/dparse/ast.d Dscanner/libdparse/src/dparse/formatter.d Dscanner/libdparse/src/dparse/parser.d Dscanner/libdparse/src/dparse/entities.d  Dscanner/libdparse/src/dparse/lexer.d Dscanner/libdparse/src/std/experimental/lexer.d
+LIBDPARSE=Dscanner/libdparse/src/dparse/ast.d Dscanner/libdparse/src/dparse/formatter.d Dscanner/libdparse/src/dparse/parser.d Dscanner/libdparse/src/dparse/entities.d  Dscanner/libdparse/src/dparse/lexer.d Dscanner/libdparse/src/std/experimental/lexer.d Dscanner/src/astprinter.d
 
 all:
 	#dmd diff.d terminal.d $(LIBDPARSE)
@@ -12,8 +12,7 @@ locate:
 	dmd -oflocate locate.d  dom.d stemmer.d  cgi -J. -version=scgi -m64 -debug postgres.d database.d -L-L/usr/local/pgsql/lib -g
 
 vps_locate:
-	ldc2 -oq -O3 -m64 locate.d  dom.d stemmer.d  cgi -J. -d-version=scgi -d-version=vps -g
-
+	ldc2 -oq -O3 -m64 locate.d  dom.d stemmer.d  cgi -J. -d-version=scgi -d-version=vps -g ~/arsd/database ~/arsd/postgres -L-L/usr/local/pgsql/lib -L-lpq
 ldc:
 	ldc2 -oq -O3 -m64 doc2.d latex.d jstex.d comment.d stemmer.d dom.d color.d -J. $(LIBDPARSE) --d-version=with_postgres database.d postgres.d -L-L/usr/local/pgsql/lib -L-lpq -g # -version=std_parser_verbose 
 
