@@ -999,12 +999,19 @@ pre.console {
 }
 
 .member-list.articles dt,
+.member-list.constructors dt {
+	float: none;
+	clear: none;
+	margin: 0em;
+	width: auto;
+	border: none;
+}
+
 .member-list.articles dd,
-.member-list.constructors dt,
 .member-list.constructors dd {
 	float: none;
 	clear: none;
-	margin: 1em;
+	margin: 1em 0em;
 	width: auto;
 	border: none;
 }

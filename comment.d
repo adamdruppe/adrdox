@@ -345,8 +345,10 @@ struct DocComment {
 				auto split = param.indexOf("=");
 				auto paramName = param[0 .. split];
 
-				if(!hasParam(functionDec, paramName, decl))
+				if(!hasParam(functionDec, paramName, decl)) {
+				//import std.stdio; writeln("no param " ~ paramName, " ", functionDec);
 					continue;
+				}
 				count++;
 			}
 

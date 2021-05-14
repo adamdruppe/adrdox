@@ -10,6 +10,7 @@ __gshared TexMathOpt texMathOpt = TexMathOpt.LaTeX;
 
 __gshared bool writePrivateDocs = false;
 __gshared bool documentInternal = false;
+__gshared bool documentTest = false;
 __gshared bool documentUndocumented = false;
 __gshared bool minimalDescent = false;
 
@@ -1608,13 +1609,19 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(EponymousTemplateDeclaration) decl.getAstNode())
 		comment.writeDetails(output, fd, decl.getProcessedUnittests());
+	else if(auto fd = cast(StructDeclaration) decl.getAstNode())
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
+	else if(auto fd = cast(ClassDeclaration) decl.getAstNode())
+		comment.writeDetails(output, fd, decl.getProcessedUnittests());
 	else if(auto fd = cast(AliasDecl) decl) {
 		if(fd.initializer)
 			comment.writeDetails(output, fd.initializer, decl.getProcessedUnittests());
 		else
 			comment.writeDetails(output, decl, decl.getProcessedUnittests());
-	} else
+	} else {
+		//import std.stdio; writeln(decl.getAstNode);
 		comment.writeDetails(output, decl, decl.getProcessedUnittests());
+	}
 
 	content.addChild("div", Html(s));
 
@@ -3789,6 +3796,11 @@ string[] scanFiles (string basedir) {
 		static if (checkdir) {
 			string d = dir;
 			if (d.length > 1 && d[$-1] == '/') d = d[0..$-1];
+
+			//import std.stdio; writeln("***************** ", dir);
+			if(!documentTest && d.length >= 5 && d[$-5 .. $] == "/test")
+				return;
+
 			if (gi.match(d)) {
 				//writeln("DIR SKIP: <", dir, ">");
 				return;
@@ -3892,6 +3904,7 @@ int main(string[] args) {
 		"directory|o", "Output directory of the html files", &outputDirectory,
 		"write-private-docs|p", "Include documentation for `private` members (default: false)", &writePrivateDocs,
 		"write-internal-modules", "Include documentation for modules named `internal` (default: false)", &documentInternal,
+		"write-test-modules", "Include documentation for files in directories called `test` (default: false)", &documentTest,
 		"locate-symbol", "Locate a symbol in the passed file", &locateSymbol,
 		"genHtml|h", "Generate html, default: true", &makeHtml,
 		"genSource|u", "Generate annotated source", &annotateSource,
@@ -3915,7 +3928,7 @@ int main(string[] args) {
 		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath);
 
 	if (opt.helpWanted || args.length == 1) {
-		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2020\n" ~
+		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2021\n" ~
 			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
 		return 0;
 	}
