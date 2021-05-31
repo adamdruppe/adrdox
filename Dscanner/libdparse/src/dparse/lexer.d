@@ -1665,7 +1665,7 @@ private pure nothrow @safe:
             goto close;
         }
     close:
-        if (range.bytes[range.index] == '\'')
+        if (range.index < range.bytes.length && range.bytes[range.index] == '\'')
         {
             range.popFront();
             token = Token(tok!"characterLiteral", cache.intern(range.slice(mark)),

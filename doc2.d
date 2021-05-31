@@ -4527,13 +4527,15 @@ int main(string[] args) {
 
 
 		// delete the existing stuff so we do a full update in this run
-		if(searchDb && postgresVersionId) {
-			searchDb.query("START TRANSACTION");
-			searchDb.query("DELETE FROM auto_generated_tags WHERE package_version_id = ?", postgresVersionId);
-		}
-		scope(exit)
-		if(searchDb && postgresVersionId) {
-			searchDb.query("ROLLBACK");
+		version(with_postgres) {
+			if(searchDb && postgresVersionId) {
+				searchDb.query("START TRANSACTION");
+				searchDb.query("DELETE FROM auto_generated_tags WHERE package_version_id = ?", postgresVersionId);
+			}
+			scope(exit)
+			if(searchDb && postgresVersionId) {
+				searchDb.query("ROLLBACK");
+			}
 		}
 
 
@@ -4558,6 +4560,7 @@ int main(string[] args) {
 
 		writeln("Writing search...");
 
+		version(with_postgres)
 		if(searchDb) {
 			searchDb.flushSearchDatabase();
 			searchDb.query("COMMIT");
