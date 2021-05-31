@@ -2744,7 +2744,7 @@ class AliasDecl : Decl {
 }
 
 class VariableDecl : Decl {
-	mixin CtorFrom!VariableDeclaration;
+	mixin CtorFrom!VariableDeclaration mixinmagic;
 
 	const(Declarator) declarator;
 	this(const(Declarator) declarator, const(VariableDeclaration) astNode, const(VersionOrAttribute)[] attributes) {
@@ -2806,9 +2806,24 @@ class VariableDecl : Decl {
 			return ident.text;
 	}
 
+	override bool isDitto() {
+		if(declarator && declarator.comment is null) {
+			foreach (idx, const Declarator d; astNode.declarators) {
+				if(d.comment !is null) {
+					break;
+				}
+				if(d is declarator && idx)
+					return true;
+			}
+		}
+
+		return mixinmagic.isDitto();
+	}
+
 	override string rawComment() {
 		string it = astNode.comment;
 		auto additional = (declarator ? declarator.comment : astNode.autoDeclaration.comment);
+
 		if(additional != it)
 			it ~= additional;
 		return it;
@@ -2818,21 +2833,26 @@ class VariableDecl : Decl {
 		string t;
 		MyOutputRange output = MyOutputRange(&t);
 
-		output.putTag("<div class=\"declaration-prototype\">");
-		if(parent !is null && !parent.isModule) {
-			output.putTag("<div class=\"parent-prototype\">");
-			parent.getSimplifiedPrototype(output);
-			output.putTag("</div><div>");
-			auto f = new MyFormatter!(typeof(output))(output);
-			writeAttributes(f, output, attributes);
-			getSimplifiedPrototypeInternal(output, true);
+		void piece() {
+			output.putTag("<div class=\"declaration-prototype\">");
+			if(parent !is null && !parent.isModule) {
+				output.putTag("<div class=\"parent-prototype\">");
+				parent.getSimplifiedPrototype(output);
+				output.putTag("</div><div>");
+				auto f = new MyFormatter!(typeof(output))(output);
+				writeAttributes(f, output, attributes);
+				getSimplifiedPrototypeInternal(output, true);
+				output.putTag("</div>");
+			} else {
+				auto f = new MyFormatter!(typeof(output))(output);
+				writeAttributes(f, output, attributes);
+				getSimplifiedPrototypeInternal(output, true);
+			}
 			output.putTag("</div>");
-		} else {
-			auto f = new MyFormatter!(typeof(output))(output);
-			writeAttributes(f, output, attributes);
-			getSimplifiedPrototypeInternal(output, true);
 		}
-		output.putTag("</div>");
+
+
+		writeOverloads!piece(this, output);
 
 		outputFinal.putTag(linkUpHtml(t, this));
 	}
@@ -3979,9 +3999,6 @@ int main(string[] args) {
 					stderr.writeln("package_version ID ", postgresVersionId, " does not exist in the database");
 					return 1;
 				}
-
-				// delete the existing stuff so we do a full update in this run
-				searchDb.query("DELETE FROM auto_generated_tags WHERE package_version_id = ?", postgresVersionId);
 			}
 
 		} else {
@@ -4508,6 +4525,18 @@ int main(string[] args) {
 
 		index.writeln("<adrdox>");
 
+
+		// delete the existing stuff so we do a full update in this run
+		if(searchDb && postgresVersionId) {
+			searchDb.query("START TRANSACTION");
+			searchDb.query("DELETE FROM auto_generated_tags WHERE package_version_id = ?", postgresVersionId);
+		}
+		scope(exit)
+		if(searchDb && postgresVersionId) {
+			searchDb.query("ROLLBACK");
+		}
+
+
 		index.writeln("<listing>");
 		foreach(decl; moduleDeclsGenerate) {
 			if(decl.fakeDecl)
@@ -4529,8 +4558,10 @@ int main(string[] args) {
 
 		writeln("Writing search...");
 
-		if(searchDb)
+		if(searchDb) {
 			searchDb.flushSearchDatabase();
+			searchDb.query("COMMIT");
+		}
 
 		index.writeln("<index>");
 		foreach(term, arr; searchTerms) {
