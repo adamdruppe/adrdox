@@ -5,8 +5,6 @@
 
 // FIXME: the scriptable list is quite arbitrary
 
-// FIXME: https://developer.mozilla.org/en-US/docs/Web/CSS/:is
-
 
 // xml entity references?!
 
@@ -96,7 +94,10 @@ bool isConvenientAttribute(string name) {
 
 /// The main document interface, including a html parser.
 /// Group: core_functionality
-class Document : FileResource {
+class Document : FileResource, DomParent {
+	inout(Document) asDocument() inout { return this; }
+	inout(Element) asElement() inout { return null; }
+
 	/// Convenience method for web scraping. Requires [arsd.http2] to be
 	/// included in the build as well as [arsd.characterencodings].
 	static Document fromUrl()(string url, bool strictMode = false) {
@@ -159,6 +160,10 @@ class Document : FileResource {
 		_contentType = mimeType;
 		return _contentType;
 	}
+
+	/// implementing the FileResource interface, useful for sending via
+	/// http automatically.
+	@property string filename() const { return null; }
 
 	/// implementing the FileResource interface, useful for sending via
 	/// http automatically.
@@ -349,6 +354,28 @@ class Document : FileResource {
 		else
 			return new Utf8Stream(data);
 	}
+
+	/++
+		List of elements that can be assumed to be self-closed
+		in this document. The default for a Document are a hard-coded
+		list of ones appropriate for HTML. For [XmlDocument], it defaults
+		to empty. You can modify this after construction but before parsing.
+
+		History:
+			Added February 8, 2021 (included in dub release 9.2)
+	+/
+	string[] selfClosedElements = htmlSelfClosedElements;
+
+	/++
+		List of elements that are considered inline for pretty printing.
+		The default for a Document are hard-coded to something appropriate
+		for HTML. For [XmlDocument], it defaults to empty. You can modify
+		this after construction but before parsing.
+
+		History:
+			Added June 21, 2021 (included in dub release 10.1)
+	+/
+	string[] inlineElements = htmlInlineElements;
 
 	/**
 		Take XMLish data and try to make the DOM tree out of it.
@@ -804,11 +831,11 @@ class Document : FileResource {
 
 				return Ele(1, null, tname); // closing tag reports itself here
 				case ' ': // assume it isn't a real element...
-					if(strict)
+					if(strict) {
 						parseError("bad markup - improperly placed <");
-					else
+						assert(0); // parseError always throws
+					} else
 						return Ele(0, TextNode.fromUndecodedString(this, "<"), null);
-				break;
 				default:
 
 					if(!strict) {
@@ -845,9 +872,11 @@ class Document : FileResource {
 									selfClosed = true;
 						}
 
-						if(strict)
-						enforce(data[pos] == '>', format("got %s when expecting > (possible missing attribute name)\nContext:\n%s", data[pos], data[pos - 100 .. pos + 100]));
-						else {
+						import std.algorithm.comparison;
+
+						if(strict) {
+						enforce(data[pos] == '>', format("got %s when expecting > (possible missing attribute name)\nContext:\n%s", data[pos], data[max(0, pos - 100) .. min(data.length, pos + 100)]));
+						} else {
 							// if we got here, it's probably because a slash was in an
 							// unquoted attribute - don't trust the selfClosed value
 							if(!selfClosed)
@@ -1057,8 +1086,9 @@ class Document : FileResource {
 										pos++;
 
 										ateAny = eatWhitespace();
-										if(strict && ateAny)
-											throw new MarkupException("inappropriate whitespace after attribute equals");
+										// the spec actually allows this!
+										//if(strict && ateAny)
+											//throw new MarkupException("inappropriate whitespace after attribute equals");
 
 										attrValue = readAttributeValue();
 
@@ -1103,6 +1133,7 @@ class Document : FileResource {
 		} while (r.type != 0 || r.element.nodeType != 1); // we look past the xml prologue and doctype; root only begins on a regular node
 
 		root = r.element;
+		root.parent_ = this;
 
 		if(!strict) // in strict mode, we'll just ignore stuff after the xml
 		while(r.type != 4) {
@@ -1193,7 +1224,7 @@ class Document : FileResource {
 	final SomeElementType requireElementById(SomeElementType = Element)(string id, string file = __FILE__, size_t line = __LINE__)
 		if( is(SomeElementType : Element))
 		out(ret) { assert(ret !is null); }
-	body {
+	do {
 		return root.requireElementById!(SomeElementType)(id, file, line);
 	}
 
@@ -1201,7 +1232,7 @@ class Document : FileResource {
 	final SomeElementType requireSelector(SomeElementType = Element)(string selector, string file = __FILE__, size_t line = __LINE__)
 		if( is(SomeElementType : Element))
 		out(ret) { assert(ret !is null); }
-	body {
+	do {
 		auto e = cast(SomeElementType) querySelector(selector);
 		if(e is null)
 			throw new ElementNotFoundException(SomeElementType.stringof, selector, this.root, file, line);
@@ -1316,7 +1347,7 @@ class Document : FileResource {
 		out(ret) {
 			assert(ret !is null);
 		}
-	body {
+	do {
 		return cast(Form) createElement("form");
 	}
 
@@ -1325,8 +1356,7 @@ class Document : FileResource {
 		if(loose)
 			name = name.toLower();
 
-		auto e = Element.make(name);
-		e.parentDocument = this;
+		auto e = Element.make(name, null, null, selfClosedElements);
 
 		return e;
 
@@ -1346,6 +1376,8 @@ class Document : FileResource {
 
 	///.
 	Element findFirst(bool delegate(Element) doesItMatch) {
+		if(root is null)
+			return null;
 		Element result;
 
 		bool goThroughElement(Element e) {
@@ -1408,11 +1440,14 @@ class Document : FileResource {
 		because whitespace may be significant content in XML.
 	+/
 	string toPrettyString(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
-		string s = prolog;
+		import std.string;
+		string s = prolog.strip;
 
+		/*
 		if(insertComments) s ~= "<!--";
 		s ~= "\n";
 		if(insertComments) s ~= "-->";
+		*/
 
 		s ~= root.toPrettyString(insertComments, indentationLevel, indentWith);
 		foreach(a; piecesAfterRoot)
@@ -1443,9 +1478,17 @@ class Document : FileResource {
 	}
 }
 
+interface DomParent {
+	inout(Document) asDocument() inout;
+	inout(Element) asElement() inout;
+}
+
 /// This represents almost everything in the DOM.
 /// Group: core_functionality
-class Element {
+class Element : DomParent {
+	inout(Document) asDocument() inout { return null; }
+	inout(Element) asElement() inout { return this; }
+
 	/// Returns a collection of elements by selector.
 	/// See: [Document.opIndex]
 	ElementCollection opIndex(string selector) {
@@ -1473,7 +1516,7 @@ class Element {
 	out(ret) {
 		assert(ret !is null);
 	}
-	body {
+	do {
 		auto e = cast(SomeElementType) getElementById(id);
 		if(e is null)
 			throw new ElementNotFoundException(SomeElementType.stringof, "id=" ~ id, this, file, line);
@@ -1488,7 +1531,7 @@ class Element {
 	out(ret) {
 		assert(ret !is null);
 	}
-	body {
+	do {
 		auto e = cast(SomeElementType) querySelector(selector);
 		if(e is null)
 			throw new ElementNotFoundException(SomeElementType.stringof, selector, this, file, line);
@@ -1600,7 +1643,7 @@ class Element {
 			//assert(e.parentNode is this);
 			//assert(e.parentDocument is this.parentDocument);
 		}
-	body {
+	do {
 		auto e = Element.make(tagName, childInfo, childInfo2);
 		// FIXME (maybe): if the thing is self closed, we might want to go ahead and
 		// return the parent. That will break existing code though.
@@ -1620,7 +1663,7 @@ class Element {
 			assert(e.parentNode is this.parentNode);
 			assert(e.parentDocument is this.parentDocument);
 		}
-	body {
+	do {
 		auto e = Element.make(tagName, childInfo, childInfo2);
 		return parentNode.insertAfter(this, e);
 	}
@@ -1663,7 +1706,7 @@ class Element {
 		assert(ret.parentDocument is this.parentDocument);
 		//assert(firstChild.parentDocument is this.parentDocument);
 	}
-	body {
+	do {
 		auto e = Element.make(tagName, "", info2);
 		e.appendChild(firstChild);
 		this.appendChild(e);
@@ -1679,7 +1722,7 @@ class Element {
 		assert((cast(DocumentFragment) this !is null) || (ret.parentNode is this), ret.toString);// e.parentNode ? e.parentNode.toString : "null");
 		assert(ret.parentDocument is this.parentDocument);
 	}
-	body {
+	do {
 		auto e = Element.make(tagName, "", info2);
 		this.appendChild(e);
 		e.innerHTML = innerHtml.source;
@@ -1703,7 +1746,7 @@ class Element {
 			assert(this.parentNode is newParent);
 			//assert(isInArray(this, newParent.children));
 		}
-	body {
+	do {
 		parentNode.removeChild(this);
 		newParent.appendChild(this);
 	}
@@ -1727,7 +1770,7 @@ class Element {
 			assert(parentNode is null);
 			assert(children.length == 0);
 		}
-	body {
+	do {
 		foreach(c; children)
 			c.parentNode = null; // remove the parent
 		if(children.length)
@@ -1747,7 +1790,7 @@ class Element {
 			assert(this.parentNode is null);
 			assert(var is this);
 		}
-	body {
+	do {
 		if(this.parentNode is null)
 			return this;
 
@@ -1771,7 +1814,7 @@ class Element {
 			assert(this.parentNode is what);
 			assert(ret is what);
 		}
-	body {
+	do {
 		this.replaceWith(what);
 		what.appendChild(this);
 
@@ -1783,7 +1826,7 @@ class Element {
 	in {
 		assert(this.parentNode !is null);
 	}
-	body {
+	do {
 		e.removeFromTree();
 		this.parentNode.replaceChild(this, e);
 		return e;
@@ -1894,52 +1937,78 @@ class Element {
 	/// Instead, this flag tells if it should be. It is based on the source document's notation and a html element list.
 	private bool selfClosed;
 
+	private DomParent parent_;
+
 	/// Get the parent Document object that contains this element.
 	/// It may be null, so remember to check for that.
-	Document parentDocument;
+	@property inout(Document) parentDocument() inout {
+		if(this.parent_ is null)
+			return null;
+		auto p = cast() this.parent_.asElement;
+		auto prev = cast() this;
+		while(p) {
+			prev = p;
+			if(p.parent_ is null)
+				return null;
+			p = cast() p.parent_.asElement;
+		}
+		return cast(inout) prev.parent_.asDocument;
+	}
+
+	deprecated @property void parentDocument(Document doc) {
+		parent_ = doc;
+	}
 
 	///.
 	inout(Element) parentNode() inout {
-		auto p = _parentNode;
+		if(parent_ is null)
+			return null;
+
+		auto p = parent_.asElement;
 
 		if(cast(DocumentFragment) p)
-			return p._parentNode;
+			return p.parent_.asElement;
 
 		return p;
 	}
 
 	//protected
 	Element parentNode(Element e) {
-		return _parentNode = e;
+		parent_ = e;
+		return e;
 	}
-
-	private Element _parentNode;
-
-	// the next few methods are for implementing interactive kind of things
-	private CssStyle _computedStyle;
 
 	// these are here for event handlers. Don't forget that this library never fires events.
 	// (I'm thinking about putting this in a version statement so you don't have the baggage. The instance size of this class is 56 bytes right now.)
-	EventHandler[][string] bubblingEventHandlers;
-	EventHandler[][string] capturingEventHandlers;
-	EventHandler[string] defaultEventHandlers;
 
-	void addEventListener(string event, EventHandler handler, bool useCapture = false) {
-		if(event.length > 2 && event[0..2] == "on")
-			event = event[2 .. $];
+	version(dom_with_events) {
+		EventHandler[][string] bubblingEventHandlers;
+		EventHandler[][string] capturingEventHandlers;
+		EventHandler[string] defaultEventHandlers;
 
-		if(useCapture)
-			capturingEventHandlers[event] ~= handler;
-		else
-			bubblingEventHandlers[event] ~= handler;
+		void addEventListener(string event, EventHandler handler, bool useCapture = false) {
+			if(event.length > 2 && event[0..2] == "on")
+				event = event[2 .. $];
+
+			if(useCapture)
+				capturingEventHandlers[event] ~= handler;
+			else
+				bubblingEventHandlers[event] ~= handler;
+		}
 	}
 
 
 	// and now methods
 
-	/// Convenience function to try to do the right thing for HTML. This is the main
-	/// way I create elements.
-	static Element make(string tagName, string childInfo = null, string childInfo2 = null) {
+	/++
+		Convenience function to try to do the right thing for HTML. This is the main way I create elements.
+
+		History:
+			On February 8, 2021, the `selfClosedElements` parameter was added. Previously, it used a private
+			immutable global list for HTML. It still defaults to the same list, but you can change it now via
+			the parameter.
+	+/
+	static Element make(string tagName, string childInfo = null, string childInfo2 = null, const string[] selfClosedElements = htmlSelfClosedElements) {
 		bool selfClosed = tagName.isInArray(selfClosedElements);
 
 		Element e;
@@ -2053,7 +2122,6 @@ class Element {
 
 	/// Generally, you don't want to call this yourself - use Element.make or document.createElement instead.
 	this(Document _parentDocument, string _tagName, string[string] _attributes = null, bool _selfClosed = false) {
-		parentDocument = _parentDocument;
 		tagName = _tagName;
 		if(_attributes !is null)
 			attributes = _attributes;
@@ -2065,9 +2133,17 @@ class Element {
 		assert(_tagName.indexOf(" ") == -1);//, "<" ~ _tagName ~ "> is invalid");
 	}
 
-	/// Convenience constructor when you don't care about the parentDocument. Note this might break things on the document.
-	/// Note also that without a parent document, elements are always in strict, case-sensitive mode.
-	this(string _tagName, string[string] _attributes = null) {
+	/++
+		Convenience constructor when you don't care about the parentDocument. Note this might break things on the document.
+		Note also that without a parent document, elements are always in strict, case-sensitive mode.
+
+		History:
+			On February 8, 2021, the `selfClosedElements` parameter was added. It defaults to the same behavior as
+			before: using the hard-coded list of HTML elements, but it can now be overridden. If you use
+			[Document.createElement], it will use the list set for the current document. Otherwise, you can pass
+			something here if you like.
+	+/
+	this(string _tagName, string[string] _attributes = null, const string[] selfClosedElements = htmlSelfClosedElements) {
 		tagName = _tagName;
 		if(_attributes !is null)
 			attributes = _attributes;
@@ -2082,8 +2158,6 @@ class Element {
 	}
 
 	private this(Document _parentDocument) {
-		parentDocument = _parentDocument;
-
 		version(dom_node_indexes)
 			this.dataset.nodeIndex = to!string(&(this.attributes));
 	}
@@ -2135,6 +2209,11 @@ class Element {
 	}
 
 	///.
+	@property Element previousElementSibling() {
+		return previousSibling("*");
+	}
+
+	///.
 	@property Element previousSibling(string tagName = null) {
 		if(this.parentNode is null)
 			return null;
@@ -2144,13 +2223,16 @@ class Element {
 				break;
 			if(tagName == "*" && e.nodeType != NodeType.Text) {
 				ps = e;
-				break;
-			}
-			if(tagName is null || e.tagName == tagName)
+			} else if(tagName is null || e.tagName == tagName)
 				ps = e;
 		}
 
 		return ps;
+	}
+
+	///.
+	@property Element nextElementSibling() {
+		return nextSibling("*");
 	}
 
 	///.
@@ -2219,15 +2301,19 @@ class Element {
 		return null;
 	}
 
-	/// Note: you can give multiple selectors, separated by commas.
-	/// It will return the first match it finds.
+	/++
+		Returns a child element that matches the given `selector`.
+
+		Note: you can give multiple selectors, separated by commas.
+	 	It will return the first match it finds.
+	+/
 	@scriptable
 	Element querySelector(string selector) {
-		// FIXME: inefficient; it gets all results just to discard most of them
-		auto list = getElementsBySelector(selector);
-		if(list.length == 0)
-			return null;
-		return list[0];
+		Selector s = Selector(selector);
+		foreach(ele; tree)
+			if(s.matchesElement(ele))
+				return ele;
+		return null;
 	}
 
 	/// a more standards-compliant alias for getElementsBySelector
@@ -2403,7 +2489,7 @@ class Element {
 	out(ret) {
 		assert(ret is this);
 	}
-	body {
+	do {
 		if(parentDocument && parentDocument.loose)
 			name = name.toLower();
 		if(name in attributes)
@@ -2542,6 +2628,10 @@ class Element {
 
 
 	// if you change something here, it won't apply... FIXME const? but changing it would be nice if it applies to the style attribute too though you should use style there.
+
+	// the next few methods are for implementing interactive kind of things
+	private CssStyle _computedStyle;
+
 	/// Don't use this.
 	@property CssStyle computedStyle() {
 		if(_computedStyle is null) {
@@ -2615,8 +2705,20 @@ class Element {
 		out {
 			assert(this.children.length == 0);
 		}
-	body {
+	do {
 		children = null;
+	}
+
+	/// History: added June 13, 2020
+	Element appendSibling(Element e) {
+		parentNode.insertAfter(this, e);
+		return e;
+	}
+
+	/// History: added June 13, 2020
+	Element prependSibling(Element e) {
+		parentNode.insertBefore(this, e);
+		return e;
 	}
 
 
@@ -2637,17 +2739,21 @@ class Element {
 			assert(e.parentDocument is this.parentDocument);
 			assert(e is ret);
 		}
-	body {
+	do {
 		if(e.parentNode !is null)
 			e.parentNode.removeChild(e);
 
 		selfClosed = false;
 		e.parentNode = this;
-		e.parentDocument = this.parentDocument;
 		if(auto frag = cast(DocumentFragment) e)
 			children ~= frag.children;
 		else
 			children ~= e;
+
+		/+
+		foreach(item; e.tree)
+			item.parentDocument = this.parentDocument;
+		+/
 
 		sendObserverEvent(DomMutationOperations.appendChild, null, null, e);
 
@@ -2669,14 +2775,13 @@ class Element {
 			assert(what.parentDocument is this.parentDocument);
 			assert(ret is what);
 		}
-	body {
+	do {
 		foreach(i, e; children) {
 			if(e is where) {
 				if(auto frag = cast(DocumentFragment) what)
 					children = children[0..i] ~ frag.children ~ children[i..$];
 				else
 					children = children[0..i] ~ what ~ children[i..$];
-				what.parentDocument = this.parentDocument;
 				what.parentNode = this;
 				return what;
 			}
@@ -2703,7 +2808,7 @@ class Element {
 			assert(what.parentDocument is this.parentDocument);
 			assert(ret is what);
 		}
-	body {
+	do {
 		foreach(i, e; children) {
 			if(e is where) {
 				if(auto frag = cast(DocumentFragment) what)
@@ -2711,7 +2816,6 @@ class Element {
 				else
 					children = children[0 .. i + 1] ~ what ~ children[i + 1 .. $];
 				what.parentNode = this;
-				what.parentDocument = this.parentDocument;
 				return what;
 			}
 		}
@@ -2734,13 +2838,12 @@ class Element {
 			assert(replacement.parentNode is this);
 			assert(replacement.parentDocument is this.parentDocument);
 		}
-	body {
+	do {
 		foreach(ref c; this.children)
 			if(c is child) {
 				c.parentNode = null;
 				c = replacement;
 				c.parentNode = this;
-				c.parentDocument = this.parentDocument;
 				return child;
 			}
 		assert(0);
@@ -2809,7 +2912,7 @@ class Element {
 			//assert(isInArray(where, children));
 			//assert(isInArray(child, children));
 		}
-	body {
+	do {
 		foreach(ref i, c; children) {
 			if(c is where) {
 				i++;
@@ -2818,7 +2921,6 @@ class Element {
 				else
 					children = children[0..i] ~ child ~ children[i..$];
 				child.parentNode = this;
-				child.parentDocument = this.parentDocument;
 				break;
 			}
 		}
@@ -2847,10 +2949,9 @@ class Element {
 				assert(child.parentDocument is this.parentDocument);
 			}
 		}
-	body {
+	do {
 		foreach(c; e.children) {
 			c.parentNode = this;
-			c.parentDocument = this.parentDocument;
 		}
 		if(position is null)
 			children ~= e.children;
@@ -2882,9 +2983,8 @@ class Element {
 			assert(e.parentDocument is this.parentDocument);
 			assert(children[0] is e);
 		}
-	body {
+	do {
 		e.parentNode = this;
-		e.parentDocument = this.parentDocument;
 		if(auto frag = cast(DocumentFragment) e)
 			children = e.children ~ children;
 		else
@@ -2930,12 +3030,9 @@ class Element {
 		doc.parseUtf8("<innerhtml>" ~ html ~ "</innerhtml>", strict, strict); // FIXME: this should preserve the strictness of the parent document
 
 		children = doc.root.children;
-		foreach(c; children) {
+		foreach(c; doc.root.tree) {
 			c.parentNode = this;
-			c.parentDocument = this.parentDocument;
 		}
-
-		reparentTreeDocuments();
 
 		doc.root.children = null;
 
@@ -2945,11 +3042,6 @@ class Element {
 	/// ditto
 	@property Element innerHTML(Html html) {
 		return this.innerHTML = html.source;
-	}
-
-	private void reparentTreeDocuments() {
-		foreach(c; this.tree)
-			c.parentDocument = this.parentDocument;
 	}
 
 	/**
@@ -2967,12 +3059,7 @@ class Element {
 		children = doc.root.children;
 		foreach(c; children) {
 			c.parentNode = this;
-			c.parentDocument = this.parentDocument;
 		}
-
-
-		reparentTreeDocuments();
-
 
 		stripOut();
 
@@ -3014,7 +3101,7 @@ class Element {
 			assert(replace.parentDocument is this.parentDocument);
 			assert(find.parentNode is null);
 		}
-	body {
+	do {
 		// FIXME
 		//if(auto frag = cast(DocumentFragment) replace)
 			//return this.replaceChild(frag, replace.children);
@@ -3023,7 +3110,6 @@ class Element {
 				replace.parentNode = this;
 				children[i].parentNode = null;
 				children[i] = replace;
-				replace.parentDocument = this.parentDocument;
 				return replace;
 			}
 		}
@@ -3050,7 +3136,7 @@ class Element {
 			debug foreach(r; replace)
 				assert(r.parentNode is this);
 		}
-	body {
+	do {
 		if(replace.length == 0) {
 			removeChild(find);
 			return;
@@ -3062,7 +3148,6 @@ class Element {
 				children[i] = replace[0];
 				foreach(e; replace) {
 					e.parentNode = this;
-					e.parentDocument = this.parentDocument;
 				}
 
 				children = .insertAfter(children, i, replace[1..$]);
@@ -3090,7 +3175,7 @@ class Element {
 				assert(child !is c);
 			assert(c.parentNode is null);
 		}
-	body {
+	do {
 		foreach(i, e; children) {
 			if(e is c) {
 				children = children[0..i] ~ children [i+1..$];
@@ -3109,7 +3194,7 @@ class Element {
 			debug foreach(r; ret)
 				assert(r.parentNode is null);
 		}
-	body {
+	do {
 		Element[] oldChildren = children.dup;
 		foreach(c; oldChildren)
 			c.parentNode = null;
@@ -3184,7 +3269,7 @@ class Element {
 			assert(ret.children.length == this.children.length, format("%d %d", ret.children.length, this.children.length));
 			assert(ret.tagName == this.tagName);
 		}
-	body {
+	do {
 	+/
 	{
 		return this.cloneNode(true);
@@ -3193,7 +3278,6 @@ class Element {
 	/// Clones the node. If deepClone is true, clone all inner tags too. If false, only do this tag (and its attributes), but it will have no contents.
 	Element cloneNode(bool deepClone) {
 		auto e = Element.make(this.tagName);
-		e.parentDocument = this.parentDocument;
 		e.attributes = this.attributes.aadup;
 		e.selfClosed = this.selfClosed;
 
@@ -3294,6 +3378,8 @@ class Element {
 		}
 		+/
 
+		auto inlineElements = (parentDocument is null ? null : parentDocument.inlineElements);
+
 		const(Element)[] children;
 
 		TextNode lastTextChild = null;
@@ -3341,7 +3427,7 @@ class Element {
 
 		// for simple `<collection><item>text</item><item>text</item></collection>`, let's
 		// just keep them on the same line
-		if(tagName.isInArray(inlineElements) || allAreInlineHtml(children)) {
+		if(tagName.isInArray(inlineElements) || allAreInlineHtml(children, inlineElements)) {
 			foreach(child; children) {
 				s ~= child.toString();//toPrettyString(false, 0, null);
 			}
@@ -3493,12 +3579,17 @@ class Element {
 	}
 
 }
+// computedStyle could argubaly be removed to bring size down
+//pragma(msg, __traits(classInstanceSize, Element));
+//pragma(msg, Element.tupleof);
 
 // FIXME: since Document loosens the input requirements, it should probably be the sub class...
 /// Specializes Document for handling generic XML. (always uses strict mode, uses xml mime type and file header)
 /// Group: core_functionality
 class XmlDocument : Document {
 	this(string data) {
+		selfClosedElements = null;
+		inlineElements = null;
 		contentType = "text/xml; charset=utf-8";
 		_prolog = `<?xml version="1.0" encoding="UTF-8"?>` ~ "\n";
 
@@ -3910,6 +4001,13 @@ interface FileResource {
 	@property string contentType() const;
 	/// the data
 	immutable(ubyte)[] getData() const;
+	/++
+		filename, return null if none
+
+		History:
+			Added December 25, 2020
+	+/
+	@property string filename() const;
 }
 
 
@@ -3925,7 +4023,7 @@ enum NodeType { Text = 3 }
 T require(T = Element, string file = __FILE__, int line = __LINE__)(Element e) if(is(T : Element))
 	in {}
 	out(ret) { assert(ret !is null); }
-body {
+do {
 	auto ret = cast(T) e;
 	if(ret is null)
 		throw new ElementNotFoundException(T.stringof, "passed value", e, file, line);
@@ -3972,7 +4070,7 @@ class DocumentFragment : Element {
 	}
 	*/
 	override Element parentNode(Element p) {
-		this._parentNode = p;
+		this.parent_ = p;
 		foreach(child; children)
 			child.parentNode = p;
 		return p;
@@ -6529,7 +6627,7 @@ class Table : Element {
 				);
 			}
 		}
-	body {
+	do {
 		if(tablePortition is null)
 			tablePortition = this;
 
@@ -6710,13 +6808,13 @@ struct DomMutationEvent {
 }
 
 
-private immutable static string[] selfClosedElements = [
+private immutable static string[] htmlSelfClosedElements = [
 	// html 4
 	"img", "hr", "input", "br", "col", "link", "meta",
 	// html 5
 	"source" ];
 
-private immutable static string[] inlineElements = [
+private immutable static string[] htmlInlineElements = [
 	"span", "strong", "em", "b", "i", "a"
 ];
 
@@ -6762,7 +6860,7 @@ int intFromHex(string hex) {
 		///.
 		static immutable string[] selectorTokens = [
 			// It is important that the 2 character possibilities go first here for accurate lexing
-		    "~=", "*=", "|=", "^=", "$=", "!=", // "::" should be there too for full standard
+		    "~=", "*=", "|=", "^=", "$=", "!=",
 		    "::", ">>",
 		    "<<", // my any-parent extension (reciprocal of whitespace)
 		    // " - ", // previous-sibling extension (whitespace required to disambiguate tag-names)
@@ -6940,6 +7038,9 @@ int intFromHex(string hex) {
 		string[] hasSelectors; /// :has(this)
 		string[] notSelectors; /// :not(this)
 
+		string[] isSelectors; /// :is(this)
+		string[] whereSelectors; /// :where(this)
+
 		ParsedNth[] nthOfType; /// .
 		ParsedNth[] nthLastOfType; /// .
 		ParsedNth[] nthChild; /// .
@@ -6954,6 +7055,8 @@ int intFromHex(string hex) {
 		bool whitespaceOnly; ///
 		bool oddChild; ///.
 		bool evenChild; ///.
+
+		bool scopeElement; /// the css :scope thing; matches just the `this` element. NOT IMPLEMENTED
 
 		bool rootElement; ///.
 
@@ -6990,6 +7093,9 @@ int intFromHex(string hex) {
 			foreach(a; notSelectors) ret ~= ":not(" ~ a ~ ")";
 			foreach(a; hasSelectors) ret ~= ":has(" ~ a ~ ")";
 
+			foreach(a; isSelectors) ret ~= ":is(" ~ a ~ ")";
+			foreach(a; whereSelectors) ret ~= ":where(" ~ a ~ ")";
+
 			foreach(a; nthChild) ret ~= ":nth-child(" ~ a.toString ~ ")";
 			foreach(a; nthOfType) ret ~= ":nth-of-type(" ~ a.toString ~ ")";
 			foreach(a; nthLastOfType) ret ~= ":nth-last-of-type(" ~ a.toString ~ ")";
@@ -7003,6 +7109,7 @@ int intFromHex(string hex) {
 			if(oddChild) ret ~= ":odd-child";
 			if(evenChild) ret ~= ":even-child";
 			if(rootElement) ret ~= ":root";
+			if(scopeElement) ret ~= ":scope";
 
 			return ret;
 		}
@@ -7057,6 +7164,12 @@ int intFromHex(string hex) {
 					}
 				}
 			}
+			/+
+			if(scopeElement) {
+				if(e !is this_)
+					return false;
+			}
+			+/
 			if(emptyElement) {
 				if(e.children.length)
 					return false;
@@ -7126,6 +7239,16 @@ int intFromHex(string hex) {
 			foreach(a; notSelectors) {
 				auto sel = Selector(a);
 				if(sel.matchesElement(e))
+					return false;
+			}
+			foreach(a; isSelectors) {
+				auto sel = Selector(a);
+				if(!sel.matchesElement(e))
+					return false;
+			}
+			foreach(a; whereSelectors) {
+				auto sel = Selector(a);
+				if(!sel.matchesElement(e))
 					return false;
 			}
 
@@ -7506,6 +7629,7 @@ int intFromHex(string hex) {
 					if(!part.matchElement(where))
 						return false;
 				} else if(lastSeparation == 2) { // the + operator
+				//writeln("WHERE", where, " ", part);
 					where = where.previousSibling("*");
 
 					if(!part.matchElement(where))
@@ -7548,9 +7672,14 @@ int intFromHex(string hex) {
 		SelectorComponent[] ret;
 		auto tokens = lexSelector(selector); // this will parse commas too
 		// and now do comma-separated slices (i haz phobosophobia!)
+		int parensCount = 0;
 		while (tokens.length > 0) {
 			size_t end = 0;
-			while (end < tokens.length && tokens[end] != ",") ++end;
+			while (end < tokens.length && (parensCount > 0 || tokens[end] != ",")) {
+				if(tokens[end] == "(") parensCount++;
+				if(tokens[end] == ")") parensCount--;
+				++end;
+			}
 			if (end > 0) ret ~= parseSelector(tokens[0..end], caseSensitiveTags);
 			if (tokens.length-end < 2) break;
 			tokens = tokens[end+1..$];
@@ -7719,6 +7848,9 @@ int intFromHex(string hex) {
 							current.firstChild = true;
 							current.lastChild = true;
 						break;
+						case "scope":
+							current.scopeElement = true;
+						break;
 						case "empty":
 							// one with no children
 							current.emptyElement = true;
@@ -7744,6 +7876,14 @@ int intFromHex(string hex) {
 							current.nthLastOfType ~= ParsedNth(readFunctionalSelector());
 							state = State.SkippingFunctionalSelector;
 						continue;
+						case "is":
+							state = State.SkippingFunctionalSelector;
+							current.isSelectors ~= readFunctionalSelector();
+						continue; // now the rest of the parser skips past the parens we just handled
+						case "where":
+							state = State.SkippingFunctionalSelector;
+							current.whereSelectors ~= readFunctionalSelector();
+						continue; // now the rest of the parser skips past the parens we just handled
 						case "not":
 							state = State.SkippingFunctionalSelector;
 							current.notSelectors ~= readFunctionalSelector();
@@ -7763,10 +7903,6 @@ int intFromHex(string hex) {
 						case "visited", "active", "hover", "target", "focus", "selected":
 							current.attributesPresent ~= "nothing";
 							// FIXME
-						/*
-						// defined in the standard, but I don't implement it
-						case "not":
-						*/
 						/+
 						// extensions not implemented
 						//case "text": // takes the text in the element and wraps it in an element, returning it
@@ -8380,9 +8516,11 @@ private string[string] aadup(in string[string] arr) {
 // dom event support, if you want to use it
 
 /// used for DOM events
+version(dom_with_events)
 alias EventHandler = void delegate(Element handlerAttachedTo, Event event);
 
 /// This is a DOM event, like in javascript. Note that this library never fires events - it is only here for you to use if you want it.
+version(dom_with_events)
 class Event {
 	this(string eventName, Element target) {
 		this.eventName = eventName;
@@ -8676,11 +8814,11 @@ unittest {
 }
 +/
 
-bool allAreInlineHtml(const(Element)[] children) {
+bool allAreInlineHtml(const(Element)[] children, const string[] inlineElements) {
 	foreach(child; children) {
 		if(child.nodeType == NodeType.Text && child.nodeValue.strip.length) {
 			// cool
-		} else if(child.tagName.isInArray(inlineElements) && allAreInlineHtml(child.children)) {
+		} else if(child.tagName.isInArray(inlineElements) && allAreInlineHtml(child.children, inlineElements)) {
 			// cool
 		} else {
 			// prolly block
@@ -8746,6 +8884,15 @@ unittest {
 	assert(doc.querySelectorAll(" > body").length == 1); //  should mean the same thing
 	assert(doc.root.querySelectorAll(" > body").length == 1); // the root of HTML has this
 	assert(doc.root.querySelectorAll(" > html").length == 0); // but not this
+
+	// also confirming the querySelector works via the mdn definition
+	auto foo = doc.requireSelector("#foo");
+	assert(foo.querySelector("#foo > div") !is null);
+	assert(foo.querySelector("body #foo > div") !is null);
+
+	// this is SUPPOSED to work according to the spec but never has in dom.d since it limits the scope.
+	// the new css :scope thing is designed to bring this in. and meh idk if i even care.
+	//assert(foo.querySelectorAll("#foo > div").length == 2);
 }
 
 unittest {
@@ -8768,12 +8915,75 @@ unittest {
 	assert(el.closest("p, div") is el);
 }
 
+unittest {
+	// https://developer.mozilla.org/en-US/docs/Web/CSS/:is
+	auto document = new Document(`<test>
+		<div class="foo"><p>cool</p><span>bar</span></div>
+		<main><p>two</p></main>
+	</test>`);
+
+	assert(document.querySelectorAll(":is(.foo, main) p").length == 2);
+	assert(document.querySelector("div:where(.foo)") !is null);
+}
+
+unittest {
+immutable string html = q{
+<root>
+<div class="roundedbox">
+ <table>
+  <caption class="boxheader">Recent Reviews</caption>
+  <tr>
+   <th>Game</th>
+   <th>User</th>
+   <th>Rating</th>
+   <th>Created</th>
+  </tr>
+
+  <tr>
+   <td>June 13, 2020 15:10</td>
+   <td><a href="/reviews/8833">[Show]</a></td>
+  </tr>
+
+  <tr>
+   <td>June 13, 2020 15:02</td>
+   <td><a href="/reviews/8832">[Show]</a></td>
+  </tr>
+
+  <tr>
+   <td>June 13, 2020 14:41</td>
+   <td><a href="/reviews/8831">[Show]</a></td>
+  </tr>
+ </table>
+</div>
+</root>
+};
+
+  auto doc = new Document(cast(string)html);
+  // this should select the second table row, but...
+  auto rd = doc.root.querySelector(`div.roundedbox > table > caption.boxheader + tr + tr + tr > td > a[href^=/reviews/]`);
+  assert(rd !is null);
+  assert(rd.href == "/reviews/8832");
+
+  rd = doc.querySelector(`div.roundedbox > table > caption.boxheader + tr + tr + tr > td > a[href^=/reviews/]`);
+  assert(rd !is null);
+  assert(rd.href == "/reviews/8832");
+}
+
+unittest {
+	try {
+		auto doc = new XmlDocument("<testxmlns:foo=\"/\"></test>");
+		assert(0);
+	} catch(Exception e) {
+		// good; it should throw an exception, not an error.
+	}
+}
+
 /*
-Copyright: Adam D. Ruppe, 2010 - 2020
+Copyright: Adam D. Ruppe, 2010 - 2021
 License:   <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
 Authors: Adam D. Ruppe, with contributions by Nick Sabalausky, Trass3r, and ketmar among others
 
-        Copyright Adam D. Ruppe 2010-2020.
+        Copyright Adam D. Ruppe 2010-2021.
 Distributed under the Boost Software License, Version 1.0.
    (See accompanying file LICENSE_1_0.txt or copy at
         http://www.boost.org/LICENSE_1_0.txt)
