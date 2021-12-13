@@ -371,6 +371,17 @@ enum MyUDA;
 @MyUDA void foo() {}
 ---
 
+(New 12 Dec 2021) You can also get a UDA's arguments as a source string with `$(UDA_STRING)`.
+
+---
+struct MyUDA { string s; }
+
+/// The uda says $(UDA_STRING MyUDA).
+@MyUDA("cool") void foo() {}
+---
+
+Please note it does NOT actually perform any evaluations - it is just string lookup on the left side of the parenthesis to find the string that is inside the parenthesis. This might change at a later date.
+
 $(H2 Paragraph detection)
 
 The generator will automatically handle paragraph tags by looking for blank lines and other separators. Just write and trust it to do the right thing. (If it doesn't, email me a bug report, please.)

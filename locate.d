@@ -28,7 +28,27 @@ PostgreSql db() {
 
 TermElement[] resultsByTerm(string term) {
 	TermElement[] ret;
-	foreach(row; db.query("SELECT d_symbols_id, score FROM auto_generated_tags WHERE tag = ? ORDER BY score DESC LIMIT 15", term))
+	foreach(row; db.query("SELECT d_symbols.id, score FROM hand_written_tags INNER JOIN d_symbols ON d_symbol_fully_qualified_name = fully_qualified_name WHERE tag = ? ORDER BY score DESC LIMIT 35", term))
+		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
+
+	foreach(row; db.query("SELECT d_symbols.id, name FROM d_symbols WHERE fully_qualified_name = ? OR name = ? LIMIT 35", term, term)) {
+		ret ~= TermElement(to!int(row[0]), row[1] == term ? 25 : 50);
+	}
+
+	foreach(row; db.query("
+		SELECT
+			d_symbols_id, score
+		FROM
+			auto_generated_tags
+		INNER JOIN
+			package_version ON package_version_id = package_version.id
+		WHERE
+			tag = ?
+			AND
+			is_latest = true
+		ORDER BY
+			score + (case (dub_package_id = 6 or dub_package_id = 9) when true then 5 else 0 end) DESC
+		LIMIT 35", term))
 		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
 	return ret;
 }
@@ -159,14 +179,18 @@ Magic[] getPossibilities(string search, string preferredProject) {
 	if(magic.length == 0) {
 		foreach(term; terms) {
 			if(term.length == 0) continue;
-			term = term.toLower();
-			foreach(row; db.query("SELECT id, fully_qualified_name FROM d_symbols WHERE fully_qualified_name LIKE ?", term[0 .. 1] ~ "%")) {
+			//term = term.toLower();
+			foreach(row; db.query("SELECT id, fully_qualified_name FROM d_symbols WHERE fully_qualified_name > ? LIMIT 50", term)) {
 				string name = row[1];
 				int id = row[0].to!int;
+				/+
 				import std.algorithm;
 				name = name.toLower;
 				auto dist = cast(int) levenshteinDistance(name, term);
 				if(dist <= 2) {
+				+/
+				int dist = 0;
+				{
 					auto details = getDecl(id);
 					int projectAdjustment = getProjectAdjustment(details, preferredProject);
 					magic ~= Magic(id, projectAdjustment + (3 - dist), details);
@@ -230,6 +254,18 @@ void searcher(Cgi cgi) {
 			cgi.write(std.file.read("/dpldocs-build/style.css"), true);
 			return;
 		}
+	} else {
+		string path = cgi.requestUri;
+
+		auto q = path.indexOf("?");
+		if(q != -1) {
+			path = path[0 .. q];
+		}
+
+		if(path.length && path[0] == '/')
+			path = path[1 .. $];
+
+
 	}
 
 	alias searchTerm = search;
@@ -294,6 +330,7 @@ void searcher(Cgi cgi) {
 		default:
 			// just continue
 			version(vps) { } else {
+			/+
 			if(std.file.exists("/var/www/dpldocs.info/experimental-docs/" ~ searchTerm ~ ".1.html")) {
 				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".1.html");
 				return;
@@ -302,6 +339,7 @@ void searcher(Cgi cgi) {
 				cgi.setResponseLocation("/experimental-docs/" ~ searchTerm ~ ".html");
 				return;
 			}
+			+/
 				// redirect to vps
 				if("local" !in cgi.get)
 				cgi.setResponseLocation("//search.dpldocs.info/?q=" ~ std.uri.encodeComponent(searchTerm));

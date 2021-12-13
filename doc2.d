@@ -19,6 +19,9 @@ version(linux)
 else
 	__gshared bool caseInsensitiveFilenames = true;
 
+
+__gshared bool searchPostgresOnly = false; // DISGUSTING HACK THAT SHOULD NOT BE USED but im too lazy to fix the real problem. arcz + fork() = pain rn
+
 /*
 
 Glossary feature: little short links that lead somewhere else.
@@ -122,6 +125,17 @@ string outputFilePath(string[] names...) {
 }
 
 void copyStandardFileTo(bool timecheck=true) (string destname, string stdfname) {
+
+	if(arcz !is null) {
+		synchronized(arcz) {
+			import std.file;
+			auto info = cast(ubyte[]) std.file.read(findStandardFile(stdfname));
+			arcz.newFile(destname, cast(int) info.length);
+			arcz.rawWrite(info);
+		}
+		return;
+	}
+
 	import std.file;
 	if (exists(destname)) {
 		static if (timecheck) {
@@ -1369,9 +1383,13 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 			 {} // intentionally blank
 		else if(cast(PostblitDecl) child)
 			 {} // intentionally blank
-		else if(auto c = cast(ImportDecl) child)
-			imports ~= c;
-		else
+		else if(auto c = cast(ImportDecl) child) {
+			// selective imports get special treatment to mix in to the members look
+			if(c.bindLhs.length || c.bindRhs.length)
+				members ~= child;
+			else
+				imports ~= c;
+		} else
 			members ~= child;
 	}
 
@@ -1460,7 +1478,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 
 		foreach(imp; imports) {
 			auto dl = content.addChild("dl").addClass("member-list native");
-			handleChildDecl(dl, imp, false);
+			handleChildDecl(dl, imp);//, false);
 		}
 	}
 
@@ -2101,6 +2119,32 @@ abstract class Decl {
 		return false;
 	}
 
+	/++
+		Given a UDA like @Name(single_arg)
+
+		returns single_arg as a source code string iff Name == localName
+	+/
+	final string getStringUda(string localName) {
+		foreach(a; attributes) {
+			if(a.attr && a.attr.atAttribute && a.attr.atAttribute.argumentList)
+				foreach(at; a.attr.atAttribute.argumentList.items) {
+					if(auto e = cast(UnaryExpression) at)
+					if(auto fce = e.functionCallExpression)
+					if(auto e2 = fce.unaryExpression)
+					if(auto pe = e2.primaryExpression)
+					if(auto i = pe.identifierOrTemplateInstance)
+					if(i.identifier.text == localName)
+						if(fce.arguments.argumentList)
+						if(fce.arguments.argumentList.items.length == 1)
+						if(auto arg = cast(UnaryExpression) fce.arguments.argumentList.items[0])
+						if(auto argpe = arg.primaryExpression)
+							return argpe.primary.text;
+				}
+
+		}
+		return null;
+	}
+
 	// FIXME: isFinal and isVirtual
 	// FIXME: it would be nice to inherit documentation from interfaces too.
 
@@ -2124,6 +2168,7 @@ abstract class Decl {
 	// includes this in the return (plus eponymous check). Check if overloaded with .length > 1
 	Decl[] getImmediateDocumentedOverloads() {
 		Decl[] ret;
+		return ret;
 
 		if(this.parent !is null) {
 			foreach(child; this.parent.children) {
@@ -3068,15 +3113,40 @@ class ImportDecl : Decl {
 	mixin CtorFrom!ImportDeclaration;
 
 	bool isPublic;
+
+	bool isStatic;
+	string bindLhs;
+	string bindRhs;
+
 	string newName;
 	string oldName;
+
+	string refersTo() {
+		auto l = oldName;
+		if(bindRhs.length)
+			l ~= "." ~ bindRhs;
+		else if(bindLhs.length)
+			l ~= "." ~ bindLhs;
+
+		return l;
+	}
+
+	override string rawComment() {
+		if(astNode.comment)
+			return astNode.comment;
+		auto decl = lookupName(refersTo);
+		if(decl !is null && decl !is this)
+			return decl.comment;
+		return null;
+	}
 
 	override string link(bool forFile = false, string* useless = null) {
 		string d;
 		if(!forFile) {
 			d = getDirectoryForPackage(oldName);
 		}
-		return d ~ oldName ~ ".html";
+		auto l = d ~ refersTo ~ ".html";
+		return l;
 	}
 
 	// I also want to document undocumented public imports, since they also spam up the namespace
@@ -3085,16 +3155,37 @@ class ImportDecl : Decl {
 	}
 
 	override string name() {
-		return newName.length ? newName : oldName;
+		string addModuleName(string s) {
+			return s ~ " (from " ~ oldName ~ ")";
+		}
+		return bindLhs.length ? addModuleName(bindLhs) :
+			bindRhs.length ? addModuleName(bindRhs) :
+			newName.length ? newName : oldName;
 	}
 
 	override string declarationType() {
+		// search for "selective import" in this file for another special case similar to this fyi
+		// selective import is more transparent
+		if(bindRhs.length || bindLhs.length) {
+			auto decl = lookupName(refersTo);
+			if(decl !is null && decl !is this) {
+				return decl.declarationType();
+			}
+		}
 		return "import";
 	}
 
 	override void getSimplifiedPrototype(MyOutputRange output) {
+		auto decl = lookupName(refersTo);
+		if(decl !is null && decl !is this) {
+			decl.getSimplifiedPrototype(output);
+			output.put(" via ");
+		}
+
 		if(isPublic)
 			output.putTag("<span class=\"builtin-type\">public</span> ");
+		if(isStatic)
+			output.putTag("<span class=\"storage-class\">static</span> ");
 		output.putTag(toHtml(astNode).source);
 	}
 
@@ -3531,6 +3622,7 @@ class Looker : ASTVisitor {
 	override void visit(const ImportDeclaration id) {
 
 		bool isPublic = false;
+		bool isStatic = false;
 
 		foreach(a; attributes[$-1]) {
 			if (a.attr && isProtection(a.attr.attribute.type)) {
@@ -3539,11 +3631,12 @@ class Looker : ASTVisitor {
 				} else {
 					isPublic = false;
 				}
-			}
+			} else if(a.attr && a.attr.attribute.type == tok!"static")
+				isStatic = true;
 		}
 
 
-		void handleSingleImport(const SingleImport si) {
+		void handleSingleImport(const SingleImport si, string bindLhs, string bindRhs) {
 			auto newName = si.rename.text;
 			auto oldName = "";
 			foreach(idx, ident; si.identifierChain.identifiers) {
@@ -3559,15 +3652,21 @@ class Looker : ASTVisitor {
 			nid.isPublic = isPublic;
 			nid.oldName = oldName;
 			nid.newName = newName;
+
+			nid.bindLhs = bindLhs;
+			nid.bindRhs = bindRhs;
+			nid.isStatic = isStatic;
 		}
 
 
 		foreach(si; id.singleImports) {
-			handleSingleImport(si);
+			handleSingleImport(si, null, null);
 		}
 
-		if(id.importBindings && id.importBindings.singleImport)
-			handleSingleImport(id.importBindings.singleImport); // FIXME: handle bindings
+		if(id.importBindings && id.importBindings.singleImport) {
+			foreach(bind; id.importBindings.importBinds)
+				handleSingleImport(id.importBindings.singleImport, toText(bind.left), toText(bind.right)); // FIXME: handle bindings
+		}
 
 	}
 
@@ -3851,9 +3950,20 @@ string[] scanFiles (string basedir) {
 	return res;
 }
 
+import arsd.archive;
+__gshared ArzCreator arcz;
+
 void writeFile(string filename, string content, bool gzip) {
 	import std.zlib;
 	import std.file;
+
+	if(arcz !is null) {
+		synchronized(arcz) {
+			arcz.newFile(filename, cast(int) content.length);
+			arcz.rawWrite(content);
+		}
+		return;
+	}
 
 	if(gzip) {
 		auto compress = new Compress(HeaderFormat.gzip);
@@ -3915,6 +4025,8 @@ int main(string[] args) {
 
 	bool debugPrint;
 
+	string arczFile;
+
 	auto opt = getopt(args,
 		std.getopt.config.passThrough,
 		std.getopt.config.bundling,
@@ -3945,12 +4057,20 @@ int main(string[] args) {
 		"jobs|j", "Number of generation jobs to run at once (default=dependent on number of cpu cores", &jobs,
 		"package-path", "Path to be prefixed to links for a particular D package namespace (package_pattern=link_prefix)", &globPathInput,
 		"debug-print", "Print debugging information", &debugPrint,
-		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath);
+		"data-dir", "Path to directory containing standard files (default=detect automatically)", &dataDirPath,
+		"arcz", "Put files in the given arcz file instead of the filesystem", &arczFile);
 
 	if (opt.helpWanted || args.length == 1) {
 		defaultGetoptPrinter("A better D documentation generator\nCopyright © Adam D. Ruppe 2016-2021\n" ~
 			"Syntax: " ~ args[0] ~ " /path/to/your/package\n", opt.options);
 		return 0;
+	}
+
+	if(arczFile.length) {
+		arcz = new ArzCreator(arczFile);
+		// the arcz will do its own thing
+		outputDirectory = null;
+		gzip = false;
 	}
 
 	PostgreSql searchDb;
@@ -4052,7 +4172,7 @@ int main(string[] args) {
 
 	generatingSource = annotateSource;
 
-	if (outputDirectory[$-1] != '/')
+	if (outputDirectory.length && outputDirectory[$-1] != '/')
 		outputDirectory ~= '/';
 
 	if (opt.helpWanted || args.length == 1) {
@@ -4081,7 +4201,7 @@ int main(string[] args) {
 		if (!exists(skeletonFile) && findStandardFile!false("skeleton-default.html").length)
 			copyStandardFileTo!false(skeletonFile, "skeleton-default.html");
 
-		if (!exists(outputDirectory))
+		if (outputDirectory.length && !exists(outputDirectory))
 			mkdir(outputDirectory);
 
 		if(copyStandardFiles) {
@@ -4316,6 +4436,8 @@ int main(string[] args) {
 			pkg = "index";//continue; // to create an index.html listing all top level things
 		synchronized(modulesByNameMonitor)
 		if(pkg !in modulesByName) {
+			// FIXME: for an index.html one, just print everything recursively for easy browsing
+			// FIXME: why are the headers not clickable anymore?!?!
 			writeln("Making FAKE package for ", pkg);
 			config.fileName = "dummy";
 			auto b = cast(ubyte[]) (`/++
@@ -4454,11 +4576,20 @@ int main(string[] args) {
 	version(linux)
 	if(makeSearchIndex && makeHtml) {
 		import core.sys.posix.unistd;
-		if(fork()) {
-			makeSearchIndex = false; // this fork focuses on html
-			//mustWait = true;
+
+		if(arcz) {
+			// arcz not compatible with the search fork trick
+			if(postgresVersionId)
+				searchPostgresOnly = true;
 		} else {
-			makeHtml = false; // and this one does the search
+			if(fork()) {
+				makeSearchIndex = false; // this fork focuses on html
+				//mustWait = true;
+			} else {
+				makeHtml = false; // and this one does the search
+				if(postgresVersionId)
+					searchPostgresOnly = true;
+			}
 		}
 	}
 
@@ -4502,28 +4633,34 @@ int main(string[] args) {
 		// write out the landing page for JS search,
 		// see the comment in the source of that html
 		// for more details
-		auto searchDocsHtml = std.file.readText(findStandardFile("search-docs.html"));
-		writeFile(outputFilePath("search-docs.html"), searchDocsHtml, gzip);
+		if(!searchPostgresOnly) {
+			auto searchDocsHtml = std.file.readText(findStandardFile("search-docs.html"));
+			writeFile(outputFilePath("search-docs.html"), searchDocsHtml, gzip);
+		}
 
 
 		// the search index is a HTML page containing some script
 		// and the index XML. See the source of search-docs.js for more info.
-		index = FileProxy(outputFilePath("search-results.html"), gzip);
+		if(searchPostgresOnly) {
+			// leave index as the no-op dummy
+		} else {
+			index = FileProxy(outputFilePath("search-results.html"), gzip);
 
-		auto skeletonDocument = new Document();
-		skeletonDocument.parseUtf8(std.file.readText(skeletonFile), true, true);
-		auto skeletonText = skeletonDocument.toString();
+			auto skeletonDocument = new Document();
+			skeletonDocument.parseUtf8(std.file.readText(skeletonFile), true, true);
+			auto skeletonText = skeletonDocument.toString();
 
-		auto idx = skeletonText.indexOf("</body>");
-		if(idx == -1) throw new Exception("skeleton missing body element");
+			auto idx = skeletonText.indexOf("</body>");
+			if(idx == -1) throw new Exception("skeleton missing body element");
 
-		// write out the skeleton...
-		index.writeln(skeletonText[0 .. idx]);
+			// write out the skeleton...
+			index.writeln(skeletonText[0 .. idx]);
 
-		// and then the data container for the xml
-		index.writeln(`<script type="text/xml" id="search-index-container">`);
+			// and then the data container for the xml
+			index.writeln(`<script type="text/xml" id="search-index-container">`);
 
-		index.writeln("<adrdox>");
+			index.writeln("<adrdox>");
+		}
 
 
 		// delete the existing stuff so we do a full update in this run
@@ -4566,32 +4703,37 @@ int main(string[] args) {
 			searchDb.query("COMMIT");
 		}
 
-		index.writeln("<index>");
-		foreach(term, arr; searchTerms) {
-			index.write("<term value=\""~xmlEntitiesEncode(term)~"\">");
-			foreach(item; arr) {
-				index.write("<result decl=\""~to!string(item.declId)~"\" score=\""~to!string(item.score)~"\" />");
+		if(!searchPostgresOnly) {
+			index.writeln("<index>");
+			foreach(term, arr; searchTerms) {
+				index.write("<term value=\""~xmlEntitiesEncode(term)~"\">");
+				foreach(item; arr) {
+					index.write("<result decl=\""~to!string(item.declId)~"\" score=\""~to!string(item.score)~"\" />");
+				}
+				index.writeln("</term>");
 			}
-			index.writeln("</term>");
+			index.writeln("</index>");
+			index.writeln("</adrdox>");
+
+			// finish the container
+			index.writeln("</script>");
+
+			// write the script that runs the search
+			index.writeln("<script src=\"search-docs.js\"></script>");
+
+			// and close the skeleton
+			index.writeln("</body></html>");
+			index.close();
 		}
-		index.writeln("</index>");
-		index.writeln("</adrdox>");
-
-		// finish the container
-		index.writeln("</script>");
-
-		// write the script that runs the search
-		index.writeln("<script src=\"search-docs.js\"></script>");
-
-		// and close the skeleton
-		index.writeln("</body></html>");
-		index.close();
 	}
 
 
 	//import std.stdio;
 	//writeln("press any key to continue");
 	//readln();
+
+	if(arcz)
+		arcz.close();
 
 	return 0;
 }
@@ -4602,14 +4744,18 @@ struct FileProxy {
 	Compress compress; // and compress is gc'd anyway so copying the ref means same object!
 	bool gzip;
 
+	bool dummy = true;
+
 	this(string filename, bool gzip) {
 		f = File(filename ~ (gzip ? ".gz" : ""), gzip ? "wb" : "wt");
 		if(gzip)
 			compress = new Compress(HeaderFormat.gzip);
 		this.gzip = gzip;
+		this.dummy = false;
 	}
 
 	void writeln(string s) {
+		if(dummy) return;
 		if(gzip)
 			f.rawWrite(compress.compress(s ~ "\n"));
 		else
@@ -4617,6 +4763,7 @@ struct FileProxy {
 	}
 
 	void write(string s) {
+		if(dummy) return;
 		if(gzip)
 			f.rawWrite(compress.compress(s));
 		else
@@ -4624,6 +4771,7 @@ struct FileProxy {
 	}
 
 	void close() {
+		if(dummy) return;
 		if(gzip)
 			f.rawWrite(compress.flush());
 		f.close();
@@ -4666,6 +4814,7 @@ string searchInsertToBeFlushed;
 string postgresVersionIdGlobal; // total hack!!!
 
 void saveSearchTerm(PostgreSql searchDb, string term, SearchResult sr, bool isDeep = false) {
+	if(!searchPostgresOnly)
 	if(searchDb is null || !isDeep) {
 		searchTerms[term] ~= sr; // save the things for offline xml too
 	}
@@ -4724,8 +4873,8 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 
 // FIXME: if it is undocumented in source, give it a score penalty.
 
-	// exact match on FQL is always a great match
-	searchDb.saveSearchTerm(decl.fullyQualifiedName, SearchResult(tid, 50));
+	// exact match on FQL is always a great match.... but the DB can find it anyway
+	// searchDb.saveSearchTerm(decl.fullyQualifiedName, SearchResult(tid, 50));
 
 	// names like GC.free should be a solid match too
 
@@ -4738,7 +4887,8 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 
 	if(decl.name != "this") {
 		// exact match on specific name is worth something too
-		searchDb.saveSearchTerm(decl.name, SearchResult(tid, 25));
+		/// but again the DB can find that in its other index
+		//searchDb.saveSearchTerm(decl.name, SearchResult(tid, 25));
 
 		if(decl.isModule) {
 			// module names like std.stdio should match stdio strongly,
@@ -4796,6 +4946,7 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 
 	bool deepSearch = searchDb !is null;
 
+	version(none) // just not worth the hassle
 	if(deepSearch) {
 		Document document;
 		//if(decl.fullyQualifiedName in generatedDocuments)

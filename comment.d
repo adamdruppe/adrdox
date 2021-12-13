@@ -2493,13 +2493,21 @@ string highlight(string sourceCode)
     }
 
 
+	bool inImport;
 	while (!tokens.empty)
 	{
 		auto t = tokens.front;
 		tokens.popFront();
+
+		// to fix up the import std.string looking silly bug
+		if(!inImport && t.type == tok!"import")
+			inImport = true;
+		else if(inImport && t.type == tok!";")
+			inImport = false;
+
 		if (isBasicType(t.type))
 			writeSpan("type", str(t.type));
-		else if(t.text == "string") // string is a de-facto basic type, though it is technically just a user-defined identifier
+		else if(!inImport && t.text == "string") // string is a de-facto basic type, though it is technically just a user-defined identifier
 			writeSpan("type", t.text);
 		else if (isKeyword(t.type))
 			writeSpan("kwrd", str(t.type));

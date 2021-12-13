@@ -1877,7 +1877,7 @@ in
 {
     assert (comment.length >= 3);
 }
-body
+do
 {
     switch (comment[0 .. 3])
     {
@@ -2030,7 +2030,7 @@ public pure nothrow @nogc:
             assert (popcnt(cast(uint) bucketCount) == 1);
         }
     }
-    body
+    do
     {
         buckets = (cast(Node**) calloc((Node*).sizeof, bucketCount))[0 .. bucketCount];
     }
@@ -2129,7 +2129,7 @@ private:
         assert (data !is null);
         assert (data.length > 0);
     }
-    body
+    do
     {
         immutable uint m = 0x5bd1e995;
         immutable int r = 24;
@@ -2177,7 +2177,7 @@ private:
     {
         assert (result.length == numBytes);
     }
-    body
+    do
     {
         Block* r = rootBlock;
         size_t i = 0;
