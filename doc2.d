@@ -1547,37 +1547,38 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		if(auto mi = cast(MixedInTemplateDecl) d) {
 
 			auto thing = decl.lookupName(toText(mi.astNode.mixinTemplateName));
+			if (!thing) 
+				// else {}
+				continue;
 
-			if(thing) {
-				Element dl;
-				foreach(child; thing.children) {
-					if(mi.isPrivate && !child.isExplicitlyNonPrivate)
-						continue;
-					if(child.docsShouldBeOutputted) {
-						if(dl is null) {
-							if(firstMitd) {
-								auto h2 = content.addChild("h2", "Mixed In Members");
-								h2.id = "mixed-in-members";
-								firstMitd = false;
-							}
+			Element dl;
+			foreach(child; thing.children) {
+				if(mi.isPrivate && !child.isExplicitlyNonPrivate)
+					continue;
+				
+				if (!child.docsShouldBeOutputted)
+					continue;
 
-							//mi.name
-
-							string sp;
-							MyOutputRange or = MyOutputRange(&sp);
-							mi.getSimplifiedPrototype(or);
-							auto h3 = content.addChild("h3", Html("From " ~ sp));
-
-							dl = content.addChild("dl").addClass("member-list native");
-						}
-						handleChildDecl(dl, child);
-
-						if(!minimalDescent)
-							writeHtml(child, forReal, gzip, headerTitle, headerLinks, true);
+				if(dl is null) {
+					if(firstMitd) {
+						auto h2 = content.addChild("h2", "Mixed In Members");
+						h2.id = "mixed-in-members";
+						firstMitd = false;
 					}
-				}
-			} else {
 
+					//mi.name
+
+					string sp;
+					MyOutputRange or = MyOutputRange(&sp);
+					mi.getSimplifiedPrototype(or);
+					auto h3 = content.addChild("h3", Html("From " ~ sp));
+
+					dl = content.addChild("dl").addClass("member-list native");
+				}
+				handleChildDecl(dl, child);
+
+				if(!minimalDescent)
+					writeHtml(child, forReal, gzip, headerTitle, headerLinks, true);
 			}
 		}
 	}
