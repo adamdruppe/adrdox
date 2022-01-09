@@ -186,8 +186,8 @@ static bool sorter(Decl a, Decl b) {
 		return (blogMode && a.declarationType == "Article") ? (b.name < a.name) : (a.name < b.name);
 	else if(a.declarationType == "module" || b.declarationType == "module") // always put modules up top
 		return 
-			(a.declarationType == "module" ? "aaaaaa" : a.declarationType)
-			< (b.declarationType == "module" ? "aaaaaa" : b.declarationType);
+			(a.declarationType == "module" ? "AAAAAA" : a.declarationType)
+			< (b.declarationType == "module" ? "AAAAAA" : b.declarationType);
 	else
 		return a.declarationType < b.declarationType;
 }
@@ -1647,28 +1647,8 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		auto nav = document.requireElementById("page-nav");
 
 		Decl[] navArray;
-		string[string] inNavArray;
 		if(decl.parent) {
-			auto iterate = decl.parent.children;
-
-			if(!decl.isModule) {
-				if(auto emc = decl.parent.eponymousModuleChild()) {
-					// we are an only child of a module, show the module's nav instead
-					if(decl.parent.parent !is null)
-						iterate = decl.parent.parent.children;
-				}
-			}
-
-			foreach(child; iterate) {
-				if(cast(ImportDecl) child) continue; // do not document public imports here, they belong only on the inside
-				if(child.docsShouldBeOutputted) {
-					// strip overloads from sidebar
-					if(child.name !in inNavArray) {
-						navArray ~= child;
-						inNavArray[child.name] = "";
-					}
-				}
-			}
+			navArray = decl.parent.navArray;
 		} else {
 		/+ commented pending removal
 			// this is for building the module nav when doing an incremental
@@ -1707,8 +1687,6 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 		}
 
 		import std.algorithm;
-
-		sort!sorter(navArray);
 
 		Element list;
 
@@ -1957,6 +1935,52 @@ abstract class Decl {
 		}
 	}
 
+	Decl[] navArrayCache;
+	bool navArrayCachePopulated;
+	Decl[] navArray() {
+		synchronized(this) {
+			if(!navArrayCachePopulated) {
+
+				Decl[] navArray;
+				string[string] inNavArray;
+				auto iterate = this.children;
+
+				if(!this.isModule) {
+					if(auto emc = this.eponymousModuleChild()) {
+						// we are an only child of a module, show the module's nav instead
+						if(this.parent !is null)
+							iterate = this.parent.children;
+					}
+				}
+
+				// FIXME: this is a O(n^2) avoidance trick and tbh the nav isn't that useful when it gets
+				// too long anyway.... but I'm still not super happy with this.
+				enum MAX_NAV = 256;
+				if(iterate.length > MAX_NAV)
+					iterate = iterate[0 .. MAX_NAV];
+				foreach(child; iterate) {
+					if(cast(ImportDecl) child) continue; // do not document public imports here, they belong only on the inside
+					if(child.docsShouldBeOutputted) {
+						// strip overloads from sidebar
+						if(child.name !in inNavArray) {
+							navArray ~= child;
+							inNavArray[child.name] = "";
+						}
+					}
+				}
+
+				navArrayCache = navArray;
+
+				navArrayCachePopulated = true;
+
+				import std.algorithm;
+				sort!sorter(navArray);
+			}
+
+			return navArrayCache;
+		}
+	}
+
 	DocComment parsedDocComment_;
 	final @property DocComment parsedDocComment() {
 		if(parsedDocComment_ is DocComment.init) {
@@ -1990,15 +2014,10 @@ abstract class Decl {
 	Decl previousSibling() {
 		if(parent is null)
 			return null;
+		if(parentIndex == 0)
+			return null;
 
-		Decl prev;
-		foreach(child; parent.children) {
-			if(child is this)
-				return prev;
-			prev = child;
-		}
-
-		return null;
+		return parent.children[parentIndex - 1];
 	}
 
 	bool isDocumented() {
@@ -2168,9 +2187,15 @@ abstract class Decl {
 	// includes this in the return (plus eponymous check). Check if overloaded with .length > 1
 	Decl[] getImmediateDocumentedOverloads() {
 		Decl[] ret;
-		return ret;
 
 		if(this.parent !is null) {
+			// FIXME: this check is O(n^2) so I'm NOT doing it if the module is too big
+			// since it slows doc gen to a crawl. Woudl be nice to be better though, like
+			// maybe I could put names into a hashmap, or assume the immediate documented
+			// overloads are actually nearby
+			if(this.parent.children.length > 1024)
+				return ret;
+
 			foreach(child; this.parent.children) {
 				if(((cast(ImportDecl) child) is null) && child.name == this.name && child.docsShouldBeOutputted())
 					ret ~= child;
@@ -2192,7 +2217,7 @@ abstract class Decl {
 
 		size_t lastNonDitto;
 
-		foreach(idx, child; this.parent.children) {
+		foreach_reverse(idx, child; this.parent.children[0 .. this.parentIndex]) {
 			if(!child.isDitto())
 				lastNonDitto = idx;
 			if(child is this) {
@@ -2324,6 +2349,7 @@ abstract class Decl {
 	Decl[string] nameTable;
 	bool nameTableBuilt;
 	Decl[string] buildNameTable(string[] excludeModules = null) {
+		synchronized(this)
 		if(!nameTableBuilt) {
 			lookup: foreach(mod; this.importedModules) {
 				if(!mod.publicImport)
@@ -2479,6 +2505,7 @@ abstract class Decl {
 
 	Decl parent;
 	Decl[] children;
+	size_t parentIndex;
 
 	void writeTemplateConstraint(MyOutputRange output);
 
@@ -2486,7 +2513,21 @@ abstract class Decl {
 
 	void addChild(Decl decl) {
 		decl.parent = this;
+		decl.parentIndex = this.children.length;
 		children ~= decl;
+
+		if(auto pb = cast(PostblitDecl) decl)
+			postblitDecl = pb;
+		if(auto pb = cast(DestructorDecl) decl)
+			destructorDecl = pb;
+		if(auto bp = cast(ConstructorDecl) decl)
+			constructorDecls ~= bp;
+	}
+
+	protected {
+		PostblitDecl postblitDecl;
+		DestructorDecl destructorDecl;
+		ConstructorDecl[] constructorDecls;
 	}
 
 	struct ImportedModule {
@@ -2568,37 +2609,39 @@ abstract class Decl {
 		ProcessedUnittest[] ret;
 
 		Decl start = this;
-		if(isDitto()) {
-			foreach(child; this.parent.children) {
-				if(child is this)
-					break;
-				if(!child.isDitto())
+		size_t startIndex = this.parentIndex;
+		bool ditto = isDitto();
+		if(ditto) {
+			if(this.parent)
+			foreach_reverse(idx, child; this.parent.children[0 .. this.parentIndex]) {
+				if(!child.isDitto()) {
 					start = child;
-			}
-
-		}
-
-		bool started = false;
-		if(this.parent)
-		foreach(child; this.parent.children) {
-			if(started) {
-				if(!child.isDitto())
+					startIndex = idx;
 					break;
-			} else {
-				if(child is start)
-					started = true;
+				}
 			}
 
-			if(started)
-				foreach(test; child.unittests)
-					if(test.comment.length)
-						ret ~= ProcessedUnittest(test.code, test.comment);
 		}
-		else
-			foreach(test; this.unittests)
+
+		foreach(test; this.unittests)
+			if(test.comment.length)
+				ret ~= ProcessedUnittest(test.code, test.comment);
+
+		if(this.parent)
+		foreach(idx, child; this.parent.children[startIndex .. $]) {
+			if(child is this)
+				continue;
+
+			if(idx && !child.isDitto())
+				break;
+
+			foreach(test; child.unittests)
 				if(test.comment.length)
 					ret ~= ProcessedUnittest(test.code, test.comment);
+		}
+
 		_processedUnittests = ret;
+
 		return ret;
 	}
 
@@ -2634,24 +2677,18 @@ abstract class Decl {
 	}
 
 	DestructorDecl destructor() {
-		foreach(child; children)
-			if(auto dd = cast(DestructorDecl) child)
-				return dd;
-		return null;
+		return destructorDecl;
 	}
 
 	PostblitDecl postblit() {
-		foreach(child; children)
-			if(auto dd = cast(PostblitDecl) child)
-				return dd;
-		return null;
+		return postblitDecl;
 	}
 
 
 	abstract bool isDisabled();
 
 	ConstructorDecl disabledDefaultConstructor() {
-		foreach(child; children)
+		foreach(child; constructorDecls)
 		if(child.isConstructor() && child.isDisabled()) {
 			auto ctor = cast(ConstructorDecl) child;
 			if(ctor.astNode.parameters || ctor.astNode.parameters.parameters.length == 0)
@@ -5265,6 +5302,12 @@ string linkUpHtml(string s, Decl decl, string base = "", bool linkToSource = fal
 		if(ident.tagName == "a" || (ident.parentNode && ident.parentNode.tagName == "a"))
 			continue;
 		string i = ident.hasAttribute("data-ident") ? ident.dataset.ident : ident.innerText;
+
+		import std.stdio;
+		if(ident.parentNode)
+		if(ident.parentNode.children.length > 100_000)
+			continue; // not worth the speed hit in trying.
+		// writeln(ident.parentNode.children.length);
 
 		auto n = ident.nextSibling;
 		while(n && n.nodeValue == ".") {

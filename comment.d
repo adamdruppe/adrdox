@@ -1809,6 +1809,7 @@ shared static this() {
 		"SV": 1,
 
 		"UDA_USES" : 1,
+		"UDA_STRING" : 1,
 		"C_HEADER_DESCRIPTION": 1,
 	];
 
@@ -1821,6 +1822,7 @@ shared static this() {
 		"ALWAYS_DOCUMENT" : "",
 
 		"UDA_USES" : "",
+		"UDA_STRING" : "",
 
 		"TIP" : "<div class=\"tip\">$0</div>",
 		"NOTE" : "<div class=\"note\">$0</div>",
@@ -2215,6 +2217,10 @@ Element expandDdocMacros2(string txt, Decl decl) {
 				holder.innerText = stuff;
 			}
 			return holder;
+		}
+
+		if(name == "UDA_STRING") {
+			return new TextNode(decl.getStringUda(stuff));
 		}
 
 		if(name == "UDA_USES") {
