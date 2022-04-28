@@ -28,13 +28,31 @@ PostgreSql db() {
 
 TermElement[] resultsByTerm(string term) {
 	TermElement[] ret;
-	foreach(row; db.query("SELECT d_symbols.id, score FROM hand_written_tags INNER JOIN d_symbols ON d_symbol_fully_qualified_name = fully_qualified_name WHERE tag = ? ORDER BY score DESC LIMIT 35", term))
+	foreach(row; db.query("SELECT d_symbols.id, score FROM hand_written_tags INNER JOIN d_symbols ON d_symbol_fully_qualified_name = fully_qualified_name WHERE tag ILIKE ? ORDER BY score DESC", term))
 		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
 
-	foreach(row; db.query("SELECT d_symbols.id, name FROM d_symbols WHERE fully_qualified_name = ? OR name = ? LIMIT 35", term, term)) {
-		ret ~= TermElement(to!int(row[0]), row[1] == term ? 25 : 50);
+	foreach(row; db.query("
+		SELECT
+			d_symbols.id, fully_qualified_name
+		FROM
+			d_symbols
+		INNER JOIN
+			package_version ON package_version_id = package_version.id
+		WHERE
+			is_latest = true
+			AND
+			(
+				fully_qualified_name = ?
+				OR
+				name = ?
+				OR
+				substring(fully_qualified_name, length(module_name) + 2) = ?
+			)
+	", term, term, term)) {
+		ret ~= TermElement(to!int(row[0]), row[1] == term ? 50 : 25);
 	}
 
+	version(none)
 	foreach(row; db.query("
 		SELECT
 			d_symbols_id, score
@@ -43,12 +61,12 @@ TermElement[] resultsByTerm(string term) {
 		INNER JOIN
 			package_version ON package_version_id = package_version.id
 		WHERE
-			tag = ?
+			tag ILIKE ?
 			AND
 			is_latest = true
 		ORDER BY
 			score + (case (dub_package_id = 6 or dub_package_id = 9) when true then 5 else 0 end) DESC
-		LIMIT 35", term))
+		", term))
 		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
 	return ret;
 }
@@ -114,12 +132,12 @@ Magic[] getPossibilities(string search, string preferredProject) {
 
 	int[int] declHits;
 
-	ps.PorterStemmer s;
+	// ps.PorterStemmer s;
 
 	auto terms = search.split(" ");// ~ search.split(".");
 	// filter empty terms
 	for(int i = 0; i < terms.length; i++) {
-		if(terms[i].length == 0) {
+		if(terms[i].strip.length == 0) {
 			terms[i] = terms[$-1];
 			terms = terms[0 .. $-1];
 			i--;
@@ -132,7 +150,7 @@ Magic[] getPossibilities(string search, string preferredProject) {
 			return;
 		}
 		if(item.declId in declScores) {
-			declScores[item.declId] += 25; // hit both terms
+			//declScores[item.declId] += 25; // hit both terms
 			declScores[item.declId] += item.score;
 		} else {
 			// only hit one term...
@@ -149,21 +167,19 @@ Magic[] getPossibilities(string search, string preferredProject) {
 			addHit(item, idx);
 			declHits[item.declId] |= 1 << idx;
 		}
-		auto l = term.toLower;
-		if(l != term)
-			foreach(item; resultsByTerm(l)) {
-				addHit(item, idx);
-				declHits[item.declId] |= 1 << idx;
-			}
+		/+
 		auto st = s.stem(term.toLower).idup;
 		if(st != l)
 			foreach(item; resultsByTerm(st)) {
 				addHit(item, idx);
 				declHits[item.declId] |= 1 << idx;
 			}
+		+/
 	}
 
 	Magic[] magic;
+
+	string[string] fqns;
 
 	foreach(decl, score; declScores) {
 		auto hits = declHits[decl];
@@ -172,6 +188,11 @@ Magic[] getPossibilities(string search, string preferredProject) {
 				score /= 2;
 		}
 		auto details = getDecl(decl);
+		/+
+		if(details.name in fqns)
+			continue;
+		fqns[details.name] = details.name;
+		+/
 		int projectAdjustment = getProjectAdjustment(details, preferredProject);
 		magic ~= Magic(decl, score + projectAdjustment, details);
 	}
@@ -432,6 +453,10 @@ void searcher(Cgi cgi) {
 
 		// FIXME fix relative links from here
 		ml.addChild("dd", Html(html));
+		foreach(a; ml.querySelectorAll("a[href]")) {
+			auto uri = Uri(a.href).basedOn(Uri("//" ~ decl.packageName~".dpldocs.info/"));
+			a.href = uri.toString;
+		}
 		count++;
 
 		if(count >= 20)

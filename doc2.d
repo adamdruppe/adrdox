@@ -1982,9 +1982,17 @@ abstract class Decl {
 		}
 	}
 
+	bool documentedInSource() {
+		parsedDocComment(); // just populate the field , see code below
+		return documentedInSource_;
+	}
+
+	private bool documentedInSource_;
 	DocComment parsedDocComment_;
 	final @property DocComment parsedDocComment() {
 		if(parsedDocComment_ is DocComment.init) {
+			if(this.rawComment.length)
+				documentedInSource_ = true;
 			parsedDocComment_ = parseDocumentationComment(this.rawComment().length ? this.comment() : "/++\n$(UNDOCUMENTED Undocumented in source"~externNote~")\n+/", this);
 		}
 		return parsedDocComment_;
@@ -4822,29 +4830,37 @@ struct SearchResult {
 }
 
 string[] splitIdentifier(string name) {
-	string[] ret;
+        string[] ret;
 
-	bool isUpper(dchar c) {
-		return c >= 'A' && c <= 'Z';
-	}
+        bool isUpper(dchar c) {
+                return c >= 'A' && c <= 'Z';
+        }
 
-	bool breakOnNext;
-	dchar lastChar;
-	foreach(dchar ch; name) {
-		if(ch == '_') {
-			breakOnNext = true;
-			continue;
-		}
-		if(breakOnNext || ret.length == 0 || (isUpper(ch) && !isUpper(lastChar))) {
-			if(ret.length == 0 || ret[$-1].length)
-				ret ~= "";
-		}
-		breakOnNext = false;
-		ret[$-1] ~= ch;
-		lastChar = ch;
-	}
+        bool isNumber(dchar c) {
+                return c >= '0' && c <= '9';
+        }
 
-	return ret;
+        bool breakOnNext;
+        dchar lastChar;
+        foreach(dchar ch; name) {
+                if(ch == '_') {
+                        breakOnNext = true;
+                        continue;
+                }
+                if(breakOnNext || ret.length == 0
+                        || (isUpper(ch) && !isUpper(lastChar))
+                        //|| (!isUpper(ch) && isUpper(lastChar))
+                        || (isNumber(ch) && !isNumber(lastChar))
+                        || (!isNumber(ch) && isNumber(lastChar))) {
+                        if(ret.length == 0 || ret[$-1].length)
+                                ret ~= "";
+                }
+                breakOnNext = false;
+                ret[$-1] ~= toLower(ch);
+                lastChar = ch;
+        }
+
+        return ret;
 }
 
 SearchResult[][string] searchTerms;
@@ -4852,6 +4868,10 @@ string searchInsertToBeFlushed;
 string postgresVersionIdGlobal; // total hack!!!
 
 void saveSearchTerm(PostgreSql searchDb, string term, SearchResult sr, bool isDeep = false) {
+
+
+return; // FIXME????
+
 	if(!searchPostgresOnly)
 	if(searchDb is null || !isDeep) {
 		searchTerms[term] ~= sr; // save the things for offline xml too
@@ -4916,18 +4936,40 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 
 	// names like GC.free should be a solid match too
 
+
+/+
+	in the d_symbols table:
+		1) FQN
+		2) name last piece
+	in the auto-generated tags table:
+		3) name inside module
+		4) name split on _ or capitalization changes, stripping numbers? or splitting on them like caps.
+
+	arsd.minigui.Widget.paintContent
+
+	saved under:
+		1) arsd.minigui.Widget.paintContent
+		2) paintContent
+		3) Widget.paintContent
+		4) paint, content
++/
+
+
+
 	string partialName;
 	if(!decl.isModule)
 		partialName = decl.fullyQualifiedName[decl.parentModule.name.length + 1 .. $];
 
-	if(partialName.length)
-	searchDb.saveSearchTerm(partialName, SearchResult(tid, 35));
+	// e.g. Widget.paintContent in arsd.minigui.Widget.paintContent
+	if(partialName.length && partialName != decl.name)
+		searchDb.saveSearchTerm(partialName, SearchResult(tid, 35));
 
 	if(decl.name != "this") {
 		// exact match on specific name is worth something too
 		/// but again the DB can find that in its other index
 		//searchDb.saveSearchTerm(decl.name, SearchResult(tid, 25));
 
+		version(none) // just not that useful
 		if(decl.isModule) {
 			// module names like std.stdio should match stdio strongly,
 			// and std is ok too. I will break them by dot and give diminsihing
@@ -4942,9 +4984,11 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 		}
 
 		// and so is fuzzy match
+		version(none) // gonna do this with database collation instead
 		if(decl.name != decl.name.toLower) {
 			searchDb.saveSearchTerm(decl.name.toLower, SearchResult(tid, 15));
 		}
+		version(none) // gonna do this with database collation instead
 		if(partialName.length && partialName != decl.name)
 		if(partialName != partialName.toLower)
 			searchDb.saveSearchTerm(partialName.toLower, SearchResult(tid, 20));
@@ -4953,9 +4997,8 @@ void generateSearchIndex(Decl decl, PostgreSql searchDb) {
 		auto splitNames = splitIdentifier(decl.name);
 		if(splitNames.length) {
 			foreach(name; splitNames) {
+				// these are always lower case now
 				searchDb.saveSearchTerm(name, SearchResult(tid, 6));
-				if(name != name.toLower)
-					searchDb.saveSearchTerm(name.toLower, SearchResult(tid, 3));
 			}
 		}
 	}
