@@ -1183,7 +1183,7 @@ class Parser
 	return new BodyStatement();
 
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
-        mixin(simpleParse!(BodyStatement, tok!"body",
+        mixin(simpleParse!(BodyStatement, tok!"identifier", // was tok!"body"
             "blockStatement|parseBlockStatement"));
     }
 
@@ -2995,7 +2995,7 @@ class Parser
 	    }
             // Allow function bodies without body statements because this is
             // valid inside of interfaces.
-            if (currentIs(tok!"body"))
+            if (currentIs(tok!"identifier")) // was tok!"body"
                 mixin(nullCheck!`node.bodyStatement = parseBodyStatement()`);
 	    else if(currentIs(tok!"do"))
                 mixin(nullCheck!`node.bodyStatement = parseBodyDoStatement()`);
@@ -3162,7 +3162,7 @@ class Parser
         if (currentIsOneOf(tok!"function", tok!"delegate"))
         {
             node.functionOrDelegate = advance().type;
-            if (!currentIsOneOf(tok!"(", tok!"in", tok!"body",
+            if (!currentIsOneOf(tok!"(", tok!"in", tok!"do", // tok!"body" should be here too but awkard
                 tok!"out", tok!"{"))
             {
                 mixin(nullCheck!`node.type = parseType()`);
@@ -4801,7 +4801,7 @@ class Parser
         case tok!"{":
         case tok!"in":
         case tok!"out":
-        case tok!"body":
+        // case tok!"body":
         case tok!"do":
             if ((node.functionLiteralExpression = parseFunctionLiteralExpression()) is null)
             {

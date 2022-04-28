@@ -24,7 +24,7 @@ private enum operators = [
 
 /// Kewords
 private enum keywords = [
-    "abstract", "alias", "align", "asm", "assert", "auto", "body", "bool",
+    "abstract", "alias", "align", "asm", "assert", "auto", "bool",
     "break", "byte", "case", "cast", "catch", "cdouble", "cent", "cfloat",
     "char", "class", "const", "continue", "creal", "dchar", "debug", "default",
     "delegate", "delete", "deprecated", "do", "double", "else", "enum",
@@ -317,7 +317,6 @@ public bool isKeyword(IdType type) pure nothrow @safe @nogc
     case tok!"asm":
     case tok!"assert":
     case tok!"auto":
-    case tok!"body":
     case tok!"break":
     case tok!"case":
     case tok!"cast":
