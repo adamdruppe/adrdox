@@ -248,7 +248,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		if(decl.children.length) {
 			output.put(" {");
 			foreach(child; decl.children) {
-				if((child.isPrivate() && !writePrivateDocs))
+				if(((child.isPrivate() || child.isPackage()) && !writePrivateDocs))
 					continue;
 				// I want to show undocumented plain data members (if not private)
 				// since they might be used as public fields or in ctors for simple
@@ -2087,6 +2087,17 @@ abstract class Decl {
 
 		return protection == tok!"private";
 	}
+
+	bool isPackage() {
+		IdType protection;
+		foreach (a; attributes) {
+			if (a.attr && isProtection(a.attr.attribute.type))
+				protection = a.attr.attribute.type;
+		}
+
+		return protection == tok!"package";
+	}
+
 
 	bool isExplicitlyNonPrivate() {
 		IdType protection;
