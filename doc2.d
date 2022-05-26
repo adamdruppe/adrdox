@@ -1546,7 +1546,12 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 	foreach(d; decl.children) {
 		if(auto mi = cast(MixedInTemplateDecl) d) {
 
-			auto thing = decl.lookupName(toText(mi.astNode.mixinTemplateName));
+			string miname = toText(mi.astNode.mixinTemplateName);
+			auto bangIdx = miname.indexOf("!");
+			if(bangIdx != -1)
+				miname = miname[0 .. bangIdx];
+
+			auto thing = decl.lookupName(miname);
 			if (!thing) 
 				// else {}
 				continue;
@@ -2206,6 +2211,10 @@ abstract class Decl {
 	// does NOT look for aliased overload sets, just ones right in this scope
 	// includes this in the return (plus eponymous check). Check if overloaded with .length > 1
 	Decl[] getImmediateDocumentedOverloads() {
+		return getImmediateOverloads(false);
+	}
+
+	Decl[] getImmediateOverloads(bool includeUndocumented) {
 		Decl[] ret;
 
 		if(this.parent !is null) {
@@ -2217,12 +2226,12 @@ abstract class Decl {
 				return ret;
 
 			foreach(child; this.parent.children) {
-				if(((cast(ImportDecl) child) is null) && child.name == this.name && child.docsShouldBeOutputted())
+				if(((cast(ImportDecl) child) is null) && child.name == this.name && (includeUndocumented || child.docsShouldBeOutputted()))
 					ret ~= child;
 			}
 			if(auto t = cast(TemplateDecl) this.parent)
 			if(this is t.eponymousMember) {
-				foreach(i; t.getImmediateDocumentedOverloads())
+				foreach(i; t.getImmediateOverloads(includeUndocumented))
 					if(i !is t)
 						ret ~= i;
 			}
