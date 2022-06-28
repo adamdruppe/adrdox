@@ -2981,6 +2981,15 @@ class Parser
                 return null;
             }
         }
+        else if (currentIs(tok!"=>"))
+	{
+		advance();
+		parseAssignExpression();
+		expect(tok!";");
+		auto fb = new FunctionBody();
+                fb.hadABody = true;
+                return fb;
+	}
         else
         {
 	    while(currentIs(tok!"in") || currentIs(tok!"out")) {
@@ -3002,6 +3011,13 @@ class Parser
 	    else if(currentIs(tok!"{")) {
 		hackFunctionBody();
 
+		auto fb = new FunctionBody();
+                fb.hadABody = true;
+                return fb;
+	    } else if(currentIs(tok!"=>")) {
+		advance();
+		parseAssignExpression();
+		expect(tok!";");
 		auto fb = new FunctionBody();
                 fb.hadABody = true;
                 return fb;
