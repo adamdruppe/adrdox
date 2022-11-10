@@ -12,5 +12,6 @@
 
 	"sourcePaths": ["Dscanner/libdparse/src"],
 	"sourceFiles": ["doc2.d", "latex.d", "jstex.d", "cgi.d", "comment.d", "stemmer.d", "dom.d", "archive.d", "jsvar.d", "script.d", "color.d", "Dscanner/src/astprinter.d"],
-	"stringImportPaths": ["."]
+	"stringImportPaths": ["."],
+	"libs": [ "z" ]
 }
