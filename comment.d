@@ -1974,7 +1974,7 @@ shared static this() {
 		"PLUSMN": "\u00b1",
 		"GLOSSARY": `<a href="http://dlang.org/glosary.html#$0">$0</a>`,
 		"PHOBOSSRC": `<a href="https://github.com/dlang/phobos/blob/master/$0">$0</a>`,
-		"DRUNTIMESRC": `<a href="https://github.com/dlang/druntime/blob/master/src/$0">$0</a>`,
+		"DRUNTIMESRC": `<a href="https://github.com/dlang/dmd/blob/master/druntime/src/$0">$0</a>`,
 		"C_HEADER_DESCRIPTION": `<p>This module contains bindings to selected types and functions from the standard C header <a href="http://$1">&lt;$2&gt;</a>. Note that this is not automatically generated, and may omit some types/functions from the original C header.</p>`,
 	];
 

@@ -156,6 +156,11 @@ string getDirectoryForPackage(string packageName) {
 	if(packageName.indexOf("#") != -1)
 		return ""; // not actually a D package!
 
+	synchronized(modulesByNameMonitor)
+	if(packageName in modulesByName) {
+		return ""; // don't redirect locally generated things
+	}
+
 	string bestMatch = "";
 	int bestMatchDots = -1;
 
@@ -597,6 +602,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 
 		if(bracket) writer.putTag("<div class=\"attributes\">");
 		IdType protection;
+		LinkageAttribute linkage;
 
 		string versions;
 
@@ -606,6 +612,8 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		foreach(a; attrs) {
 			if (a.attr && isProtection(a.attr.attribute.type)) {
 				protection = a.attr.attribute.type;
+			} if (a.attr && a.attr.linkageAttribute) {
+				linkage = cast() a.attr.linkageAttribute;
 			} else if (auto v = cast(VersionFakeAttribute) a) {
 				if(versions.length)
 					versions ~= " && ";
@@ -642,6 +650,11 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 				// is kinda just a waste of time IMO.
 				//writer.put("public ");
 			break;
+		}
+
+		if(linkage) {
+			formatter.format(linkage);
+			writer.put(" ");
 		}
 
 		void innards(const VersionOrAttribute a) {
