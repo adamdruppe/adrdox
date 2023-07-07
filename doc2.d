@@ -612,7 +612,7 @@ void annotatedPrototype(T)(T decl, MyOutputRange output) {
 		foreach(a; attrs) {
 			if (a.attr && isProtection(a.attr.attribute.type)) {
 				protection = a.attr.attribute.type;
-			} if (a.attr && a.attr.linkageAttribute) {
+			} else if (a.attr && a.attr.linkageAttribute) {
 				linkage = cast() a.attr.linkageAttribute;
 			} else if (auto v = cast(VersionFakeAttribute) a) {
 				if(versions.length)
@@ -1930,6 +1930,8 @@ abstract class Decl {
 	abstract void getAnnotatedPrototype(MyOutputRange);
 	abstract void getSimplifiedPrototype(MyOutputRange);
 
+	bool hasParam(string name) { return false; }
+
 	final string externNote() {
 		bool hadABody;
 		if(auto f = cast(FunctionDecl) this) {
@@ -3044,6 +3046,10 @@ class FunctionDecl : Decl {
 		doFunctionDec(this, output);
 	}
 
+	override bool hasParam(string name) {
+		return .hasParam(astNode, name, this);
+	}
+
 	override Decl lookupName(string name, bool lookUp = true, string[] excludeModules = null) {
 		// is it a param or template param? If so, return that.
 
@@ -3146,6 +3152,10 @@ class FunctionDecl : Decl {
 
 class ConstructorDecl : Decl {
 	mixin CtorFrom!Constructor;
+
+	override bool hasParam(string name) {
+		return .hasParam(astNode, name, this);
+	}
 
 	override void getAnnotatedPrototype(MyOutputRange output) {
 		doFunctionDec(this, output);

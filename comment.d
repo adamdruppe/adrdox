@@ -1076,6 +1076,8 @@ bool isIdentifierOrUrl(string text) {
 
 	if(text.length && text[0] == '#')
 		return true; // is local url link
+	if(text.length && text[0] == '/')
+		return true; // is schema-relative url link
 
 	bool seenHash;
 
@@ -1636,7 +1638,10 @@ bool checkStupidDdocIsm(string remaining, Decl decl) {
 		return true;
 	}
 
-	// FIXME: params?
+	if(decl.hasParam(ident)) {
+		import std.stdio; writeln("stupid ddocism(4): ", ident);
+		return true;
+	}
 
 	return false;
 }
@@ -1885,6 +1890,9 @@ shared static this() {
 		"LI" : "<li>$0</li>",
 
 		"BR" : "<br />",
+		"MDASH": "\&mdash;",
+		"COMMA": ",",
+		"SECTION3": "<h3>$0</h3>",
 		"I" : "<i>$0</i>",
 		"EM" : "<em>$0</em>",
 		"STRONG" : "<strong>$0</strong>",

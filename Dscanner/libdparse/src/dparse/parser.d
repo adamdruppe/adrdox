@@ -7641,6 +7641,17 @@ protected:
      */
     Token advance() pure nothrow @nogc
     {
+	debug if(index + 1 > tokens.length) {
+		import std.stdio;
+		foreach(token; tokens) {
+			    string tokenString = str(token.type) is null
+				? to!string(token.type) : str(token.type);
+			write(tokenString == "identifier" ? token.text : tokenString, " ");
+		}
+		writeln();
+
+		return Token(tok!"}");
+	}
         return tokens[index++];
     }
 
