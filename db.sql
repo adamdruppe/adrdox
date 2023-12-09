@@ -40,6 +40,9 @@ CREATE TABLE d_symbols (
 );
 CREATE INDEX d_symbols_by_name ON d_symbols(name);
 CREATE INDEX d_symbols_by_fqn ON d_symbols(fully_qualified_name);
+CREATE INDEX d_symbols_by_module_name ON d_symbols(substring(fully_qualified_name, length(module_name) + 2));
+
+ create index d_symbols_by_lower on d_symbols (lower(name));
 
 CREATE TABLE auto_generated_tags (
     id SERIAL,

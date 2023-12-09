@@ -26,7 +26,22 @@ PostgreSql db() {
 	return db_;
 }
 
+string lastDottedPiece(string term) {
+	auto idx = term.lastIndexOf(".");
+	auto piece = term[idx + 1 .. $];
+	if(piece == "this") {
+		if(idx == -1)
+			throw new Exception("dont search for this.this");
+		else
+			return lastDottedPiece(term[0 .. idx]);
+	} else {
+		return piece;
+	}
+}
+
 TermElement[] resultsByTerm(string term) {
+	if(term == "this")
+		return null;
 	TermElement[] ret;
 	foreach(row; db.query("SELECT d_symbols.id, score FROM hand_written_tags INNER JOIN d_symbols ON d_symbol_fully_qualified_name = fully_qualified_name WHERE tag ILIKE ? ORDER BY score DESC", term))
 		ret ~= TermElement(to!int(row[0]), to!int(row[1]));
@@ -42,15 +57,24 @@ TermElement[] resultsByTerm(string term) {
 			is_latest = true
 			AND
 			(
+				(
 				fully_qualified_name = ?
 				OR
-				name = ?
-				OR
-				substring(fully_qualified_name, length(module_name) + 2) = ?
+					(
+					lower(name) = lower(?)
+					AND
+					fully_qualified_name ilike ?
+					)
+				)
 			)
-	", term, term, term)) {
+	", term, term.lastDottedPiece, "%" ~ term)) {
 		ret ~= TermElement(to!int(row[0]), row[1] == term ? 50 : 25);
 	}
+
+				/+
+				-- OR
+				-- substring(fully_qualified_name, length(module_name) + 2) = ?
+				+/
 
 	version(none)
 	foreach(row; db.query("
@@ -134,7 +158,7 @@ Magic[] getPossibilities(string search, string preferredProject) {
 
 	// ps.PorterStemmer s;
 
-	auto terms = search.split(" ");// ~ search.split(".");
+	auto terms = search.split(" ");
 	// filter empty terms
 	for(int i = 0; i < terms.length; i++) {
 		if(terms[i].strip.length == 0) {
@@ -200,8 +224,8 @@ Magic[] getPossibilities(string search, string preferredProject) {
 	if(magic.length == 0) {
 		foreach(term; terms) {
 			if(term.length == 0) continue;
-			//term = term.toLower();
-			foreach(row; db.query("SELECT id, fully_qualified_name FROM d_symbols WHERE fully_qualified_name > ? LIMIT 50", term)) {
+			term = term.toLower();
+			foreach(row; db.query("select * from d_symbols inner join package_version on package_version.id = package_version_id where is_latest = true and lower(name) = ? LIMIT 50", term)) {
 				string name = row[1];
 				int id = row[0].to!int;
 				/+

@@ -12,7 +12,7 @@ locate:
 	dmd -oflocate locate.d  dom.d stemmer.d  cgi -J. -version=scgi -m64 -debug postgres.d archive.d database.d -L-L/usr/local/pgsql/lib -g
 
 vps_locate:
-	ldc2 -oq -O3 -m64 locate.d  dom.d stemmer.d archive.d  cgi -J. -d-version=scgi -d-version=vps -g ~/arsd/database ~/arsd/postgres -L-L/usr/local/pgsql/lib -L-lpq
+	ldc2i -oflocate_vps -oq -O3 -m64 locate.d  stemmer.d -J. -d-version=scgi -d-version=vps -g -L-L/usr/local/pgsql/lib -L-lpq
 ldc:
 	echo "use make pq instead ldc is broken"
 	echo ldc2 -oq -O3 --d-debug -m64 doc2.d latex.d jstex.d comment.d archive.d stemmer.d dom.d color.d -J. $(LIBDPARSE) --d-version=with_postgres database.d postgres.d -L-L/usr/local/pgsql/lib -L-lpq -g # -version=std_parser_verbose 

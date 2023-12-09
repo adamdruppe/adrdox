@@ -4911,8 +4911,6 @@ string searchInsertToBeFlushed;
 string postgresVersionIdGlobal; // total hack!!!
 
 void saveSearchTerm(PostgreSql searchDb, string term, SearchResult sr, bool isDeep = false) {
-
-
 return; // FIXME????
 
 	if(!searchPostgresOnly)
