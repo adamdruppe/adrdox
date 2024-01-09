@@ -1899,6 +1899,7 @@ shared static this() {
 		"TT" : "<tt>$0</tt>",
 		"B" : "<b>$0</b>",
 		"STRIKE" : "<s>$0</s>",
+		"U" : "<u>$0</u>",
 		"P" : "<p>$0</p>",
 		"PRE" : "<pre>$0</pre>",
 		"DL" : "<dl>$0</dl>",
