@@ -1751,7 +1751,7 @@ Document writeHtml(Decl decl, bool forReal, bool gzip, string headerTitle, Heade
 				case "h4":
 					level = 4;
 				break;
-				case "h5:":
+				case "h5":
 					level = 5;
 				break;
 				case "h6":
