@@ -1,5 +1,10 @@
 // Written in the D programming language
 
+/+
+	FIXME:
+		needs to support IES
++/
+
 module dparse.parser;
 
 import dparse.lexer;
@@ -6857,7 +6862,22 @@ class Parser
     Unittest parseUnittest()
     {
         version(std_parser_verbose) mixin(traceEnterAndExit!(__FUNCTION__));
-        mixin(simpleParse!(Unittest, tok!"unittest", "blockStatement|parseBlockStatement"));
+        //mixin(simpleParse!(Unittest, tok!"unittest", "blockStatement|parseBlockStatement"));g
+
+	auto node = allocate!Unittest;
+	node.comment = comment;
+	comment = null;
+	
+	if (expect(tok!"unittest") is null) { deallocate(node); return null; }
+
+	if(currentIs(tok!"stringLiteral")) {
+		advance();
+	}
+
+	if ((node.blockStatement = parseBlockStatement()) is null) { deallocate(node); return null; }
+
+	return node;
+
     }
 
     /**
