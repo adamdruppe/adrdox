@@ -4877,6 +4877,11 @@ class Parser
         case tok!"mixin":
             mixin(nullCheck!`node.mixinExpression = parseMixinExpression()`);
             break;
+	case tok!"istringLiteralStart":
+		while(!currentIs(tok!"istringLiteralEnd"))
+			advance();
+		node.primary = advance();
+		break;
         case tok!"import":
             mixin(nullCheck!`node.importExpression = parseImportExpression()`);
             break;
