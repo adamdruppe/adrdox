@@ -24,11 +24,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Setup D compiler
-        uses: dlang-community/setup-dlang@v1
+        uses: dlang-community/setup-dlang@v2
         with:
           compiler: ${{ matrix.dc }}
       - name: Checkout source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Build binary
         run: dub build -b ${{ matrix.profile }}
 
@@ -63,11 +63,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-multilib
       - name: Setup D compiler
-        uses: dlang-community/setup-dlang@v1
+        uses: dlang-community/setup-dlang@v2
         with:
           compiler: ldc-latest
       - name: Checkout source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Build binary release
         run: dub build -a ${{ matrix.arch }} -b release
       - name: Create dist
