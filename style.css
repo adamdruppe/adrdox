@@ -1612,13 +1612,10 @@ tt.D.highlighted a {
 		color: #eee;
 	}
 
+	.block-code:not([data-language=""]):not([data-language="pre"]),
 	pre.d_code {
 		background-color: #444;
 		color: #eee;
-	}
-
-	.com {
-		color: #0ff;
 	}
 
 	.tip {
@@ -1650,4 +1647,27 @@ tt.D.highlighted a {
 		background-color: black;
 		border-color: #555;
 	}
+
+	.highlighted-comment,
+	.com {
+		color: #0ff !important;
+	}
+
+	.kwrd,
+	.highlighted-keyword,
+	.lang-feature,
+	.storage-class {
+		color: #8ff !important;
+	}
+
+	.type-constructor,
+	.builtin-type {
+		color: #00cc00 !important;
+	}
+
+	.type,
+	.highlighted-type {
+		color: lime;
+	}
 }
+
