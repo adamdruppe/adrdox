@@ -155,14 +155,14 @@ window.onload = function() {
 	// index the html first ...
 
 	searchDocument.querySelectorAll("adrdox > listing decl[id] > name").forEach(function(element) {
-		if(!declByName[element.textContent])
+		if(!Array.isArray(declByName[element.textContent]))
 			declByName[element.textContent] = [];
 		declByName[element.textContent].push(element.parentNode);
 
 		var p = element.parentNode.parentNode;
 		while(p.tagName == "decl") {
 			var e = p.querySelector("name");
-			if(!declByName[e.textContent])
+			if(!Array.isArray(declByName[e.textContent]))
 				declByName[e.textContent] = [];
 			declByName[e.textContent].push(element.parentNode);
 			p = p.parentNode;
