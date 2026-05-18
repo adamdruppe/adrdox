@@ -1557,7 +1557,7 @@ private pure nothrow @safe:
             error("Newline expected");
         while (!(range.index >= range.bytes.length))
         {
-            if (isNewline())
+            if (true || isNewline()) // OpenD allows these to end anywhere
             {
                 popFrontWhitespaceAware();
                 if (!range.canPeek(ident.text.length))

@@ -1669,5 +1669,12 @@ tt.D.highlighted a {
 	.highlighted-type {
 		color: lime;
 	}
+
+	.str,
+	.highlighted-string {
+		color: #ff88ff;
+	}
+
+
 }
 

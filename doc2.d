@@ -14,6 +14,9 @@ __gshared bool documentTest = false;
 __gshared bool documentUndocumented = false;
 __gshared bool minimalDescent = false;
 
+version(LDC)
+static assert(0, "idk why but there's some ldc bug that makes it fail always at runtime. use dmd or gdc instead");
+
 version(linux)
 	__gshared bool caseInsensitiveFilenames = false;
 else
