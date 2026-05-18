@@ -1,4 +1,5 @@
-// FIXME: add classList. it is a live list and removes whitespace and duplicates when you use it.
+// FIXME: i want css nesting via the new standard now.
+
 // FIXME: xml namespace support???
 // FIXME: https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentHTML
 // FIXME: parentElement is parentNode that skips DocumentFragment etc but will be hard to work in with my compatibility...
@@ -48,8 +49,15 @@
 	implementations =
 
 	These provide implementations of other functionality.
+
+	History:
+		The `toString` methods used to optionally take a Phobos `appender`,
+		but now it takes a private internal implementation as of August 26, 2025. This may change again.
 +/
 module arsd.dom;
+
+static import arsd.core;
+import arsd.core : encodeUriComponent, decodeUriComponent;
 
 // FIXME: support the css standard namespace thing in the selectors too
 
@@ -92,14 +100,209 @@ bool isConvenientAttribute(string name) {
 */
 
 
-/// The main document interface, including a html parser.
+/++
+	The main document interface, including a html or xml parser.
+
+	There's three main ways to create a Document:
+
+	If you want to parse something and inspect the tags, you can use the [this|constructor]:
+	---
+		// create and parse some HTML in one call
+		auto document = new Document("<html></html>");
+
+		// or some XML
+		auto document = new Document("<xml></xml>", true, true); // strict mode enabled
+
+		// or better yet:
+		auto document = new XmlDocument("<xml></xml>"); // specialized subclass
+	---
+
+	If you want to download something and parse it in one call, the [fromUrl] static function can help:
+	---
+		auto document = Document.fromUrl("http://dlang.org/");
+	---
+	(note that this requires my [arsd.characterencodings] and [arsd.http2] libraries)
+
+	And, if you need to inspect things like `<%= foo %>` tags and comments, you can add them to the dom like this, with the [enableAddingSpecialTagsToDom]
+	and [parseUtf8] or [parseGarbage] functions:
+	---
+		auto document = new Document();
+		document.enableAddingSpecialTagsToDom();
+		document.parseUtf8("<example></example>", true, true); // changes the trues to false to switch from xml to html mode
+	---
+
+	You can also modify things like [selfClosedElements] and [rawSourceElements] before calling the `parse` family of functions to do further advanced tasks.
+
+	However you parse it, it will put a few things into special variables.
+
+	[root] contains the root document.
+	[prolog] contains the instructions before the root (like `<!DOCTYPE html>`). To keep the original things, you will need to [enableAddingSpecialTagsToDom] first, otherwise the library will return generic strings in there. [piecesBeforeRoot] will have other parsed instructions, if [enableAddingSpecialTagsToDom] is called.
+	[piecesAfterRoot] will contain any xml-looking data after the root tag is closed.
+
+	Most often though, you will not need to look at any of that data, since `Document` itself has methods like [querySelector], [appendChild], and more which will forward to the root [Element] for you.
++/
 /// Group: core_functionality
 class Document : FileResource, DomParent {
 	inout(Document) asDocument() inout { return this; }
 	inout(Element) asElement() inout { return null; }
 
-	/// Convenience method for web scraping. Requires [arsd.http2] to be
-	/// included in the build as well as [arsd.characterencodings].
+	/++
+		These three functions, `processTagOpen`, `processTagClose`, and `processNodeWhileParsing`, allow you to process elements as they are parsed and choose to not append them to the dom tree.
+
+
+		`processTagOpen` is called as soon as it reads the tag name and attributes into the passed `Element` structure, in order
+		of appearance in the file. `processTagClose` is called similarly, when that tag has been closed. In between, all descendant
+		nodes - including tags as well as text and other nodes - are passed to `processNodeWhileParsing`. Finally, after `processTagClose`,
+		the node itself is passed to `processNodeWhileParsing` only after its children.
+
+		So, given:
+
+		```xml
+		<thing>
+			<child>
+				<grandchild></grandchild>
+			</child>
+		</thing>
+		```
+
+		It would call:
+
+		$(NUMBERED_LIST
+			* processTagOpen(thing)
+			* processNodeWhileParsing(thing, whitespace text) // the newlines, spaces, and tabs between the thing tag and child tag
+			* processTagOpen(child)
+			* processNodeWhileParsing(child, whitespace text)
+			* processTagOpen(grandchild)
+			* processTagClose(grandchild)
+			* processNodeWhileParsing(child, grandchild)
+			* processNodeWhileParsing(child, whitespace text) // whitespace after the grandchild
+			* processTagClose(child)
+			* processNodeWhileParsing(thing, child)
+			* processNodeWhileParsing(thing, whitespace text)
+			* processTagClose(thing)
+		)
+
+		The Element objects passed to those functions are the same ones you'd see; the tag open and tag close calls receive the same
+		object, so you can compare them with the `is` operator if you want.
+
+		The default behavior of each function is that `processTagOpen` and `processTagClose` do nothing.
+		`processNodeWhileParsing`'s default behavior is to call `parent.appendChild(child)`, in order to
+		build the dom tree. If you do not want the dom tree, you can do override this function to do nothing.
+
+		If you do not choose to append child to parent in `processNodeWhileParsing`, the garbage collector is free to clean up
+		the node even as the document is not finished parsing, allowing memory use to stay lower. Memory use will tend to scale
+		approximately with the max depth in the element tree rather the entire document size.
+
+		To cancel processing before the end of a document, you'll have to throw an exception and catch it at your call to parse.
+		There is no other way to stop early and there are no concrete plans to add one.
+
+		There are several approaches to use this: you might might use `processTagOpen` and `processTagClose` to keep a stack or
+		other state variables to process nodes as they come and never add them to the actual tree. You might also build partial
+		subtrees to use all the convenient methods in `processTagClose`, but then not add that particular node to the rest of the
+		tree to keep memory usage down.
+
+		Examples:
+
+			Suppose you have a large array of items under the root element you'd like to process individually, without
+			taking all the items into memory at once. You can do that with code like this:
+			---
+			import arsd.dom;
+			class MyStream : XmlDocument {
+				this(string s) { super(s); } // need to forward the constructor we use
+
+				override void processNodeWhileParsing(Element parent, Element child) {
+					// don't append anything to the root node, since we don't need them
+					// all in the tree - that'd take too much memory -
+					// but still build any subtree for each individual item for ease of processing
+					if(parent is root)
+						return;
+					else
+						super.processNodeWhileParsing(parent, child);
+				}
+
+				int count;
+				override void processTagClose(Element element) {
+					if(element.tagName == "item") {
+						// process the element here with all the regular dom functions on `element`
+						count++;
+						// can still use dom functions on the subtree we built
+						assert(element.requireSelector("name").textContent == "sample");
+					}
+				}
+			}
+
+			void main() {
+				// generate an example file with a million items
+				string xml = "<list>";
+				foreach(i; 0 .. 1_000_000) {
+					xml ~= "<item><name>sample</name><type>example</type></item>";
+				}
+				xml ~= "</list>";
+
+				auto document = new MyStream(xml);
+				assert(document.count == 1_000_000);
+			}
+			---
+
+			This example runs in about 1/10th of the memory and 2/3 of the time on my computer relative to a default [XmlDocument] full tree dom.
+
+			By overriding these three functions to fit the specific document and processing requirements you have, you might realize even bigger
+			gains over the normal full document tree while still getting most the benefits of the convenient dom functions.
+
+			Tip: if you use a [Utf8Stream] instead of a string, you might be able to bring the memory use further down. The easiest way to do that
+			is something like this when loading from a file:
+
+			---
+			import std.stdio;
+			auto file = File("filename.xml", "rb");
+			auto textStream = new Utf8Stream(() {
+				 // get more
+				 auto buffer = new char[](32 * 1024);
+				 return cast(string) file.rawRead(buffer);
+			}, () {
+				 // has more
+				 return !file.eof;
+			});
+
+			auto document = new XmlDocument(textStream);
+			---
+
+			You'll need to forward a constructor in your subclasses that takes `Utf8Stream` too if you want to subclass to override the streaming parsing functions.
+
+			Note that if you do save parts of the document strings or objects, it might prevent the GC from freeing that string block anyway, since dom.d will often slice into its buffer while parsing instead of copying strings. It will depend on your specific case to know if this actually saves memory or not for you.
+
+		Bugs:
+			Even if you use a [Utf8Stream] to feed data and decline to append to the tree, the entire xml text is likely to
+			end up in memory anyway.
+
+		See_Also:
+			[Document#examples]'s high level streaming example.
+
+		History:
+			`processNodeWhileParsing` was added January 6, 2023.
+
+			`processTagOpen` and `processTagClose` were added February 21, 2025.
+	+/
+	void processTagOpen(Element what) {
+	}
+
+	/// ditto
+	void processTagClose(Element what) {
+	}
+
+	/// ditto
+	void processNodeWhileParsing(Element parent, Element child) {
+		parent.appendChild(child);
+	}
+
+	/++
+		Convenience method for web scraping. Requires [arsd.http2] to be
+		included in the build as well as [arsd.characterencodings].
+
+		This will download the file from the given url and create a document
+		off it, using a strict constructor or a [parseGarbage], depending on
+		the value of `strictMode`.
+	+/
 	static Document fromUrl()(string url, bool strictMode = false) {
 		import arsd.http2;
 		auto client = new HttpClient();
@@ -117,30 +320,41 @@ class Document : FileResource, DomParent {
 		return document;
 	}
 
-	///.
+	/++
+		Creates a document with the given source data. If you want HTML behavior, use `caseSensitive` and `struct` set to `false`. For XML mode, set them to `true`.
+
+		Please note that anything after the root element will be found in [piecesAfterRoot]. Comments, processing instructions, and other special tags will be stripped out b default. You can customize this by using the zero-argument constructor and setting callbacks on the [parseSawComment], [parseSawBangInstruction], [parseSawAspCode], [parseSawPhpCode], and [parseSawQuestionInstruction] members, then calling one of the [parseUtf8], [parseGarbage], or [parse] functions. Calling the convenience method, [enableAddingSpecialTagsToDom], will enable all those things at once.
+
+		See_Also:
+			[parseGarbage]
+			[parseUtf8]
+			[parseUrl]
+	+/
 	this(string data, bool caseSensitive = false, bool strict = false) {
 		parseUtf8(data, caseSensitive, strict);
 	}
 
 	/**
-		Creates an empty document. It has *nothing* in it at all.
+		Creates an empty document. It has *nothing* in it at all, ready.
 	*/
 	this() {
 
 	}
 
-	/// This is just something I'm toying with. Right now, you use opIndex to put in css selectors.
-	/// It returns a struct that forwards calls to all elements it holds, and returns itself so you
-	/// can chain it.
-	///
-	/// Example: document["p"].innerText("hello").addClass("modified");
-	///
-	/// Equivalent to: foreach(e; document.getElementsBySelector("p")) { e.innerText("hello"); e.addClas("modified"); }
-	///
-	/// Note: always use function calls (not property syntax) and don't use toString in there for best results.
-	///
-	/// You can also do things like: document["p"]["b"] though tbh I'm not sure why since the selector string can do all that anyway. Maybe
-	/// you could put in some kind of custom filter function tho.
+	/++
+		This is just something I'm toying with. Right now, you use opIndex to put in css selectors.
+		It returns a struct that forwards calls to all elements it holds, and returns itself so you
+		can chain it.
+
+		Example: document["p"].innerText("hello").addClass("modified");
+
+		Equivalent to: foreach(e; document.getElementsBySelector("p")) { e.innerText("hello"); e.addClas("modified"); }
+
+		Note: always use function calls (not property syntax) and don't use toString in there for best results.
+
+		You can also do things like: document["p"]["b"] though tbh I'm not sure why since the selector string can do all that anyway. Maybe
+		you could put in some kind of custom filter function tho.
+	+/
 	ElementCollection opIndex(string selector) {
 		auto e = ElementCollection(this.root);
 		return e[selector];
@@ -177,8 +391,8 @@ class Document : FileResource, DomParent {
 	}
 
 
-	/// Concatenates any consecutive text nodes
 	/*
+	/// Concatenates any consecutive text nodes
 	void normalize() {
 
 	}
@@ -187,7 +401,18 @@ class Document : FileResource, DomParent {
 	/// This will set delegates for parseSaw* (note: this overwrites anything else you set, and you setting subsequently will overwrite this) that add those things to the dom tree when it sees them.
 	/// Call this before calling parse().
 
-	/// Note this will also preserve the prolog and doctype from the original file, if there was one.
+	/++
+		Adds objects to the dom representing things normally stripped out during the default parse, like comments, `<!instructions>`, `<% code%>`, and `<? code?>` all at once.
+
+		Note this will also preserve the prolog and doctype from the original file, if there was one.
+
+		See_Also:
+			[parseSawComment]
+			[parseSawAspCode]
+			[parseSawPhpCode]
+			[parseSawQuestionInstruction]
+			[parseSawBangInstruction]
+	+/
 	void enableAddingSpecialTagsToDom() {
 		parseSawComment = (string) => true;
 		parseSawAspCode = (string) => true;
@@ -198,38 +423,38 @@ class Document : FileResource, DomParent {
 
 	/// If the parser sees a html comment, it will call this callback
 	/// <!-- comment --> will call parseSawComment(" comment ")
-	/// Return true if you want the node appended to the document.
+	/// Return true if you want the node appended to the document. It will be in a [HtmlComment] object.
 	bool delegate(string) parseSawComment;
 
 	/// If the parser sees <% asp code... %>, it will call this callback.
 	/// It will be passed "% asp code... %" or "%= asp code .. %"
-	/// Return true if you want the node appended to the document.
+	/// Return true if you want the node appended to the document. It will be in an [AspCode] object.
 	bool delegate(string) parseSawAspCode;
 
 	/// If the parser sees <?php php code... ?>, it will call this callback.
 	/// It will be passed "?php php code... ?" or "?= asp code .. ?"
 	/// Note: dom.d cannot identify  the other php <? code ?> short format.
-	/// Return true if you want the node appended to the document.
+	/// Return true if you want the node appended to the document. It will be in a [PhpCode] object.
 	bool delegate(string) parseSawPhpCode;
 
 	/// if it sees a <?xxx> that is not php or asp
 	/// it calls this function with the contents.
 	/// <?SOMETHING foo> calls parseSawQuestionInstruction("?SOMETHING foo")
 	/// Unlike the php/asp ones, this ends on the first > it sees, without requiring ?>.
-	/// Return true if you want the node appended to the document.
+	/// Return true if you want the node appended to the document. It will be in a [QuestionInstruction] object.
 	bool delegate(string) parseSawQuestionInstruction;
 
 	/// if it sees a <! that is not CDATA or comment (CDATA is handled automatically and comments call parseSawComment),
 	/// it calls this function with the contents.
 	/// <!SOMETHING foo> calls parseSawBangInstruction("SOMETHING foo")
-	/// Return true if you want the node appended to the document.
+	/// Return true if you want the node appended to the document. It will be in a [BangInstruction] object.
 	bool delegate(string) parseSawBangInstruction;
 
 	/// Given the kind of garbage you find on the Internet, try to make sense of it.
 	/// Equivalent to document.parse(data, false, false, null);
 	/// (Case-insensitive, non-strict, determine character encoding from the data.)
 
-	/// NOTE: this makes no attempt at added security.
+	/// NOTE: this makes no attempt at added security, but it will try to recover from anything instead of throwing.
 	///
 	/// It is a template so it lazily imports characterencodings.
 	void parseGarbage()(string data) {
@@ -238,8 +463,8 @@ class Document : FileResource, DomParent {
 
 	/// Parses well-formed UTF-8, case-sensitive, XML or XHTML
 	/// Will throw exceptions on things like unclosed tags.
-	void parseStrict(string data) {
-		parseStream(toUtf8Stream(data), true, true);
+	void parseStrict(string data, bool pureXmlMode = false) {
+		parseStream(toUtf8Stream(data), true, true, pureXmlMode);
 	}
 
 	/// Parses well-formed UTF-8 in loose mode (by default). Tries to correct
@@ -322,6 +547,7 @@ class Document : FileResource, DomParent {
 			dataEncoding = dataEncoding.replace("-", "");
 			dataEncoding = dataEncoding.replace("_", "");
 			if(dataEncoding == "utf8") {
+				import std.utf;
 				try {
 					validate(rawdata);
 				} catch(UTFException e) {
@@ -363,8 +589,25 @@ class Document : FileResource, DomParent {
 
 		History:
 			Added February 8, 2021 (included in dub release 9.2)
+
+			Changed from `string[]` to `immutable(string)[]` on
+			February 4, 2024 (dub v11.5) to plug a hole discovered
+			by the OpenD compiler's diagnostics.
 	+/
-	string[] selfClosedElements = htmlSelfClosedElements;
+	immutable(string)[] selfClosedElements = htmlSelfClosedElements;
+
+	/++
+		List of elements that contain raw CDATA content for this
+		document, e.g. `<script>` and `<style>` for HTML. The parser
+		will read until the closing string and put everything else
+		in a [RawSource] object for future processing, not trying to
+		do any further child nodes or attributes, etc.
+
+		History:
+			Added February 4, 2024 (dub v11.5)
+
+	+/
+	immutable(string)[] rawSourceElements = htmlRawSourceElements;
 
 	/++
 		List of elements that are considered inline for pretty printing.
@@ -374,8 +617,12 @@ class Document : FileResource, DomParent {
 
 		History:
 			Added June 21, 2021 (included in dub release 10.1)
+
+			Changed from `string[]` to `immutable(string)[]` on
+			February 4, 2024 (dub v11.5) to plug a hole discovered
+			by the OpenD compiler's diagnostics.
 	+/
-	string[] inlineElements = htmlInlineElements;
+	immutable(string)[] inlineElements = htmlInlineElements;
 
 	/**
 		Take XMLish data and try to make the DOM tree out of it.
@@ -424,7 +671,7 @@ class Document : FileResource, DomParent {
 	}
 
 	// note: this work best in strict mode, unless data is just a simple string wrapper
-	void parseStream(Utf8Stream data, bool caseSensitive = false, bool strict = false) {
+	void parseStream(Utf8Stream data, bool caseSensitive = false, bool strict = false, bool pureXmlMode = false) {
 		// FIXME: this parser could be faster; it's in the top ten biggest tree times according to the profiler
 		// of my big app.
 
@@ -453,18 +700,14 @@ class Document : FileResource, DomParent {
 		loose = !caseSensitive;
 
 		bool sawImproperNesting = false;
-		bool paragraphHackfixRequired = false;
+		bool nonNestableHackRequired = false;
 
 		int getLineNumber(sizediff_t p) {
-			int line = 1;
-			foreach(c; data[0..p])
-				if(c == '\n')
-					line++;
-			return line;
+			return data.getLineNumber(p);
 		}
 
 		void parseError(string message) {
-			throw new MarkupException(format("char %d (line %d): %s", pos, getLineNumber(pos), message));
+			throw new MarkupException("char "~to!string(pos)~" (line "~to!string(getLineNumber(pos))~"): " ~ message);
 		}
 
 		bool eatWhitespace() {
@@ -477,6 +720,10 @@ class Document : FileResource, DomParent {
 		}
 
 		string readTagName() {
+
+			// this messes up the whereThisTagStarted in the error messages if we uncomment.....
+			//data.markDataDiscardable(pos);
+
 			// remember to include : for namespaces
 			// basically just keep going until >, /, or whitespace
 			auto start = pos;
@@ -621,7 +868,8 @@ class Document : FileResource, DomParent {
 				return Ele(0, readTextNode(), null);
 			}
 
-			enforce(data[pos] == '<');
+			if(data[pos] != '<')
+				throw new MarkupException("expected < not " ~ data[pos]);
 			pos++;
 			if(pos == data.length) {
 				if(strict)
@@ -826,6 +1074,8 @@ class Document : FileResource, DomParent {
 					pos++; // skip the '>'
 
 					string tname = data[p..pos-1];
+					if(!strict)
+						tname = tname.strip;
 					if(!caseSensitive)
 						tname = tname.toLower();
 
@@ -860,7 +1110,7 @@ class Document : FileResource, DomParent {
 					}
 
 					string tagName = readTagName();
-					string[string] attributes;
+					AttributesHolder attributes;
 
 					Ele addTag(bool selfClosed) {
 						if(selfClosed)
@@ -872,10 +1122,9 @@ class Document : FileResource, DomParent {
 									selfClosed = true;
 						}
 
-						import std.algorithm.comparison;
-
 						if(strict) {
-						enforce(data[pos] == '>', format("got %s when expecting > (possible missing attribute name)\nContext:\n%s", data[pos], data[max(0, pos - 100) .. min(data.length, pos + 100)]));
+							if(data[pos] != '>')
+								throw new MarkupException("got "~data[pos]~" when expecting > (possible missing attribute name)\nContext:\n" ~ data[max(0, pos - data.contextToKeep) .. min(data.length, pos + data.contextToKeep)]);
 						} else {
 							// if we got here, it's probably because a slash was in an
 							// unquoted attribute - don't trust the selfClosed value
@@ -905,9 +1154,18 @@ class Document : FileResource, DomParent {
 						e.selfClosed = selfClosed;
 						e.parseAttributes();
 
+						// might temporarily set root to the first element we encounter,
+						// then the final root element assignment will be at the end of the parse,
+						// when the recursive work is complete.
+						if(this.root is null)
+							this.root = e;
+						this.processTagOpen(e);
+						scope(exit)
+							this.processTagClose(e);
+
 
 						// HACK to handle script and style as a raw data section as it is in HTML browsers
-						if(tagName == "script" || tagName == "style") {
+						if(!pureXmlMode && tagName.isInArray(rawSourceElements)) {
 							if(!selfClosed) {
 								string closer = "</" ~ tagName ~ ">";
 								ptrdiff_t ending;
@@ -916,7 +1174,7 @@ class Document : FileResource, DomParent {
 								else
 									ending = indexOf(data[pos..$], closer);
 
-								ending = indexOf(data[pos..$], closer, 0, (loose ? CaseSensitive.no : CaseSensitive.yes));
+								ending = indexOf(data[pos..$], closer, (loose ? false : true));
 								/*
 								if(loose && ending == -1 && pos < data.length)
 									ending = indexOf(data[pos..$], closer.toUpper());
@@ -942,12 +1200,12 @@ class Document : FileResource, DomParent {
 
 						bool closed = selfClosed;
 
-						void considerHtmlParagraphHack(Element n) {
+						void considerHtmlNonNestableElementHack(Element n) {
 							assert(!strict);
-							if(e.tagName == "p" && e.tagName == n.tagName) {
+							if(!canNestElementsInHtml(e.tagName, n.tagName)) {
 								// html lets you write <p> para 1 <p> para 1
 								// but in the dom tree, they should be siblings, not children.
-								paragraphHackfixRequired = true;
+								nonNestableHackRequired = true;
 							}
 						}
 
@@ -964,25 +1222,25 @@ class Document : FileResource, DomParent {
 							if(n.type == 3 && n.element !is null) {
 								// special node, append if possible
 								if(e !is null)
-									e.appendChild(n.element);
+									processNodeWhileParsing(e, n.element);
 								else
 									piecesBeforeRoot ~= n.element;
 							} else if(n.type == 0) {
 								if(!strict)
-									considerHtmlParagraphHack(n.element);
-								e.appendChild(n.element);
+									considerHtmlNonNestableElementHack(n.element);
+								processNodeWhileParsing(e, n.element);
 							} else if(n.type == 1) {
 								bool found = false;
 								if(n.payload != tagName) {
 									if(strict)
-										parseError(format("mismatched tag: </%s> != <%s> (opened on line %d)", n.payload, tagName, getLineNumber(whereThisTagStarted)));
+										parseError("mismatched tag: </"~n.payload~"> != <"~tagName~"> (opened on line "~to!string(getLineNumber(whereThisTagStarted))~")");
 									else {
 										sawImproperNesting = true;
 										// this is so we don't drop several levels of awful markup
 										if(n.element) {
 											if(!strict)
-												considerHtmlParagraphHack(n.element);
-											e.appendChild(n.element);
+												considerHtmlNonNestableElementHack(n.element);
+											processNodeWhileParsing(e, n.element);
 											n.element = null;
 										}
 
@@ -997,6 +1255,17 @@ class Document : FileResource, DomParent {
 												n.element = e;
 												return n;
 											}
+
+										/+
+											// COMMENTED OUT BLOCK
+											// dom.d used to replace improper close tags with their
+											// text so they'd be visible in the output. the html
+											// spec says to just ignore them, and browsers do indeed
+											// seem to jsut ignore them, even checking back on IE6.
+											// so i guess i was wrong to do this (tho tbh i find it kinda
+											// useful to call out an obvious mistake in the source...
+											// but for calling out obvious mistakes, just use strict
+											// mode.)
 
 										// if not, this is a text node; we can't fix it up...
 
@@ -1017,13 +1286,15 @@ class Document : FileResource, DomParent {
 										}
 
 										if(!found) // if not found in the tree though, it's probably just text
-										e.appendChild(TextNode.fromUndecodedString(this, "</"~n.payload~">"));
+										processNodeWhileParsing(e, TextNode.fromUndecodedString(this, "</"~n.payload~">"));
+
+										+/
 									}
 								} else {
 									if(n.element) {
 										if(!strict)
-											considerHtmlParagraphHack(n.element);
-										e.appendChild(n.element);
+											considerHtmlNonNestableElementHack(n.element);
+										processNodeWhileParsing(e, n.element);
 									}
 								}
 
@@ -1071,8 +1342,9 @@ class Document : FileResource, DomParent {
 									string attrValue = attrName;
 
 									bool ateAny = eatWhitespace();
-									if(strict && ateAny)
-										throw new MarkupException("inappropriate whitespace after attribute name");
+									// the spec allows this too, sigh https://www.w3.org/TR/REC-xml/#NT-Eq
+									//if(strict && ateAny)
+										//throw new MarkupException("inappropriate whitespace after attribute name");
 
 									if(pos >= data.length) {
 										if(strict)
@@ -1133,7 +1405,8 @@ class Document : FileResource, DomParent {
 		} while (r.type != 0 || r.element.nodeType != 1); // we look past the xml prologue and doctype; root only begins on a regular node
 
 		root = r.element;
-		root.parent_ = this;
+		if(root !is null)
+			root.parent_ = this;
 
 		if(!strict) // in strict mode, we'll just ignore stuff after the xml
 		while(r.type != 4) {
@@ -1152,7 +1425,7 @@ class Document : FileResource, DomParent {
 				parseUtf8(`<html><head></head><body></body></html>`); // fill in a dummy document in loose mode since that's what browsers do
 		}
 
-		if(paragraphHackfixRequired) {
+		if(nonNestableHackRequired) {
 			assert(!strict); // this should never happen in strict mode; it ought to never set the hack flag...
 
 			// in loose mode, we can see some "bad" nesting (it's valid html, but poorly formed xml).
@@ -1166,7 +1439,7 @@ class Document : FileResource, DomParent {
 				if(ele.parentNode is null)
 					continue;
 
-				if(ele.tagName == "p" && ele.parentNode.tagName == ele.tagName) {
+				if(!canNestElementsInHtml(ele.parentNode.tagName, ele.tagName)) {
 					auto shouldBePreviousSibling = ele.parentNode;
 					auto holder = shouldBePreviousSibling.parentNode; // this is the two element's mutual holder...
 					if (auto p = holder in insertLocations) {
@@ -1280,7 +1553,7 @@ class Document : FileResource, DomParent {
 		foreach(ref comp; s.components)
 			if(comp.parts.length && comp.parts[0].separation == 0)
 				comp.parts[0].separation = -1;
-		return s.getMatchingElements(this.root);
+		return s.getMatchingElements(this.root, null);
 	}
 
 	/// ditto
@@ -1311,10 +1584,18 @@ class Document : FileResource, DomParent {
 		return findFirst(&doesItMatch);
 	}
 
-	/// This returns the <body> element, if there is one. (It different than Javascript, where it is called 'body', because body is a keyword in D.)
+	/++
+		This returns the <body> element, if there is one. (It different than Javascript, where it is called 'body', because body used to be a keyword in D.)
+
+		History:
+			`body` alias added February 26, 2024
+	+/
 	Element mainBody() {
 		return getFirstElementByTagName("body");
 	}
+
+	/// ditto
+	alias body = mainBody;
 
 	/// this uses a weird thing... it's [name=] if no colon and
 	/// [property=] if colon
@@ -1406,16 +1687,13 @@ class Document : FileResource, DomParent {
 		loose = false;
 	}
 
-	///.
-	void setProlog(string d) {
-		_prolog = d;
-		prologWasSet = true;
-	}
-
-	///.
 	private string _prolog = "<!DOCTYPE html>\n";
 	private bool prologWasSet = false; // set to true if the user changed it
 
+	/++
+		Returns or sets the string before the root element. This is, for example,
+		`<!DOCTYPE html>\n` or similar.
+	+/
 	@property string prolog() const {
 		// if the user explicitly changed it, do what they want
 		// or if we didn't keep/find stuff from the document itself,
@@ -1429,7 +1707,17 @@ class Document : FileResource, DomParent {
 		return p;
 	}
 
-	///.
+	/// ditto
+	void setProlog(string d) {
+		_prolog = d;
+		prologWasSet = true;
+	}
+
+	/++
+		Returns the document as string form. Please note that if there is anything in [piecesAfterRoot],
+		they are discarded. If you want to add them to the file, loop over that and append it yourself
+		(but remember xml isn't supposed to have anything after the root element).
+	+/
 	override string toString() const {
 		return prolog ~ root.toString();
 	}
@@ -1441,7 +1729,6 @@ class Document : FileResource, DomParent {
 		because whitespace may be significant content in XML.
 	+/
 	string toPrettyString(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
-		import std.string;
 		string s = prolog.strip;
 
 		/*
@@ -1450,13 +1737,13 @@ class Document : FileResource, DomParent {
 		if(insertComments) s ~= "-->";
 		*/
 
-		s ~= root.toPrettyString(insertComments, indentationLevel, indentWith);
+		s ~= root.toPrettyStringImpl(insertComments, indentationLevel, indentWith);
 		foreach(a; piecesAfterRoot)
-			s ~= a.toPrettyString(insertComments, indentationLevel, indentWith);
+			s ~= a.toPrettyStringImpl(insertComments, indentationLevel, indentWith);
 		return s;
 	}
 
-	///.
+	/// The root element, like `<html>`. Most the methods on Document forward to this object.
 	Element root;
 
 	/// if these were kept, this is stuff that appeared before the root element, such as <?xml version ?> decls and <!DOCTYPE>s
@@ -1479,12 +1766,220 @@ class Document : FileResource, DomParent {
 	}
 }
 
+/++
+	Basic parsing of HTML tag soup
+
+	If you simply make a `new Document("some string")` or use [Document.fromUrl] to automatically
+	download a page (that's function is shorthand for `new Document(arsd.http2.get(your_given_url).contentText)`),
+	the Document parser will assume it is broken HTML. It will try to fix up things like charset messes, missing
+	closing tags, flipped tags, inconsistent letter cases, and other forms of commonly found HTML on the web.
+
+	It isn't exactly the same as what a HTML5 web browser does in all cases, but it usually it, and where it
+	disagrees, it is still usually good enough (but sometimes a bug).
++/
+unittest {
+	auto document = new Document(`<html><body><p>hello <P>there`);
+	// this will automatically try to normalize the html and fix up broken tags, etc
+	// so notice how it added the missing closing tags here and made them all lower case
+	assert(document.toString() == "<!DOCTYPE html>\n<html><body><p>hello </p><p>there</p></body></html>", document.toString());
+}
+
+/++
+	Stricter parsing of HTML
+
+	When you are writing the HTML yourself, you can remove most ambiguity by making it throw exceptions instead
+	of trying to automatically fix up things basic parsing tries to do. Using strict mode accomplishes this.
+
+	This will help guarantee that you have well-formed HTML, which means it is going to parse a lot more reliably
+	by all users - browsers, dom.d, other libraries, all behave better with well-formed input... people too!
+
+	(note it is not a full *validator*, just a well-formedness checker. Full validation is a lot more work for very
+	little benefit in my experience, so I stopped here.)
++/
+unittest {
+	try {
+		auto document = new Document(`<html><body><p>hello <P>there`, true, true); // turns on strict and case sensitive mode to ctor
+		assert(0); // never reached, the constructor will throw because strict mode is turned on
+	} catch(Exception e) {
+
+	}
+
+	// you can also create the object first, then use the [parseStrict] method
+	auto document = new Document;
+	document.parseStrict(`<foo></foo>`); // this is invalid html - no such foo tag - but it is well-formed, since it is opened and closed properly, so it passes
+
+}
+
+/++
+	Custom HTML extensions
+
+	dom.d is a custom HTML parser, which means you can add custom HTML extensions to it too. It normally reads
+	and discards things like ASP style `<% ... %>` code as well as XML processing instruction / PHP style embeds `<? ... ?>`
+	but you can keep this data if you call a function to opt into it in before parsing.
+
+	Additionally, you can add special tags to be read like `<script>` to preserve its insides for future processing
+	via the `.innerRawSource` member.
++/
+unittest {
+	auto document = new Document; // construct an empty thing first
+	document.enableAddingSpecialTagsToDom(); // add the special tags like <% ... %> etc
+	document.rawSourceElements ~= "embedded-plaintext"; // tell it we want a custom
+
+	document.parseStrict(`<html>
+		<% some asp code %>
+		<script>embedded && javascript</script>
+		<embedded-plaintext>my <custom> plaintext & stuff</embedded-plaintext>
+	</html>`);
+
+	// please note that if we did `document.toString()` right now, the original source - almost your same
+	// string you passed to parseStrict - would be spit back out. Meaning the embedded-plaintext still has its
+	// special text inside it. Another parser won't understand how to use this! So if you want to pass this
+	// document somewhere else, you need to do some transformations.
+	//
+	// This differs from cases like CDATA sections, which dom.d will automatically convert into plain html entities
+	// on the output that can be read by anyone.
+
+	assert(document.root.tagName == "html"); // the root element is normal
+
+	int foundCount;
+	// now let's loop through the whole tree
+	foreach(element; document.root.tree) {
+		// the asp thing will be in
+		if(auto asp = cast(AspCode) element) {
+			// you use the `asp.source` member to get the code for these
+			assert(asp.source == "% some asp code %");
+			foundCount++;
+		} else if(element.tagName == "script") {
+			// and for raw source elements - script, style, or the ones you add,
+			// you use the innerHTML method to get the code inside
+			assert(element.innerHTML == "embedded && javascript");
+			foundCount++;
+		} else if(element.tagName == "embedded-plaintext") {
+			// and innerHTML again
+			assert(element.innerHTML == "my <custom> plaintext & stuff");
+			foundCount++;
+		}
+
+	}
+
+	assert(foundCount == 3);
+
+	// writeln(document.toString());
+}
+
+// FIXME: <textarea> contents are treated kinda special in html5 as well...
+
+/++
+	Demoing CDATA, entities, and non-ascii characters.
+
+	The previous example mentioned CDATA, let's show you what that does too. These are all read in as plain strings accessible in the DOM - there is no CDATA, no entities once you get inside the object model - but when you convert back into a string, it will normalize them in a particular way.
+
+	This is not exactly standards compliant completely in and out thanks to it doing some transformations... but I find it more useful - it reads the data in consistently and writes it out consistently, both in ways that work well for interop. Take a look:
++/
+unittest {
+	auto document = new Document(`<html>
+		<p>¤ is a non-ascii character. It will be converted to a numbered entity in string output.</p>
+		<p>&#164; is the same thing.</p>
+		<p>&curren; is the same thing, but as a named entity. It also will be changed to a numbered entity in string output.</p>
+		<p><![CDATA[xml cdata segments, which can contain <tag> looking things, are converted to encode the embedded special-to-xml characters to entities too.]]></p>
+	</html>`, true, true); // strict mode turned on
+
+	// Inside the object model, things are simplified to D strings.
+	auto paragraphs = document.querySelectorAll("p");
+	// no surprise on the first paragraph, we wrote it with the character, and it is still there in the D string
+	assert(paragraphs[0].textContent == "¤ is a non-ascii character. It will be converted to a numbered entity in string output.");
+	// but note on the second paragraph, the entity has been converted to the appropriate *character* in the object
+	assert(paragraphs[1].textContent == "¤ is the same thing.");
+	assert(paragraphs[2].textContent == "¤ is the same thing, but as a named entity. It also will be changed to a numbered entity in string output.");
+	// and the CDATA bit is completely gone from the DOM; it just read it in as a text node. The txt content shows the text as a plain string:
+	assert(paragraphs[3].textContent == "xml cdata segments, which can contain <tag> looking things, are converted to encode the embedded special-to-xml characters to entities too.");
+	// and the dom node beneath it is just a single text node; no trace of the original CDATA detail is left after parsing.
+	assert(paragraphs[3].childNodes.length == 1 && paragraphs[3].childNodes[0].nodeType == NodeType.Text);
+
+	// And now, in the output string, we can see they are normalized thusly:
+	assert(document.toString() == "<!DOCTYPE html>\n<html>
+		<p>&#164; is a non-ascii character. It will be converted to a numbered entity in string output.</p>
+		<p>&#164; is the same thing.</p>
+		<p>&#164; is the same thing, but as a named entity. It also will be changed to a numbered entity in string output.</p>
+		<p>xml cdata segments, which can contain &lt;tag&gt; looking things, are converted to encode the embedded special-to-xml characters to entities too.</p>
+	</html>");
+}
+
+/++
+	Streaming parsing
+
+	dom.d normally takes a big string and returns a big DOM object tree - hence its name. This is usually the simplest
+	code to read and write, so I prefer to stick to that, but if you wanna jump through a few hoops, you can still make
+	dom.d work with streams.
+
+	It is awkward - again, dom.d's whole design is based on building the dom tree, but you can do it if you're willing to
+	subclass a little and trust the garbage collector. Here's how.
++/
+unittest {
+	bool encountered;
+	class StreamDocument : Document {
+		// the normal behavior for this function is to `parent.appendChild(child)`
+		// but we can override to read it as it is processed and not append it
+		override void processNodeWhileParsing(Element parent, Element child) {
+			if(child.tagName == "bar")
+				encountered = true;
+			// note that each element's object is created but then discarded as garbage.
+			// the GC will take care of it, even with a large document, whereas the normal
+			// object tree could become quite large.
+		}
+
+		this() {
+			super("<foo><bar></bar></foo>");
+		}
+	}
+
+	auto test = new StreamDocument();
+	assert(encountered); // it should have been seen
+	assert(test.querySelector("bar") is null); // but not appended to the dom node, since we didn't append it
+}
+
+/++
+	Basic parsing of XML.
+
+	dom.d is not technically a standards-compliant xml parser and doesn't implement all xml features,
+	but its stricter parse options together with turning off HTML's special tag handling (e.g. treating
+	`<script>` and `<style>` the same as any other tag) gets close enough to work fine for a great many
+	use cases.
+
+	For more information, see [XmlDocument].
++/
+unittest {
+	auto xml = new XmlDocument(`<my-stuff>hello</my-stuff>`);
+}
+
+bool canNestElementsInHtml(string parentTagName, string childTagName) {
+	switch(parentTagName) {
+		case "p", "h1", "h2", "h3", "h4", "h5", "h6":
+			// only should include "phrasing content"
+			switch(childTagName) {
+				case "p", "dl", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6":
+					return false;
+				default: return true;
+			}
+		case "dt", "dd":
+			switch(childTagName) {
+				case "dd", "dt":
+					return false;
+				default: return true;
+			}
+		default:
+			return true;
+	}
+}
+
 interface DomParent {
 	inout(Document) asDocument() inout;
 	inout(Element) asElement() inout;
 }
 
-/// This represents almost everything in the DOM.
+/++
+	This represents almost everything in the DOM and offers a lot of inspection and manipulation functions. Element, or its subclasses, are what makes the dom tree.
++/
 /// Group: core_functionality
 class Element : DomParent {
 	inout(Document) asDocument() inout { return null; }
@@ -1553,9 +2048,78 @@ class Element : DomParent {
 
 
 	/// get all the classes on this element
-	@property string[] classes() {
-		return split(className, " ");
+	@property string[] classes() const {
+		// FIXME: remove blank names
+		auto cs = split(className, " ");
+		foreach(ref c; cs)
+			c = c.strip();
+		return cs;
 	}
+
+	/++
+		The object [classList] returns.
+	+/
+	static struct ClassListHelper {
+		Element this_;
+		this(inout(Element) this_) inout {
+			this.this_ = this_;
+		}
+
+		///
+		bool contains(string cn) const {
+			return this_.hasClass(cn);
+		}
+
+		///
+		void add(string cn) {
+			this_.addClass(cn);
+		}
+
+		///
+		void remove(string cn) {
+			this_.removeClass(cn);
+		}
+
+		///
+		void toggle(string cn) {
+			if(contains(cn))
+				remove(cn);
+			else
+				add(cn);
+		}
+
+		// this thing supposed to be iterable in javascript but idk how i want to do it in D. meh
+		/+
+		string[] opIndex() const {
+			return this_.classes;
+		}
+		+/
+	}
+
+	/++
+		Returns a helper object to work with classes, just like javascript.
+
+		History:
+			Added August 25, 2022
+	+/
+	@property inout(ClassListHelper) classList() inout {
+		return inout(ClassListHelper)(this);
+	}
+	// FIXME: classList is supposed to whitespace and duplicates when you use it. need to test.
+
+	unittest {
+		Element element = Element.make("div");
+		element.classList.add("foo");
+		assert(element.classList.contains("foo"));
+		element.classList.remove("foo");
+		assert(!element.classList.contains("foo"));
+		element.classList.toggle("bar");
+		assert(element.classList.contains("bar"));
+	}
+
+	/// ditto
+	alias classNames = classes;
+
 
 	/// Adds a string to the class attribute. The class attribute is used a lot in CSS.
 	@scriptable
@@ -1594,7 +2158,7 @@ class Element : DomParent {
 	}
 
 	/// Returns whether the given class appears in this element.
-	bool hasClass(string c) {
+	bool hasClass(string c) const {
 		string cn = className;
 
 		auto idx = cn.indexOf(c);
@@ -1602,7 +2166,7 @@ class Element : DomParent {
 			return false;
 
 		foreach(cla; cn.split(" "))
-			if(cla == c)
+			if(cla.strip == c)
 				return true;
 		return false;
 
@@ -1633,9 +2197,16 @@ class Element : DomParent {
 	/* *******************************
 		  DOM Mutation
 	*********************************/
-	/// convenience function to quickly add a tag with some text or
-	/// other relevant info (for example, it's a src for an <img> element
-	/// instead of inner text)
+	/++
+		Family of convenience functions to quickly add a tag with some text or
+		other relevant info (for example, it's a src for an <img> element
+		instead of inner text). They forward to [Element.make] then calls [appendChild].
+
+		---
+		div.addChild("span", "hello there");
+		div.addChild("div", Html("<p>children of the div</p>"));
+		---
+	+/
 	Element addChild(string tagName, string childInfo = null, string childInfo2 = null)
 		in {
 			assert(tagName !is null);
@@ -1651,50 +2222,12 @@ class Element : DomParent {
 		return appendChild(e);
 	}
 
-	/// Another convenience function. Adds a child directly after the current one, returning
-	/// the new child.
-	///
-	/// Between this, addChild, and parentNode, you can build a tree as a single expression.
-	Element addSibling(string tagName, string childInfo = null, string childInfo2 = null)
-		in {
-			assert(tagName !is null);
-			assert(parentNode !is null);
-		}
-		out(e) {
-			assert(e.parentNode is this.parentNode);
-			assert(e.parentDocument is this.parentDocument);
-		}
-	do {
-		auto e = Element.make(tagName, childInfo, childInfo2);
-		return parentNode.insertAfter(this, e);
-	}
-
-	///
-	Element addSibling(Element e) {
-		return parentNode.insertAfter(this, e);
-	}
-
-	///
+	/// ditto
 	Element addChild(Element e) {
 		return this.appendChild(e);
 	}
 
-	/// Convenience function to append text intermixed with other children.
-	/// For example: div.addChildren("You can visit my website by ", new Link("mysite.com", "clicking here"), ".");
-	/// or div.addChildren("Hello, ", user.name, "!");
-
-	/// See also: appendHtml. This might be a bit simpler though because you don't have to think about escaping.
-	void addChildren(T...)(T t) {
-		foreach(item; t) {
-			static if(is(item : Element))
-				appendChild(item);
-			else static if (is(isSomeString!(item)))
-				appendText(to!string(item));
-			else static assert(0, "Cannot pass " ~ typeof(item).stringof ~ " to addChildren");
-		}
-	}
-
-	///.
+	/// ditto
 	Element addChild(string tagName, Element firstChild, string info2 = null)
 	in {
 		assert(firstChild !is null);
@@ -1714,7 +2247,7 @@ class Element : DomParent {
 		return e;
 	}
 
-	///
+	/// ditto
 	Element addChild(string tagName, in Html innerHtml, string info2 = null)
 	in {
 	}
@@ -1731,13 +2264,51 @@ class Element : DomParent {
 	}
 
 
-	/// .
+	/// Another convenience function. Adds a child directly after the current one, returning
+	/// the new child.
+	///
+	/// Between this, addChild, and parentNode, you can build a tree as a single expression.
+	/// See_Also: [addChild]
+	Element addSibling(string tagName, string childInfo = null, string childInfo2 = null)
+		in {
+			assert(tagName !is null);
+			assert(parentNode !is null);
+		}
+		out(e) {
+			assert(e.parentNode is this.parentNode);
+			assert(e.parentDocument is this.parentDocument);
+		}
+	do {
+		auto e = Element.make(tagName, childInfo, childInfo2);
+		return parentNode.insertAfter(this, e);
+	}
+
+	/// ditto
+	Element addSibling(Element e) {
+		return parentNode.insertAfter(this, e);
+	}
+
+	/// Convenience function to append text intermixed with other children.
+	/// For example: div.addChildren("You can visit my website by ", new Link("mysite.com", "clicking here"), ".");
+	/// or div.addChildren("Hello, ", user.name, "!");
+	/// See also: appendHtml. This might be a bit simpler though because you don't have to think about escaping.
+	void addChildren(T...)(T t) {
+		foreach(item; t) {
+			static if(is(item : Element))
+				appendChild(item);
+			else static if (is(isSomeString!(item)))
+				appendText(to!string(item));
+			else static assert(0, "Cannot pass " ~ typeof(item).stringof ~ " to addChildren");
+		}
+	}
+
+	/// Appends the list of children to this element.
 	void appendChildren(Element[] children) {
 		foreach(ele; children)
 			appendChild(ele);
 	}
 
-	///.
+	/// Removes this element form its current parent and appends it to the given `newParent`.
 	void reparent(Element newParent)
 		in {
 			assert(newParent !is null);
@@ -1834,13 +2405,6 @@ class Element : DomParent {
 	}
 
 	/**
-		Splits the className into an array of each class given
-	*/
-	string[] classNames() const {
-		return className().split(" ");
-	}
-
-	/**
 		Fetches the first consecutive text nodes concatenated together.
 
 
@@ -1862,7 +2426,7 @@ class Element : DomParent {
 
 	/**
 		Returns the text directly under this element.
-		
+
 
 		Unlike [innerText], it does not recurse, and unlike [firstInnerText], it continues
 		past child tags. So, `<example>some <b>bold</b> text</example>`
@@ -1907,6 +2471,7 @@ class Element : DomParent {
 	// do nothing, this is primarily a virtual hook
 	// for links and forms
 	void setValue(string field, string value) { }
+	void setValue(string field, string[] value) { }
 
 
 	// this is a thing so i can remove observer support if it gets slow
@@ -1931,8 +2496,13 @@ class Element : DomParent {
 	/// The name of the tag. Remember, changing this doesn't change the dynamic type of the object.
 	string tagName;
 
-	/// This is where the attributes are actually stored. You should use getAttribute, setAttribute, and hasAttribute instead.
-	string[string] attributes;
+	/++
+		This is where the attributes are actually stored. You should use getAttribute, setAttribute, and hasAttribute instead.
+
+		History:
+			`AttributesHolder` replaced `string[string]` on August 22, 2024
+	+/
+	AttributesHolder attributes;
 
 	/// In XML, it is valid to write <tag /> for all elements with no children, but that breaks HTML, so I don't do it here.
 	/// Instead, this flag tells if it should be. It is based on the source document's notation and a html element list.
@@ -1956,11 +2526,11 @@ class Element : DomParent {
 		return cast(inout) prev.parent_.asDocument;
 	}
 
-	deprecated @property void parentDocument(Document doc) {
+	/*deprecated*/ @property void parentDocument(Document doc) {
 		parent_ = doc;
 	}
 
-	///.
+	/// Returns the parent node in the tree this element is attached to.
 	inout(Element) parentNode() inout {
 		if(parent_ is null)
 			return null;
@@ -2012,6 +2582,8 @@ class Element : DomParent {
 			On February 8, 2021, the `selfClosedElements` parameter was added. Previously, it used a private
 			immutable global list for HTML. It still defaults to the same list, but you can change it now via
 			the parameter.
+		See_Also:
+			[addChild], [addSibling]
 	+/
 	static Element make(string tagName, string childInfo = null, string childInfo2 = null, const string[] selfClosedElements = htmlSelfClosedElements) {
 		bool selfClosed = tagName.isInArray(selfClosedElements);
@@ -2111,6 +2683,7 @@ class Element : DomParent {
 		return e;
 	}
 
+	/// ditto
 	static Element make(string tagName, in Html innerHtml, string childInfo2 = null) {
 		// FIXME: childInfo2 is ignored when info1 is null
 		auto m = Element.make(tagName, "not null"[0..0], childInfo2);
@@ -2118,18 +2691,60 @@ class Element : DomParent {
 		return m;
 	}
 
+	/// ditto
 	static Element make(string tagName, Element child, string childInfo2 = null) {
 		auto m = Element.make(tagName, cast(string) null, childInfo2);
 		m.appendChild(child);
 		return m;
 	}
 
+	/++
+		Makes an element from an interpolated sequence.
+
+		FIXME: add a type interpolator thing that can be replaced
+		FIXME: syntax check at compile time?
+		FIXME: allow a DocumentFragment in some cases
+	+/
+	static Element make(Args...)(arsd.core.InterpolationHeader head, Args args, arsd.core.InterpolationFooter foot) {
+		string html;
+
+		import arsd.core;
+		foreach(arg; args) {
+			static if(is(typeof(arg) == InterpolationHeader))
+				{}
+			else
+			static if(is(typeof(arg) == InterpolationFooter))
+				{}
+			else
+			static if(is(typeof(arg) == InterpolatedLiteral!h, string h))
+				html ~= h;
+			else
+			static if(is(typeof(arg) == InterpolatedExpression!code, string code))
+				{}
+			else
+			static if(is(typeof(arg) : iraw))
+				html ~= arg.s;
+			else
+			// FIXME: what if we are inside a <script> ? or an attribute etc
+			static if(is(typeof(arg) : Html))
+				html ~= arg.source;
+			else
+			static if(is(typeof(arg) : Element))
+				html ~= arg.toString();
+			else
+				html ~= htmlEntitiesEncode(toStringInternal(arg));
+		}
+
+		auto root = Element.make("root");
+		root.innerHTML(html, true /* strict mode */);
+		return root.querySelector(" > *");
+	}
 
 	/// Generally, you don't want to call this yourself - use Element.make or document.createElement instead.
 	this(Document _parentDocument, string _tagName, string[string] _attributes = null, bool _selfClosed = false) {
 		tagName = _tagName;
-		if(_attributes !is null)
-			attributes = _attributes;
+		foreach(k, v; _attributes)
+			attributes[k] = v;
 		selfClosed = _selfClosed;
 
 		version(dom_node_indexes)
@@ -2150,8 +2765,8 @@ class Element : DomParent {
 	+/
 	this(string _tagName, string[string] _attributes = null, const string[] selfClosedElements = htmlSelfClosedElements) {
 		tagName = _tagName;
-		if(_attributes !is null)
-			attributes = _attributes;
+		foreach(k, v; _attributes)
+			attributes[k] = v;
 		selfClosed = tagName.isInArray(selfClosedElements);
 
 		// this is meant to reserve some memory. It makes a small, but consistent improvement.
@@ -2178,13 +2793,13 @@ class Element : DomParent {
 		return children.length ? children[0] : null;
 	}
 
-	///
+	/// Returns the last child of the element, or null if it has no children. Remember, text nodes are children too.
 	@property Element lastChild() {
 		return children.length ? children[$ - 1] : null;
 	}
-	
-	/// UNTESTED
-	/// the next element you would encounter if you were reading it in the source
+
+	// FIXME UNTESTED
+	/// the next or previous element you would encounter if you were reading it in the source. May be a text node or other special non-tag object if you enabled them.
 	Element nextInSource() {
 		auto n = firstChild;
 		if(n is null)
@@ -2199,7 +2814,6 @@ class Element : DomParent {
 		return n;
 	}
 
-	/// UNTESTED
 	/// ditto
 	Element previousInSource() {
 		auto p = previousSibling;
@@ -2213,12 +2827,25 @@ class Element : DomParent {
 		return p;
 	}
 
-	///.
+	/++
+		Returns the next or previous sibling that is not a text node. Please note: the behavior with comments is subject to change. Currently, it will return a comment or other nodes if it is in the tree (if you enabled it with [Document.enableAddingSpecialTagsToDom] or [Document.parseSawComment]) and not if you didn't, but the implementation will probably change at some point to skip them regardless.
+
+		Equivalent to [previousSibling]/[nextSibling]("*").
+
+		Please note it may return `null`.
+	+/
 	@property Element previousElementSibling() {
 		return previousSibling("*");
 	}
 
-	///.
+	/// ditto
+	@property Element nextElementSibling() {
+		return nextSibling("*");
+	}
+
+	/++
+		Returns the next or previous sibling matching the `tagName` filter. The default filter of `null` will return the first sibling it sees, even if it is a comment or text node, or anything else. A filter of `"*"` will match any tag with a name. Otherwise, the string must match the [tagName] of the sibling you want to find.
+	+/
 	@property Element previousSibling(string tagName = null) {
 		if(this.parentNode is null)
 			return null;
@@ -2235,12 +2862,7 @@ class Element : DomParent {
 		return ps;
 	}
 
-	///.
-	@property Element nextElementSibling() {
-		return nextSibling("*");
-	}
-
-	///.
+	/// ditto
 	@property Element nextSibling(string tagName = null) {
 		if(this.parentNode is null)
 			return null;
@@ -2267,8 +2889,11 @@ class Element : DomParent {
 	}
 
 
-	/// Gets the nearest node, going up the chain, with the given tagName
-	/// May return null or throw.
+	/++
+		Gets the nearest node, going up the chain, with the given tagName
+		May return null or throw. The type `T` will specify a subclass like
+		[Form], [Table], or [Link], which it will cast for you when found.
+	+/
 	T getParent(T = Element)(string tagName = null) if(is(T : Element)) {
 		if(tagName is null) {
 			static if(is(T == Form))
@@ -2296,7 +2921,9 @@ class Element : DomParent {
 		return t;
 	}
 
-	///.
+	/++
+		Searches this element and the tree of elements under it for one matching the given `id` attribute.
+	+/
 	Element getElementById(string id) {
 		// FIXME: I use this function a lot, and it's kinda slow
 		// not terribly slow, but not great.
@@ -2321,16 +2948,22 @@ class Element : DomParent {
 	@scriptable
 	Element querySelector(string selector) {
 		Selector s = Selector(selector);
+
+		foreach(ref comp; s.components)
+			if(comp.parts.length && comp.parts[0].separation > 0) {
+				// this is illegal in standard dom, but i use it a lot
+				// gonna insert a :scope thing
+
+				SelectorPart part;
+				part.separation = -1;
+				part.scopeElement = true;
+				comp.parts = part ~ comp.parts;
+			}
+
 		foreach(ele; tree)
-			if(s.matchesElement(ele))
+			if(s.matchesElement(ele, this))
 				return ele;
 		return null;
-	}
-
-	/// a more standards-compliant alias for getElementsBySelector
-	@scriptable
-	Element[] querySelectorAll(string selector) {
-		return getElementsBySelector(selector);
 	}
 
 	/// If the element matches the given selector. Previously known as `matchesSelector`.
@@ -2398,8 +3031,11 @@ class Element : DomParent {
 
 
 		There should be two functions: given element, does it match the selector? and given a selector, give me all the elements
+
+		The name `getElementsBySelector` was the original name, written back before the name `querySelector` was standardized (this library is older than you might think!), but they do the same thing..
 	*/
-	Element[] getElementsBySelector(string selector) {
+	@scriptable
+	Element[] querySelectorAll(string selector) {
 		// FIXME: this function could probably use some performance attention
 		// ... but only mildly so according to the profiler in the big scheme of things; probably negligible in a big app.
 
@@ -2410,23 +3046,32 @@ class Element : DomParent {
 
 		Element[] ret;
 		foreach(sel; parseSelectorString(selector, caseSensitiveTags))
-			ret ~= sel.getElements(this);
+			ret ~= sel.getElements(this, null);
 		return ret;
 	}
 
-	/// .
+	/// ditto
+	alias getElementsBySelector = querySelectorAll;
+
+	/++
+		Returns child elements that have the given class name or tag name.
+
+		Please note the standard specifies this should return a live node list. This means, in Javascript for example, if you loop over the value returned by getElementsByTagName and getElementsByClassName and remove the elements, the length of the list will decrease. When I implemented this, I figured that was more trouble than it was worth and returned a plain array instead. By the time I had the infrastructure to make it simple, I didn't want to do the breaking change.
+
+		So these is incompatible with Javascript in the face of live dom mutation and will likely remain so.
+	+/
 	Element[] getElementsByClassName(string cn) {
 		// is this correct?
 		return getElementsBySelector("." ~ cn);
 	}
 
-	///.
+	/// ditto
 	Element[] getElementsByTagName(string tag) {
 		if(parentDocument && parentDocument.loose)
 			tag = tag.toLower();
 		Element[] ret;
 		foreach(e; tree)
-			if(e.tagName == tag)
+			if(e.tagName == tag || tag == "*")
 				ret ~= e;
 		return ret;
 	}
@@ -2446,11 +3091,7 @@ class Element : DomParent {
 	string getAttribute(string name) const {
 		if(parentDocument && parentDocument.loose)
 			name = name.toLower();
-		auto e = name in attributes;
-		if(e)
-			return *e;
-		else
-			return null;
+		return attributes.get(name, null);
 	}
 
 	/**
@@ -2511,7 +3152,7 @@ class Element : DomParent {
 	}
 
 	/**
-		Gets the class attribute's contents. Returns
+		Gets or sets the class attribute's contents. Returns
 		an empty string if it has no class.
 	*/
 	@property string className() const {
@@ -2521,7 +3162,7 @@ class Element : DomParent {
 		return c;
 	}
 
-	///.
+	/// ditto
 	@property Element className(string c) {
 		setAttribute("class", c);
 		return this;
@@ -2548,7 +3189,7 @@ class Element : DomParent {
 
 		DEPRECATED: generally open opDispatch caused a lot of unforeseen trouble with compile time duck typing and UFCS extensions.
 		so I want to remove it. A small whitelist of attributes is still allowed, but others are not.
-		
+
 		Instead, use element.attrs.attribute, element.attrs["attribute"],
 		or element.getAttribute("attribute")/element.setAttribute("attribute").
 	*/
@@ -2569,12 +3210,7 @@ class Element : DomParent {
 	/**
 		Returns the element's children.
 	*/
-	@property const(Element[]) childNodes() const {
-		return children;
-	}
-
-	/// Mutable version of the same
-	@property Element[] childNodes() { // FIXME: the above should be inout
+	@property inout(Element[]) childNodes() inout {
 		return children;
 	}
 
@@ -2643,7 +3279,7 @@ class Element : DomParent {
 	// the next few methods are for implementing interactive kind of things
 	private CssStyle _computedStyle;
 
-	/// Don't use this.
+	/// Don't use this. It can try to parse out the style element but it isn't complete and if I get back to it, it won't be for a while.
 	@property CssStyle computedStyle() {
 		if(_computedStyle is null) {
 			auto style = this.getAttribute("style");
@@ -2661,7 +3297,7 @@ class Element : DomParent {
 		/* done */
 
 
-			_computedStyle = new CssStyle(null, style); // gives at least something to work with
+			_computedStyle = computedStyleFactory(this);
 		}
 		return _computedStyle;
 	}
@@ -2722,13 +3358,17 @@ class Element : DomParent {
 		children = null;
 	}
 
-	/// History: added June 13, 2020
+	/++
+		Adds a sibling element before or after this one in the dom.
+
+		History: added June 13, 2020
+	+/
 	Element appendSibling(Element e) {
 		parentNode.insertAfter(this, e);
 		return e;
 	}
 
-	/// History: added June 13, 2020
+	/// ditto
 	Element prependSibling(Element e) {
 		parentNode.insertBefore(this, e);
 		return e;
@@ -2746,6 +3386,7 @@ class Element : DomParent {
 	Element appendChild(Element e)
 		in {
 			assert(e !is null);
+			assert(e !is this);
 		}
 		out (ret) {
 			assert((cast(DocumentFragment) this !is null) || (e.parentNode is this), e.toString);// e.parentNode ? e.parentNode.toString : "null");
@@ -2915,8 +3556,19 @@ class Element : DomParent {
 		return stealChildren(d.root);
 	}
 
+	/++
+		Returns `this` for use inside `with` expressions.
 
-	///.
+		History:
+			Added December 20, 2024
+	+/
+	inout(Element) self() inout pure @nogc nothrow @safe scope return {
+		return this;
+	}
+
+	/++
+		Inserts a child under this element after the element `where`.
+	+/
 	void insertChildAfter(Element child, Element where)
 		in {
 			assert(child !is null);
@@ -3110,7 +3762,9 @@ class Element : DomParent {
 		rs.parentNode = this;
 	}
 
-	///.
+	/++
+		Replaces the element `find`, which must be a child of `this`, with the element `replace`, which must have no parent.
+	+/
 	Element replaceChild(Element find, Element replace)
 		in {
 			assert(find !is null);
@@ -3236,7 +3890,11 @@ class Element : DomParent {
 		This does not match what real innerText does!
 		http://perfectionkills.com/the-poor-misunderstood-innerText/
 
-		It is more like textContent.
+		It is more like [textContent].
+
+		See_Also:
+			[visibleText], which is closer to what the real `innerText`
+			does.
 	*/
 	@scriptable
 	@property string innerText() const {
@@ -3250,8 +3908,38 @@ class Element : DomParent {
 		return s;
 	}
 
-	///
+	/// ditto
 	alias textContent = innerText;
+
+	/++
+		Gets the element's visible text, similar to how it would look assuming
+		the document was HTML being displayed by a browser. This means it will
+		attempt whitespace normalization (unless it is a `<pre>` tag), add `\n`
+		characters for `<br>` tags, and I reserve the right to make it process
+		additional css and tags in the future.
+
+		If you need specific output, use the more stable [textContent] property
+		or iterate yourself with [tree] or a recursive function with [children].
+
+		History:
+			Added March 25, 2022 (dub v10.8)
+	+/
+	string visibleText() const {
+		return this.visibleTextHelper(this.tagName == "pre");
+	}
+
+	private string visibleTextHelper(bool pre) const {
+		string result;
+		foreach(thing; this.children) {
+			if(thing.nodeType == NodeType.Text)
+				result ~= pre ? thing.nodeValue : normalizeWhitespace(thing.nodeValue);
+			else if(thing.tagName == "br")
+				result ~= "\n";
+			else
+				result ~= thing.visibleTextHelper(pre || thing.tagName == "pre");
+		}
+		return result;
+	}
 
 	/**
 		Sets the inside text, replacing all children. You don't
@@ -3309,7 +3997,7 @@ class Element : DomParent {
 				e.appendChild(child.cloneNode(true));
 			}
 		}
-		
+
 
 		return e;
 	}
@@ -3371,9 +4059,40 @@ class Element : DomParent {
 		return writeToAppender();
 	}
 
+	/++
+		Returns if the node would be printed to string as `<tag />` or `<tag></tag>`. In other words, if it has no non-empty text nodes and no element nodes. Please note that whitespace text nodes are NOT considered empty; `Html("<tag> </tag>").isEmpty == false`.
+
+
+		The value is undefined if there are comment or processing instruction nodes. The current implementation returns false if it sees those, assuming the nodes haven't been stripped out during parsing. But I'm not married to the current implementation and reserve the right to change it without notice.
+
+		History:
+			Added December 3, 2021 (dub v10.5)
+
+	+/
+	public bool isEmpty() const {
+		foreach(child; this.children) {
+			// any non-text node is of course not empty since that's a tag
+			if(child.nodeType != NodeType.Text)
+				return false;
+			// or a text node is empty if it is is a null or empty string, so this length check fixes that
+			if(child.nodeValue.length)
+				return false;
+		}
+
+		return true;
+	}
+
 	protected string toPrettyStringIndent(bool insertComments, int indentationLevel, string indentWith) const {
 		if(indentWith is null)
 			return null;
+
+		// at the top we don't have anything to really do
+		//if(parent_ is null)
+			//return null;
+
+			// I've used isEmpty before but this other check seems better....
+			//|| this.isEmpty())
+
 		string s;
 
 		if(insertComments) s ~= "<!--";
@@ -3388,8 +4107,40 @@ class Element : DomParent {
 	/++
 		Writes out with formatting. Be warned: formatting changes the contents. Use ONLY
 		for eyeball debugging.
+
+		$(PITFALL
+			This function is not stable. Its interface and output may change without
+			notice. The only promise I make is that it will continue to make a best-
+			effort attempt at being useful for debugging by human eyes.
+
+			I have used it in the past for diffing html documents, but even then, it
+			might change between versions. If it is useful, great, but beware; this
+			use is at your own risk.
+		)
+
+		History:
+			On November 19, 2021, I changed this to `final`. If you were overriding it,
+			change our override to `toPrettyStringImpl` instead. It now just calls
+			`toPrettyStringImpl.strip` to be an entry point for a stand-alone call.
+
+			If you are calling it as part of another implementation, you might want to
+			change that call to `toPrettyStringImpl` as well.
+
+			I am NOT considering this a breaking change since this function is documented
+			to only be used for eyeball debugging anyway, which means the exact format is
+			not specified and the override behavior can generally not be relied upon.
+
+			(And I find it extremely unlikely anyone was subclassing anyway, but if you were,
+			email me, and we'll see what we can do. I'd like to know at least.)
+
+			I reserve the right to make future changes in the future without considering
+			them breaking as well.
 	+/
-	string toPrettyString(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
+	final string toPrettyString(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
+		return toPrettyStringImpl(insertComments, indentationLevel, indentWith).strip;
+	}
+
+	string toPrettyStringImpl(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
 
 		// first step is to concatenate any consecutive text nodes to simplify
 		// the white space analysis. this changes the tree! but i'm allowed since
@@ -3444,8 +4195,7 @@ class Element : DomParent {
 
 		// i sort these for consistent output. might be more legible
 		// but especially it keeps it the same for diff purposes.
-		import std.algorithm : sort;
-		auto keys = sort(attributes.keys);
+		auto keys = sortStrings(attributes.keys);
 		foreach(n; keys) {
 			auto v = attributes[n];
 			s ~= " ";
@@ -3464,7 +4214,13 @@ class Element : DomParent {
 
 		// for simple `<collection><item>text</item><item>text</item></collection>`, let's
 		// just keep them on the same line
-		if(tagName.isInArray(inlineElements) || allAreInlineHtml(children, inlineElements)) {
+
+		if(isEmpty) {
+			// no work needed, this is empty so don't indent just for a blank line
+		} else if(children.length == 1 && children[0].isEmpty) {
+			// just one empty one, can put it inline too
+			s ~= children[0].toString();
+		} else if(tagName.isInArray(inlineElements) || allAreInlineHtml(children, inlineElements)) {
 			foreach(child; children) {
 				s ~= child.toString();//toPrettyString(false, 0, null);
 			}
@@ -3472,7 +4228,7 @@ class Element : DomParent {
 			foreach(child; children) {
 				assert(child !is null);
 
-				s ~= child.toPrettyString(insertComments, indentationLevel + 1, indentWith);
+				s ~= child.toPrettyStringImpl(insertComments, indentationLevel + 1, indentWith);
 			}
 
 			s ~= toPrettyStringIndent(insertComments, indentationLevel, indentWith);
@@ -3490,9 +4246,18 @@ class Element : DomParent {
 	string writeTagOnly(Appender!string where = appender!string()) const {
 	+/
 
-	/// This is the actual implementation used by toString. You can pass it a preallocated buffer to save some time.
-	/// Note: the ordering of attributes in the string is undefined.
-	/// Returns the string it creates.
+	/++
+		This is the actual implementation used by toString. You can pass it a preallocated buffer to save some time.
+		Note: the ordering of attributes in the string is undefined.
+		Returns the string it creates.
+
+		Implementation_Notes:
+			The order of attributes printed by this function is undefined, as permitted by the XML spec. You should NOT rely on any implementation detail noted here.
+
+			However, in practice, between June 14, 2019 and August 22, 2024, it actually did sort attributes by key name. After August 22, 2024, it changed to track attribute append order and will print them back out in the order in which the keys were first seen.
+
+			This is subject to change again at any time. Use [toPrettyString] if you want a defined output (toPrettyString always sorts by name for consistent diffing).
+	+/
 	string writeToAppender(Appender!string where = appender!string()) const {
 		assert(tagName !is null);
 
@@ -3503,10 +4268,13 @@ class Element : DomParent {
 		where.put("<");
 		where.put(tagName);
 
+		/+
 		import std.algorithm : sort;
 		auto keys = sort(attributes.keys);
 		foreach(n; keys) {
 			auto v = attributes[n]; // I am sorting these for convenience with another project. order of AAs is undefined, so I'm allowed to do it.... and it is still undefined, I might change it back later.
+		+/
+		foreach(n, v; attributes) {
 			//assert(v !is null);
 			where.put(" ");
 			where.put(n);
@@ -3540,8 +4308,13 @@ class Element : DomParent {
 
 	// I moved these from Form because they are generally useful.
 	// Ideally, I'd put them in arsd.html and use UFCS, but that doesn't work with the opDispatch here.
-	/// Tags: HTML, HTML5
 	// FIXME: add overloads for other label types...
+	/++
+		Adds a form field to this element, normally a `<input>` but `type` can also be `"textarea"`.
+
+		This is fairly html specific and the label uses my style. I recommend you view the source before you use it to better understand what it does.
+	+/
+	/// Tags: HTML, HTML5
 	Element addField(string label, string name, string type = "text", FormFieldOptions fieldOptions = FormFieldOptions.none) {
 		auto fs = this;
 		auto i = fs.addChild("label");
@@ -3567,6 +4340,7 @@ class Element : DomParent {
 		return i;
 	}
 
+	/// ditto
 	Element addField(Element label, string name, string type = "text", FormFieldOptions fieldOptions = FormFieldOptions.none) {
 		auto fs = this;
 		auto i = fs.addChild("label");
@@ -3586,10 +4360,12 @@ class Element : DomParent {
 		return i;
 	}
 
+	/// ditto
 	Element addField(string label, string name, FormFieldOptions fieldOptions) {
 		return addField(label, name, "text", fieldOptions);
 	}
 
+	/// ditto
 	Element addField(string label, string name, string[string] options, FormFieldOptions fieldOptions = FormFieldOptions.none) {
 		auto fs = this;
 		auto i = fs.addChild("label");
@@ -3604,6 +4380,7 @@ class Element : DomParent {
 		return i;
 	}
 
+	/// ditto
 	Element addSubmitButton(string label = null) {
 		auto t = this;
 		auto holder = t.addChild("div");
@@ -3616,28 +4393,60 @@ class Element : DomParent {
 	}
 
 }
+
 // computedStyle could argubaly be removed to bring size down
 //pragma(msg, __traits(classInstanceSize, Element));
 //pragma(msg, Element.tupleof);
 
 // FIXME: since Document loosens the input requirements, it should probably be the sub class...
-/// Specializes Document for handling generic XML. (always uses strict mode, uses xml mime type and file header)
+/++
+	Specializes Document for handling generic XML. (always uses strict mode, uses xml mime type and file header)
+
+	History:
+		On December 16, 2022, it disabled the special case treatment of `<script>` and `<style>` that [Document]
+		does for HTML. To get the old behavior back, add `, true` to your constructor call.
++/
 /// Group: core_functionality
 class XmlDocument : Document {
-	this(string data) {
+	/++
+		Constructs a stricter-mode XML parser and parses the given data source.
+
+		History:
+			The `Utf8Stream` version of the constructor was added on February 22, 2025.
+	+/
+	this(string data, bool enableHtmlHacks = false) {
+		this(new Utf8Stream(data), enableHtmlHacks);
+	}
+
+	/// ditto
+	this(Utf8Stream data, bool enableHtmlHacks = false) {
 		selfClosedElements = null;
 		inlineElements = null;
+		rawSourceElements = null;
 		contentType = "text/xml; charset=utf-8";
 		_prolog = `<?xml version="1.0" encoding="UTF-8"?>` ~ "\n";
 
-		parseStrict(data);
+		parseStream(data, true, true, !enableHtmlHacks);
 	}
 }
 
+unittest {
+	// FIXME: i should also make XmlDocument do different entities than just html too.
+	auto str = "<html><style>foo {}</style><script>void function() { a < b; }</script></html>";
+	auto document = new Document(str, true, true);
+	assert(document.requireSelector("style").children[0].tagName == "#raw");
+	assert(document.requireSelector("script").children[0].tagName == "#raw");
+	try {
+		auto xml = new XmlDocument(str);
+		assert(0);
+	} catch(MarkupException e) {
+		// failure expected, script special case is not valid XML without a dtd (which isn't here)
+	}
+	//assert(xml.requireSelector("style").children[0].tagName == "#raw");
+	//assert(xml.requireSelector("script").children[0].tagName == "#raw");
+}
 
 
-
-import std.string;
 
 /* domconvenience follows { */
 
@@ -3849,19 +4658,41 @@ struct DataSet {
 /// Proxy object for attributes which will replace the main opDispatch eventually
 /// Group: implementations
 struct AttributeSet {
-	///
+	/// Generally, you shouldn't create this yourself, since you can use [Element.attrs] instead.
 	this(Element e) {
 		this._element = e;
 	}
 
 	private Element _element;
-	///
+	/++
+		Sets a `value` for attribute with `name`. If the attribute doesn't exist, this will create it, even if `value` is `null`.
+	+/
 	string set(string name, string value) {
 		_element.setAttribute(name, value);
 		return value;
 	}
 
+	/++
+		Provides support for testing presence of an attribute with the `in` operator.
+
+		History:
+			Added December 16, 2020 (dub v10.10)
+	+/
+	auto opBinaryRight(string op : "in")(string name) const
+	{
+		return name in _element.attributes;
+	}
 	///
+	unittest
+	{
+		auto doc = new XmlDocument(`<test attr="test"/>`);
+		assert("attr" in doc.root.attrs);
+		assert("test" !in doc.root.attrs);
+	}
+
+	/++
+		Returns the value of attribute `name`, or `null` if doesn't exist
+	+/
 	string get(string name) const {
 		return _element.getAttribute(name);
 	}
@@ -3870,7 +4701,275 @@ struct AttributeSet {
 	mixin JavascriptStyleDispatch!();
 }
 
+private struct InternalAttribute {
+	// variable length structure
+	private InternalAttribute* next;
+	private uint totalLength;
+	private ushort keyLength;
+	private char[0] chars;
 
+	// this really should be immutable tbh
+	inout(char)[] key() inout return {
+		return chars.ptr[0 .. keyLength];
+	}
+
+	inout(char)[] value() inout return {
+		return chars.ptr[keyLength .. totalLength];
+	}
+
+	static InternalAttribute* make(in char[] key, in char[] value) {
+		// old code was
+		//auto data = new ubyte[](InternalAttribute.sizeof + key.length + value.length);
+		//GC.addRange(data.ptr, data.length); // MUST add the range to scan it!
+
+		import core.memory;
+		// but this code is a bit better, notice we did NOT set the NO_SCAN attribute because of the presence of the next pointer
+		// (this can sometimes be a pessimization over the separate strings but meh, most of these attributes are supposed to be small)
+		auto obj = cast(InternalAttribute*) GC.calloc(InternalAttribute.sizeof + key.length + value.length);
+
+		// assert(key.length > 0);
+
+		obj.totalLength = cast(uint) (key.length + value.length);
+		obj.keyLength = cast(ushort) key.length;
+		if(key.length != obj.keyLength)
+			throw new Exception("attribute key overflow");
+		if(key.length + value.length != obj.totalLength)
+			throw new Exception("attribute length overflow");
+
+		obj.key[] = key[];
+		obj.value[] = value[];
+
+		return obj;
+	}
+
+	// FIXME: disable default ctor and op new
+}
+
+import core.exception;
+
+struct AttributesHolder {
+	private @system InternalAttribute* attributes;
+
+	/+
+	invariant() {
+		const(InternalAttribute)* wtf = attributes;
+		while(wtf) {
+			assert(wtf != cast(void*) 1);
+			assert(wtf.keyLength != 0);
+			import std.stdio; writeln(wtf.key, "=", wtf.value);
+			wtf = wtf.next;
+		}
+	}
+	+/
+
+	/+
+		It is legal to do foo["key", "default"] to call it with no error...
+	+/
+	string opIndex(scope const char[] key) const {
+		auto found = find(key);
+		if(found is null)
+			throw new RangeError(key.idup); // FIXME
+		return cast(string) found.value;
+	}
+
+	string get(scope const char[] key, string returnedIfKeyNotFound = null) const {
+		auto attr = this.find(key);
+		if(attr is null)
+			return returnedIfKeyNotFound;
+		else
+			return cast(string) attr.value;
+	}
+
+	private string[] keys() const {
+		string[] ret;
+		foreach(k, v; this)
+			ret ~= k;
+		return ret;
+	}
+
+	/+
+		If this were to return a string* it'd be tricky cuz someone could try to rebind it, which is impossible.
+
+		This is a breaking change. You can get a similar result though with [get].
+	+/
+	bool opBinaryRight(string op : "in")(scope const char[] key) const {
+		return find(key) !is null;
+	}
+
+	private inout(InternalAttribute)* find(scope const char[] key) inout @trusted {
+		inout(InternalAttribute)* current = attributes;
+		while(current) {
+			// assert(current > cast(void*) 1);
+			if(current.key == key)
+				return current;
+			current = current.next;
+		}
+		return null;
+	}
+
+	void opAssign(string[string] aa) @trusted {
+		this.attributes = null;
+		foreach(k, v; aa)
+			this[k] = v;
+	}
+
+	void remove(scope const char[] key) @trusted {
+		if(attributes is null)
+			return;
+		auto current = attributes;
+		InternalAttribute* previous;
+		while(current) {
+			if(current.key == key)
+				break;
+			previous = current;
+			current = current.next;
+		}
+		if(current is null)
+			return;
+		if(previous is null)
+			attributes = current.next;
+		else
+			previous.next = current.next;
+		// assert(previous.next != cast(void*) 1);
+		// assert(attributes != cast(void*) 1);
+	}
+
+	void opIndexAssign(scope const char[] value, scope const char[] key) @trusted {
+		if(attributes is null) {
+			attributes = InternalAttribute.make(key, value);
+			return;
+		}
+		auto current = attributes;
+
+		if(current.key == key) {
+			if(current.value != value) {
+				auto replacement = InternalAttribute.make(key, value);
+				attributes = replacement;
+				replacement.next = current.next;
+		// assert(replacement.next != cast(void*) 1);
+		// assert(attributes != cast(void*) 1);
+			}
+			return;
+		}
+
+		while(current.next) {
+			if(current.next.key == key) {
+				if(current.next.value == value)
+					return; // replacing immutable value with self, no change
+				break;
+			}
+			current = current.next;
+		}
+		assert(current !is null);
+
+		auto replacement = InternalAttribute.make(key, value);
+		if(current.next !is null)
+			replacement.next = current.next.next;
+		current.next = replacement;
+		// assert(current.next != cast(void*) 1);
+		// assert(replacement.next != cast(void*) 1);
+	}
+
+	int opApply(int delegate(string key, string value) dg) const @trusted {
+		const(InternalAttribute)* current = attributes;
+		while(current !is null) {
+			if(auto res = dg(cast(string) current.key, cast(string) current.value))
+				return res;
+			current = current.next;
+		}
+		return 0;
+	}
+
+	string toString() {
+		string ret;
+		foreach(k, v; this) {
+			if(ret.length)
+				ret ~= " ";
+			ret ~= k;
+			ret ~= `="`;
+			ret ~= v;
+			ret ~= `"`;
+		}
+		return ret;
+	}
+
+	bool empty() const @trusted {
+		return attributes is null;
+	}
+}
+
+unittest {
+	AttributesHolder holder;
+	assert(holder.empty);
+	holder["one"] = "1";
+	assert(!holder.empty);
+	holder["two"] = "2";
+	holder["three"] = "3";
+
+	{
+		assert("one" in holder);
+		assert("two" in holder);
+		assert("three" in holder);
+		assert("four" !in holder);
+
+		int count;
+		foreach(k, v; holder) {
+			switch(count) {
+				case 0: assert(k == "one" && v == "1"); break;
+				case 1: assert(k == "two" && v == "2"); break;
+				case 2: assert(k == "three" && v == "3"); break;
+				default: assert(0);
+			}
+			count++;
+		}
+	}
+
+	holder["two"] = "dos";
+
+	{
+		assert("one" in holder);
+		assert("two" in holder);
+		assert("three" in holder);
+		assert("four" !in holder);
+
+		int count;
+		foreach(k, v; holder) {
+			switch(count) {
+				case 0: assert(k == "one" && v == "1"); break;
+				case 1: assert(k == "two" && v == "dos"); break;
+				case 2: assert(k == "three" && v == "3"); break;
+				default: assert(0);
+			}
+			count++;
+		}
+	}
+
+	holder["four"] = "4";
+
+	{
+		assert("one" in holder);
+		assert("two" in holder);
+		assert("three" in holder);
+		assert("four" in holder);
+
+		int count;
+		foreach(k, v; holder) {
+			switch(count) {
+				case 0: assert(k == "one" && v == "1"); break;
+				case 1: assert(k == "two" && v == "dos"); break;
+				case 2: assert(k == "three" && v == "3"); break;
+				case 3: assert(k == "four" && v == "4"); break;
+				default: assert(0);
+			}
+			count++;
+		}
+	}
+
+	holder = ["foo": "bar"];
+	assert("foo" in holder);
+	assert(holder["foo"] == "bar");
+	assert("four" !in holder);
+}
 
 /// for style, i want to be able to set it with a string like a plain attribute,
 /// but also be able to do properties Javascript style.
@@ -3879,10 +4978,20 @@ struct AttributeSet {
 struct ElementStyle {
 	this(Element parent) {
 		_element = parent;
+		_attribute = _element.getAttribute("style");
+		originalAttribute = _attribute;
+	}
+
+	~this() {
+		if(_attribute !is originalAttribute)
+			_element.setAttribute("style", _attribute);
 	}
 
 	Element _element;
+	string _attribute;
+	string originalAttribute;
 
+	/+
 	@property ref inout(string) _attribute() inout {
 		auto s = "style" in _element.attributes;
 		if(s is null) {
@@ -3894,6 +5003,7 @@ struct ElementStyle {
 		assert(s !is null);
 		return *s;
 	}
+	+/
 
 	alias _attribute this; // this is meant to allow element.style = element.style ~ " string "; to still work.
 
@@ -4014,12 +5124,6 @@ string camelCase(string a) {
 
 // I need to maintain compatibility with the way it is now too.
 
-import std.string;
-import std.exception;
-import std.uri;
-import std.array;
-import std.range;
-
 //import std.stdio;
 
 // tag soup works for most the crap I know now! If you have two bad closing tags back to back, it might erase one, but meh
@@ -4093,10 +5197,10 @@ class DocumentFragment : Element {
 		return this.innerHTML(where);
 	}
 
-	override string toPrettyString(bool insertComments, int indentationLevel, string indentWith) const {
+	override string toPrettyStringImpl(bool insertComments, int indentationLevel, string indentWith) const {
 		string s;
 		foreach(child; children)
-			s ~= child.toPrettyString(insertComments, indentationLevel, indentWith);
+			s ~= child.toPrettyStringImpl(insertComments, indentationLevel, indentWith);
 		return s;
 	}
 
@@ -4165,7 +5269,7 @@ string htmlEntitiesEncode(string data, Appender!string output = appender!string(
 		else if (!encodeNonAscii || (d < 128 && d > 0))
 			output.put(d);
 		else
-			output.put("&#" ~ std.conv.to!string(cast(int) d) ~ ";");
+			output.put("&#" ~ to!string(cast(int) d) ~ ";");
 	}
 
 	//assert(output !is null); // this fails on empty attributes.....
@@ -4205,6 +5309,10 @@ dchar parseEntity(in dchar[] entity) {
 			min = spot;
 			goto keep_looking;
 		}
+	} else if(max == 1) {
+		int spot = 0;
+		if(availableEntities[spot] == entityAsString)
+			return availableEntitiesValues[spot];
 	}
 
 	switch(entity[1..$-1]) {
@@ -4235,11 +5343,14 @@ dchar parseEntity(in dchar[] entity) {
 					while(decimal.length && (decimal[0] < '0' || decimal[0] >   '9'))
 						decimal = decimal[1 .. $];
 
+					while(decimal.length && (decimal[$-1] < '0' || decimal[$-1] >   '9'))
+						decimal = decimal[0 .. $ - 1];
+
 					if(decimal.length == 0)
 						return ' '; // this is really broken html
 					// done with dealing with broken stuff
 
-					auto p = std.conv.to!int(decimal);
+					auto p = to!int(decimal);
 					return cast(dchar) p;
 				}
 			} else
@@ -4266,12 +5377,13 @@ unittest {
 	// near the middle and edges of the bin search
 	assert(parseEntity("&ascr;"d) == '\U0001d4b6');
 	assert(parseEntity("&ast;"d) == '\u002a');
+	assert(parseEntity("&Acirc;"d) == '\u00c2');
 	assert(parseEntity("&AElig;"d) == '\u00c6');
 	assert(parseEntity("&zwnj;"d) == '\u200c');
-}
+	assert(parseEntity("&InvisibleComma;"d) == '\u2063');
 
-import std.utf;
-import std.stdio;
+	assert(parseEntity("&CounterClockwiseContourIntegral;"d) == '\u2233');
+}
 
 /// This takes a string of raw HTML and decodes the entities into a nice D utf-8 string.
 /// By default, it uses loose mode - it will try to return a useful string from garbage input too.
@@ -4287,7 +5399,9 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 	char[4] buffer;
 
 	bool tryingEntity = false;
-	dchar[16] entityBeingTried;
+	bool tryingNumericEntity = false;
+	bool tryingHexEntity = false;
+	dchar[32] entityBeingTried;
 	int entityBeingTriedLength = 0;
 	int entityAttemptIndex = 0;
 
@@ -4296,6 +5410,14 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 			entityAttemptIndex++;
 			entityBeingTried[entityBeingTriedLength++] = ch;
 
+			if(entityBeingTriedLength == 2 && ch == '#') {
+				tryingNumericEntity = true;
+				continue;
+			} else if(tryingNumericEntity && entityBeingTriedLength == 3 && ch == 'x') {
+				tryingHexEntity = true;
+				continue;
+			}
+
 			// I saw some crappy html in the wild that looked like &0&#1111; this tries to handle that.
 			if(ch == '&') {
 				if(strict)
@@ -4303,28 +5425,59 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 
 				// if not strict, let's try to parse both.
 
-				if(entityBeingTried[0 .. entityBeingTriedLength] == "&&")
+				if(entityBeingTried[0 .. entityBeingTriedLength] == "&&") {
 					a ~= "&"; // double amp means keep the first one, still try to parse the next one
-				else
-					a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
+				} else {
+					auto ch2 = parseEntity(entityBeingTried[0 .. entityBeingTriedLength]);
+					if(ch2 == '\ufffd') { // either someone put this in intentionally (lol) or we failed to get it
+						// but either way, just abort and keep the plain text
+						foreach(char c; entityBeingTried[0 .. entityBeingTriedLength - 1]) // cut off the & we're on now
+							a ~= c;
+					} else {
+						a ~= buffer[0.. utf_encode(buffer, ch2)];
+					}
+				}
 
 				// tryingEntity is still true
-				entityBeingTriedLength = 1;
-				entityAttemptIndex = 0; // restarting o this
+				goto new_entity;
 			} else
 			if(ch == ';') {
 				tryingEntity = false;
-				a ~= buffer[0.. std.utf.encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
+				a ~= buffer[0.. utf_encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
 			} else if(ch == ' ') {
 				// e.g. you &amp i
 				if(strict)
 					throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 				else {
 					tryingEntity = false;
-					a ~= to!(char[])(entityBeingTried[0 .. entityBeingTriedLength]);
+					a ~= to!(char[])(entityBeingTried[0 .. entityBeingTriedLength - 1]);
+					a ~= buffer[0 .. utf_encode(buffer, ch)];
 				}
 			} else {
-				if(entityAttemptIndex >= 9) {
+				if(tryingNumericEntity) {
+					if(ch < '0' || ch > '9') {
+						if(tryingHexEntity) {
+							if(ch < 'A')
+								goto trouble;
+							if(ch > 'Z' && ch < 'a')
+								goto trouble;
+							if(ch > 'z')
+								goto trouble;
+						} else {
+							trouble:
+							if(strict)
+								throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
+							tryingEntity = false;
+							a ~= buffer[0.. utf_encode(buffer, parseEntity(entityBeingTried[0 .. entityBeingTriedLength]))];
+							a ~= ch;
+							continue;
+						}
+					}
+				}
+
+
+				if(entityAttemptIndex >= entityBeingTried.length) {
+					done:
 					if(strict)
 						throw new Exception("unterminated entity at " ~ to!string(entityBeingTried[0 .. entityBeingTriedLength]));
 					else {
@@ -4335,12 +5488,15 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 			}
 		} else {
 			if(ch == '&') {
+				new_entity:
 				tryingEntity = true;
+				tryingNumericEntity = false;
+				tryingHexEntity = false;
 				entityBeingTriedLength = 0;
 				entityBeingTried[entityBeingTriedLength++] = ch;
 				entityAttemptIndex = 0;
 			} else {
-				a ~= buffer[0 .. std.utf.encode(buffer, ch)];
+				a ~= buffer[0 .. utf_encode(buffer, ch)];
 			}
 		}
 	}
@@ -4355,6 +5511,25 @@ string htmlEntitiesDecode(string data, bool strict = false) {
 	}
 
 	return cast(string) a; // assumeUnique is actually kinda slow, lol
+}
+
+unittest {
+	// error recovery
+	assert(htmlEntitiesDecode("&lt;&foo") == "<&foo"); // unterminated turned back to thing
+	assert(htmlEntitiesDecode("&lt&foo") == "<&foo"); // semi-terminated... parse and carry on (is this really sane?)
+	assert(htmlEntitiesDecode("loc&#61en_us&tracknum&#61;111") == "loc=en_us&tracknum=111"); // a bit of both, seen in a real life email
+	assert(htmlEntitiesDecode("&amp test") == "&amp test"); // unterminated, just abort
+
+	// in strict mode all of these should fail
+	try { assert(htmlEntitiesDecode("&lt;&foo", true) == "<&foo"); assert(0); } catch(Exception e) { }
+	try { assert(htmlEntitiesDecode("&lt&foo", true) == "<&foo"); assert(0); } catch(Exception e) { }
+	try { assert(htmlEntitiesDecode("loc&#61en_us&tracknum&#61;111", true) == "<&foo"); assert(0); } catch(Exception e) { }
+	try { assert(htmlEntitiesDecode("&amp test", true) == "& test"); assert(0); } catch(Exception e) { }
+
+	// correct cases that should pass the same in strict or loose mode
+	foreach(strict; [false, true]) {
+		assert(htmlEntitiesDecode("&amp;hello&raquo; win", strict) == "&hello\&raquo; win");
+	}
 }
 
 /// Group: implementations
@@ -4395,7 +5570,7 @@ class RawSource : SpecialElement {
 		return source;
 	}
 
-	override string toPrettyString(bool, int, string) const {
+	override string toPrettyStringImpl(bool, int, string) const {
 		return source;
 	}
 
@@ -4429,7 +5604,7 @@ abstract class ServerSideCode : SpecialElement {
 		return where.data[start .. $];
 	}
 
-	override string toPrettyString(bool, int, string) const {
+	override string toPrettyStringImpl(bool, int, string) const {
 		return "<" ~ source ~ ">";
 	}
 
@@ -4493,7 +5668,7 @@ class BangInstruction : SpecialElement {
 		return where.data[start .. $];
 	}
 
-	override string toPrettyString(bool, int, string) const {
+	override string toPrettyStringImpl(bool, int, string) const {
 		string s;
 		s ~= "<!";
 		s ~= source;
@@ -4533,7 +5708,7 @@ class QuestionInstruction : SpecialElement {
 		return where.data[start .. $];
 	}
 
-	override string toPrettyString(bool, int, string) const {
+	override string toPrettyStringImpl(bool, int, string) const {
 		string s;
 		s ~= "<";
 		s ~= source;
@@ -4574,7 +5749,7 @@ class HtmlComment : SpecialElement {
 		return where.data[start .. $];
 	}
 
-	override string toPrettyString(bool, int, string) const {
+	override string toPrettyStringImpl(bool, int, string) const {
 		string s;
 		s ~= "<!--";
 		s ~= source;
@@ -4643,7 +5818,7 @@ class TextNode : Element {
 		return s;
 	}
 
-	override string toPrettyString(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
+	override string toPrettyStringImpl(bool insertComments = false, int indentationLevel = 0, string indentWith = "\t") const {
 		string s;
 
 		string contents = this.contents;
@@ -4671,9 +5846,8 @@ class TextNode : Element {
 		}
 
 		auto e = htmlEntitiesEncode(contents);
-		import std.algorithm.iteration : splitter;
 		bool first = true;
-		foreach(line; splitter(e, "\n")) {
+		foreach(line; LineSplitter(e)) {
 			if(first) {
 				s ~= toPrettyStringIndent(insertComments, indentationLevel, indentWith);
 				first = false;
@@ -4706,23 +5880,29 @@ class TextNode : Element {
 	functions for the element in HTML.
 */
 
-///.
+/++
+	Represents a HTML link. This provides some convenience methods for manipulating query strings, but otherwise is sthe same Element interface.
+
+	Please note this object may not be used for all `<a>` tags.
++/
 /// Group: implementations
 class Link : Element {
 
-	///.
-	this(Document _parentDocument) {
-		super(_parentDocument);
-		this.tagName = "a";
-	}
-
-
-	///.
+	/++
+		Constructs `<a href="that href">that text</a>`.
+	+/
 	this(string href, string text) {
 		super("a");
 		setAttribute("href", href);
 		innerText = text;
 	}
+
+	/// ditto
+	this(Document _parentDocument) {
+		super(_parentDocument);
+		this.tagName = "a";
+	}
+
 /+
 	/// Returns everything in the href EXCEPT the query string
 	@property string targetSansQuery() {
@@ -4769,14 +5949,14 @@ class Link : Element {
 			if(index == -1)
 				hash[var] = "";
 			else {
-				hash[decodeComponent(var[0..index])] = decodeComponent(var[index + 1 .. $]);
+				hash[decodeUriComponent(var[0..index])] = decodeUriComponent(var[index + 1 .. $]);
 			}
 		}
 
 		return hash;
 	}
 
-	///.
+	/// Replaces all the stuff after a ? in the link at once with the given assoc array values.
 	/*private*/ void updateQueryString(string[string] vars) {
 		string href = getAttribute("href");
 
@@ -4799,9 +5979,9 @@ class Link : Element {
 			else
 				first = false;
 
-			query ~= encodeComponent(name);
+			query ~= encodeUriComponent(name);
 			if(value.length)
-				query ~= "=" ~ encodeComponent(value);
+				query ~= "=" ~ encodeUriComponent(value);
 		}
 
 		if(query != "?")
@@ -4819,6 +5999,10 @@ class Link : Element {
 		vars[name] = variable;
 
 		updateQueryString(vars);
+	}
+
+	override void setValue(string name, string[] variable) {
+		assert(0, "not implemented FIXME");
 	}
 
 	/// Removes the given variable from the query string
@@ -4845,7 +6029,11 @@ class Link : Element {
 	*/
 }
 
-///.
+/++
+	Represents a HTML form. This slightly specializes Element to add a few more convenience methods for adding and extracting form data.
+
+	Please note this object may not be used for all `<form>` tags.
++/
 /// Group: implementations
 class Form : Element {
 
@@ -4855,6 +6043,7 @@ class Form : Element {
 		tagName = "form";
 	}
 
+	/// Overrides of the base class implementations that more confirm to *my* conventions when writing form html.
 	override Element addField(string label, string name, string type = "text", FormFieldOptions fieldOptions = FormFieldOptions.none) {
 		auto t = this.querySelector("fieldset div");
 		if(t is null)
@@ -4863,6 +6052,7 @@ class Form : Element {
 			return t.addField(label, name, type, fieldOptions);
 	}
 
+	/// ditto
 	override Element addField(string label, string name, FormFieldOptions fieldOptions) {
 		auto type = "text";
 		auto t = this.querySelector("fieldset div");
@@ -4872,6 +6062,7 @@ class Form : Element {
 			return t.addField(label, name, type, fieldOptions);
 	}
 
+	/// ditto
 	override Element addField(string label, string name, string[string] options, FormFieldOptions fieldOptions = FormFieldOptions.none) {
 		auto t = this.querySelector("fieldset div");
 		if(t is null)
@@ -4880,8 +6071,13 @@ class Form : Element {
 			return t.addField(label, name, options, fieldOptions);
 	}
 
+	/// ditto
 	override void setValue(string field, string value) {
 		setValue(field, value, true);
+	}
+
+	override void setValue(string name, string[] variable) {
+		assert(0, "not implemented FIXME");
 	}
 
 	// FIXME: doesn't handle arrays; multiple fields can have the same name
@@ -5012,7 +6208,12 @@ class Form : Element {
 	}
 
 	// FIXME: doesn't handle multiple elements with the same name (except radio buttons)
-	///.
+	/++
+		Returns the form's contents in application/x-www-form-urlencoded format.
+
+		Bugs:
+			Doesn't handle repeated elements of the same name nor files.
+	+/
 	string getPostableData() {
 		bool[string] namesDone;
 
@@ -5028,7 +6229,7 @@ class Form : Element {
 			else
 				outputted = true;
 
-			ret ~= std.uri.encodeComponent(e.name) ~ "=" ~ std.uri.encodeComponent(getValue(e.name));
+			ret ~= encodeUriComponent(e.name) ~ "=" ~ encodeUriComponent(getValue(e.name));
 
 			namesDone[e.name] = true;
 		}
@@ -5094,19 +6295,23 @@ class Form : Element {
 +/
 }
 
-import std.conv;
-
-///.
+/++
+	Represents a HTML table. Has some convenience methods for working with tabular data.
++/
 /// Group: implementations
 class Table : Element {
 
-	///.
+	/// You can make this yourself but you'd generally get one of these object out of a html parse or [Element.make] call.
 	this(Document _parentDocument) {
 		super(_parentDocument);
 		tagName = "table";
 	}
 
-	/// Creates an element with the given type and content.
+	/++
+		Creates an element with the given type and content. The argument can be an Element, Html, or other data which is converted to text with `to!string`
+
+		The element is $(I not) appended to the table.
+	+/
 	Element th(T)(T t) {
 		Element e;
 		if(parentDocument !is null)
@@ -5115,6 +6320,8 @@ class Table : Element {
 			e = Element.make("th");
 		static if(is(T == Html))
 			e.innerHTML = t;
+		else static if(is(T : Element))
+			e.appendChild(t);
 		else
 			e.innerText = to!string(t);
 		return e;
@@ -5129,26 +6336,35 @@ class Table : Element {
 			e = Element.make("td");
 		static if(is(T == Html))
 			e.innerHTML = t;
+		else static if(is(T : Element))
+			e.appendChild(t);
 		else
 			e.innerText = to!string(t);
 		return e;
 	}
 
-	/// .
+	/++
+		Passes each argument to the [th] method for `appendHeaderRow` or [td] method for the others, appends them all to the `<tbody>` element for `appendRow`, `<thead>` element for `appendHeaderRow`, or a `<tfoot>` element for `appendFooterRow`, and ensures it is appended it to the table.
+	+/
 	Element appendHeaderRow(T...)(T t) {
 		return appendRowInternal("th", "thead", t);
 	}
 
-	/// .
+	/// ditto
 	Element appendFooterRow(T...)(T t) {
 		return appendRowInternal("td", "tfoot", t);
 	}
 
-	/// .
+	/// ditto
 	Element appendRow(T...)(T t) {
 		return appendRowInternal("td", "tbody", t);
 	}
 
+	/++
+		Takes each argument as a class name and calls [Element.addClass] for each element in the column associated with that index.
+
+		Please note this does not use the html `<col>` element.
+	+/
 	void addColumnClasses(string[] classes...) {
 		auto grid = getGrid();
 		foreach(row; grid)
@@ -5209,7 +6425,7 @@ class Table : Element {
 		return row;
 	}
 
-	///.
+	/// Returns the `<caption>` element of the table, creating one if it isn't there.
 	Element captionElement() {
 		Element cap;
 		foreach(c; children) {
@@ -5227,12 +6443,12 @@ class Table : Element {
 		return cap;
 	}
 
-	///.
+	/// Returns or sets the text inside the `<caption>` element, creating that element if it isnt' there.
 	@property string caption() {
 		return captionElement().innerText;
 	}
 
-	///.
+	/// ditto
 	@property void caption(string text) {
 		captionElement().innerText = text;
 	}
@@ -5357,6 +6573,7 @@ class TableCell : Element {
 		super(_parentDocument, _tagName);
 	}
 
+	/// Gets and sets the row/colspan attributes as integers
 	@property int rowspan() const {
 		int ret = 1;
 		auto it = getAttribute("rowspan");
@@ -5365,6 +6582,7 @@ class TableCell : Element {
 		return ret;
 	}
 
+	/// ditto
 	@property int colspan() const {
 		int ret = 1;
 		auto it = getAttribute("colspan");
@@ -5373,11 +6591,13 @@ class TableCell : Element {
 		return ret;
 	}
 
+	/// ditto
 	@property int rowspan(int i) {
 		setAttribute("rowspan", to!string(i));
 		return i;
 	}
 
+	/// ditto
 	@property int colspan(int i) {
 		setAttribute("colspan", to!string(i));
 		return i;
@@ -5386,7 +6606,7 @@ class TableCell : Element {
 }
 
 
-///.
+/// This is thrown on parse errors.
 /// Group: implementations
 class MarkupException : Exception {
 
@@ -5446,18 +6666,22 @@ struct DomMutationEvent {
 
 private immutable static string[] htmlSelfClosedElements = [
 	// html 4
-	"img", "hr", "input", "br", "col", "link", "meta",
+	"area","base","br","col","hr","img","input","link","meta","param",
+
 	// html 5
-	"source" ];
+	"embed","source","track","wbr"
+];
+
+private immutable static string[] htmlRawSourceElements = [
+	"script", "style"
+];
 
 private immutable static string[] htmlInlineElements = [
 	"span", "strong", "em", "b", "i", "a"
 ];
 
 
-static import std.conv;
-
-///.
+/// helper function for decoding html entities
 int intFromHex(string hex) {
 	int place = 1;
 	int value = 0;
@@ -5468,6 +6692,8 @@ int intFromHex(string hex) {
 			v = q - '0';
 		else if (q >= 'a' && q <= 'f')
 			v = q - 'a' + 10;
+		else if (q >= 'A' && q <= 'F')
+			v = q - 'A' + 10;
 		else throw new Exception("Illegal hex character: " ~ q);
 
 		value += v * place;
@@ -5520,7 +6746,7 @@ int intFromHex(string hex) {
 			return tid;
 		}
 
-	///.
+	/// Parts of the CSS selector implementation
 	// look, ma, no phobos!
 	// new lexer by ketmar
 	string[] lexSelector (string selstr) {
@@ -5657,7 +6883,7 @@ int intFromHex(string hex) {
 		assert(lexSelector(r"alice,is#best") == ["alice", ",", "is", "#", "best"]);
 	}
 
-	///.
+	/// ditto
 	struct SelectorPart {
 		string tagNameFilter; ///.
 		string[] attributesPresent; /// [attr]
@@ -5751,8 +6977,8 @@ int intFromHex(string hex) {
 		}
 
 		// USEFUL
-		///.
-		bool matchElement(Element e) {
+		/// Returns true if the given element matches this part
+		bool matchElement(Element e, Element scopeElementNow = null) {
 			// FIXME: this can be called a lot of times, and really add up in times according to the profiler.
 			// Each individual call is reasonably fast already, but it adds up.
 			if(e is null) return false;
@@ -5800,14 +7026,12 @@ int intFromHex(string hex) {
 					}
 				}
 			}
-			/+
 			if(scopeElement) {
-				if(e !is this_)
+				if(e !is scopeElementNow)
 					return false;
 			}
-			+/
 			if(emptyElement) {
-				if(e.children.length)
+				if(e.isEmpty())
 					return false;
 			}
 			if(whitespaceOnly) {
@@ -5910,7 +7134,7 @@ int intFromHex(string hex) {
 				if(e.parentNode is null)
 					return false;
 
-				auto among = retro(e.parentNode.childElements(e.tagName));
+				auto among = Retro!Element(e.parentNode.childElements(e.tagName));
 
 				if(!a.solvesFor(among, e))
 					return false;
@@ -5972,7 +7196,7 @@ int intFromHex(string hex) {
 		}
 
 		string toString() {
-			return format("%dn%s%d%s%s", multiplier, adder >= 0 ? "+" : "", adder, of.length ? " of " : "", of);
+			return (to!string(multiplier) ~ "n" ~ (adder >= 0 ? "+" : "") ~ to!string(adder) ~ (of.length ? " of " : "") ~ of);
 		}
 
 		bool solvesFor(R)(R elements, Element e) {
@@ -6029,8 +7253,8 @@ int intFromHex(string hex) {
 	}
 
 	// USEFUL
-	///.
-	Element[] getElementsBySelectorParts(Element start, SelectorPart[] parts) {
+	/// ditto
+	Element[] getElementsBySelectorParts(Element start, SelectorPart[] parts, Element scopeElementNow = null) {
 		Element[] ret;
 		if(!parts.length) {
 			return [start]; // the null selector only matches the start point; it
@@ -6046,22 +7270,22 @@ int intFromHex(string hex) {
 				foreach(e; start.tree) {
 					if(part.separation == 0 && start is e)
 						continue; // space doesn't match itself!
-					if(part.matchElement(e)) {
-						ret ~= getElementsBySelectorParts(e, parts[1..$]);
+					if(part.matchElement(e, scopeElementNow)) {
+						ret ~= getElementsBySelectorParts(e, parts[1..$], scopeElementNow);
 					}
 				}
 			break;
 			case 1: // children
 				foreach(e; start.childNodes) {
-					if(part.matchElement(e)) {
-						ret ~= getElementsBySelectorParts(e, parts[1..$]);
+					if(part.matchElement(e, scopeElementNow)) {
+						ret ~= getElementsBySelectorParts(e, parts[1..$], scopeElementNow);
 					}
 				}
 			break;
 			case 2: // next-sibling
 				auto e = start.nextSibling("*");
-				if(part.matchElement(e))
-					ret ~= getElementsBySelectorParts(e, parts[1..$]);
+				if(part.matchElement(e, scopeElementNow))
+					ret ~= getElementsBySelectorParts(e, parts[1..$], scopeElementNow);
 			break;
 			case 3: // younger sibling
 				auto tmp = start.parentNode;
@@ -6076,15 +7300,15 @@ int intFromHex(string hex) {
 					}
 					assert(pos != -1);
 					foreach(e; children[pos+1..$]) {
-						if(part.matchElement(e))
-							ret ~= getElementsBySelectorParts(e, parts[1..$]);
+						if(part.matchElement(e, scopeElementNow))
+							ret ~= getElementsBySelectorParts(e, parts[1..$], scopeElementNow);
 					}
 				}
 			break;
 			case 4: // immediate parent node, an extension of mine to walk back up the tree
 				auto e = start.parentNode;
-				if(part.matchElement(e)) {
-					ret ~= getElementsBySelectorParts(e, parts[1..$]);
+				if(part.matchElement(e, scopeElementNow)) {
+					ret ~= getElementsBySelectorParts(e, parts[1..$], scopeElementNow);
 				}
 				/*
 					Example of usefulness:
@@ -6155,10 +7379,10 @@ int intFromHex(string hex) {
 		/++
 			Reciprocal of [Element.querySelectorAll]
 		+/
-		Element[] getMatchingElements(Element start) {
+		Element[] getMatchingElements(Element start, Element relativeTo = null) {
 			Element[] ret;
 			foreach(component; components)
-				ret ~= getElementsBySelectorParts(start, component.parts);
+				ret ~= getElementsBySelectorParts(start, component.parts, relativeTo);
 			return removeDuplicates(ret);
 		}
 
@@ -6167,8 +7391,7 @@ int intFromHex(string hex) {
 			about mutating the dom as you iterate through this.
 		+/
 		auto getMatchingElementsLazy(Element start, Element relativeTo = null) {
-			import std.algorithm.iteration;
-			return start.tree.filter!(a => this.matchesElement(a, relativeTo));
+			return ElementStreamFilter(start.tree, (Element a) => this.matchesElement(a, relativeTo));
 		}
 
 
@@ -6210,8 +7433,8 @@ int intFromHex(string hex) {
 
 		// USEFUL
 		///.
-		Element[] getElements(Element start) {
-			return removeDuplicates(getElementsBySelectorParts(start, parts));
+		Element[] getElements(Element start, Element relativeTo = null) {
+			return removeDuplicates(getElementsBySelectorParts(start, parts, relativeTo));
 		}
 
 		// USEFUL (but not implemented)
@@ -6224,6 +7447,8 @@ int intFromHex(string hex) {
 			auto lparts = parts;
 
 			if(parts.length && parts[0].separation > 0) {
+				throw new Exception("invalid selector");
+			/+
 				// if it starts with a non-trivial separator, inject
 				// a "*" matcher to act as a root. for cases like document.querySelector("> body")
 				// which implies html
@@ -6232,8 +7457,10 @@ int intFromHex(string hex) {
 				// bail out early as it obviously cannot match.
 				bool hasNonTextChildren = false;
 				foreach(c; e.children)
-					if(c.nodeType != 3)
+					if(c.nodeType != 3) {
 						hasNonTextChildren = true;
+						break;
+					}
 				if(!hasNonTextChildren)
 					return false;
 
@@ -6242,22 +7469,23 @@ int intFromHex(string hex) {
 				dummy.tagNameFilter = "*";
 				dummy.separation = 0;
 				lparts = dummy ~ lparts;
+			+/
 			}
 
-			foreach(part; retro(lparts)) {
+			foreach_reverse(part; lparts) {
 
 				 // writeln("matching ", where, " with ", part, " via ", lastSeparation);
 				 // writeln(parts);
 
 				if(lastSeparation == -1) {
-					if(!part.matchElement(where))
+					if(!part.matchElement(where, relativeTo))
 						return false;
 				} else if(lastSeparation == 0) { // generic parent
 					// need to go up the whole chain
 					where = where.parentNode;
 
 					while(where !is null) {
-						if(part.matchElement(where))
+						if(part.matchElement(where, relativeTo))
 							break;
 
 						if(where is relativeTo)
@@ -6271,18 +7499,18 @@ int intFromHex(string hex) {
 				} else if(lastSeparation == 1) { // the > operator
 					where = where.parentNode;
 
-					if(!part.matchElement(where))
+					if(!part.matchElement(where, relativeTo))
 						return false;
 				} else if(lastSeparation == 2) { // the + operator
 				//writeln("WHERE", where, " ", part);
 					where = where.previousSibling("*");
 
-					if(!part.matchElement(where))
+					if(!part.matchElement(where, relativeTo))
 						return false;
 				} else if(lastSeparation == 3) { // the ~ operator
 					where = where.previousSibling("*");
 					while(where !is null) {
-						if(part.matchElement(where))
+						if(part.matchElement(where, relativeTo))
 							break;
 
 						if(where is relativeTo)
@@ -6299,8 +7527,18 @@ int intFromHex(string hex) {
 
 				lastSeparation = part.separation;
 
+				/*
+					/+
+					I commented this to magically make unittest pass and I think the reason it works
+					when commented is that I inject a :scope iff there's a selector at top level now
+					and if not, it follows the (frankly stupid) w3c standard behavior at arbitrary id
+					asduiwh . but me injecting the :scope also acts as a terminating condition.
+
+					tbh this prolly needs like a trillion more tests.
+					+/
 				if(where is relativeTo)
 					return false; // at end of line, if we aren't done by now, the match fails
+				*/
 			}
 			return true; // if we got here, it is a success
 		}
@@ -6459,7 +7697,8 @@ int intFromHex(string hex) {
 							break;
 
 							default:
-								assert(0, token);
+								import arsd.core;
+								throw ArsdException!"CSS Selector Problem"(token, tokens, cast(int) state);
 						}
 					}
 				break;
@@ -6509,6 +7748,9 @@ int intFromHex(string hex) {
 						case "root":
 							current.rootElement = true;
 						break;
+						case "lang":
+							state = State.SkippingFunctionalSelector;
+						continue;
 						case "nth-child":
 							current.nthChild ~= ParsedNth(readFunctionalSelector());
 							state = State.SkippingFunctionalSelector;
@@ -6519,6 +7761,11 @@ int intFromHex(string hex) {
 						continue;
 						case "nth-last-of-type":
 							current.nthLastOfType ~= ParsedNth(readFunctionalSelector());
+							state = State.SkippingFunctionalSelector;
+						continue;
+						case "nth-last-child":
+							// FIXME
+							//current.nthLastOfType ~= ParsedNth(readFunctionalSelector());
 							state = State.SkippingFunctionalSelector;
 						continue;
 						case "is":
@@ -6670,6 +7917,24 @@ Element[] removeDuplicates(Element[] input) {
 
 // done with CSS selector handling
 
+/++
+	This delegate is called if you call [Element.computedStyle] to attach an object to the element
+	that holds stylesheet information. You can rebind it to something else to return a subclass
+	if you want to hold more per-element extension data than the normal computed style object holds
+	(e.g. layout info as well).
+
+	The default is `return new CssStyle(null, element.style);`
+
+	History:
+		Added September 13, 2024 (dub v11.6)
++/
+CssStyle function(Element e) computedStyleFactory = &defaultComputedStyleFactory;
+
+/// ditto
+CssStyle defaultComputedStyleFactory(Element e) {
+	return new CssStyle(null, e.style); // gives at least something to work with
+}
+
 
 // FIXME: use the better parser from html.d
 /// This is probably not useful to you unless you're writing a browser or something like that.
@@ -6704,6 +7969,7 @@ class CssStyle {
 			p.specificity = originatingSpecificity;
 
 			properties ~= p;
+
 		}
 
 		foreach(property; properties)
@@ -6714,8 +7980,19 @@ class CssStyle {
 	Specificity getSpecificityOfRule(string rule) {
 		Specificity s;
 		if(rule.length == 0) { // inline
-		//	s.important = 2;
+			s.important = 2;
 		} else {
+			// SO. WRONG.
+			foreach(ch; rule) {
+				if(ch == '.')
+					s.classes++;
+				if(ch == '#')
+					s.ids++;
+				if(ch == ' ')
+					s.tags++;
+				if(ch == ',')
+					break;
+			}
 			// FIXME
 		}
 
@@ -6756,7 +8033,7 @@ class CssStyle {
 		if(value is null)
 			return getValue(name);
 		else
-			return setValue(name, value, 0x02000000 /* inline specificity */);
+			return setValue(name, value, Specificity(0x02000000) /* inline specificity */);
 	}
 
 	/// takes dash style name
@@ -6780,6 +8057,7 @@ class CssStyle {
 				if(newSpecificity.score >= property.specificity.score) {
 					property.givenExplicitly = explicit;
 					expandShortForm(property, newSpecificity);
+					property.specificity = newSpecificity;
 					return (property.value = value);
 				} else {
 					if(name == "display")
@@ -6831,7 +8109,7 @@ class CssStyle {
 				setValue(name ~"-left", parts[3], specificity, false);
 			break;
 			default:
-				assert(0, value);
+				// assert(0, value);
 		}
 	}
 
@@ -6985,8 +8263,9 @@ class StyleSheet {
 				// since givenExplicitly is likely destroyed here
 				auto current = element.computedStyle;
 
-				foreach(item; rule.properties)
+				foreach(item; rule.properties) {
 					current.setValue(item.name, item.value, item.specificity);
+				}
 			}
 		}
 	}
@@ -7120,11 +8399,13 @@ final class ElementStream {
 // unbelievable.
 // Don't use any of these in your own code. Instead, try to use phobos or roll your own, as I might kill these at any time.
 sizediff_t indexOfBytes(immutable(ubyte)[] haystack, immutable(ubyte)[] needle) {
-	static import std.algorithm;
-	auto found = std.algorithm.find(haystack, needle);
-	if(found.length == 0)
-		return -1;
-	return haystack.length - found.length;
+	foreach(idx, b; haystack) {
+		if(idx + needle.length > haystack.length)
+			return -1;
+		if(haystack[idx .. idx + needle.length] == needle[])
+			return idx;
+	}
+	return -1;
 }
 
 private T[] insertAfter(T)(T[] arr, int position, T[] what) {
@@ -7158,6 +8439,13 @@ private string[string] aadup(in string[string] arr) {
 	return ret;
 }
 
+private AttributesHolder aadup(const AttributesHolder arr) {
+	AttributesHolder ret;
+	foreach(k, v; arr)
+		ret[k] = v;
+	return ret;
+}
+
 
 
 
@@ -7175,274 +8463,142 @@ private string[string] aadup(in string[string] arr) {
 // These MUST be sorted. See generatedomcases.d for a program to generate it if you need to add more than a few (otherwise maybe you can work it in yourself but yikes)
 
 immutable string[] availableEntities =
-["AElig", "AElig", "AMP", "AMP", "Aacute", "Aacute", "Abreve", "Abreve", "Acirc", "Acirc", "Acy", "Acy", "Afr", "Afr", "Agrave", "Agrave", "Alpha", "Alpha", "Amacr", "Amacr", "And", "And", "Aogon", "Aogon", "Aopf", "Aopf", "ApplyFunction", "ApplyFunction", "Aring", "Aring", "Ascr", "Ascr", "Assign", "Assign", "Atilde", 
-"Atilde", "Auml", "Auml", "Backslash", "Backslash", "Barv", "Barv", "Barwed", "Barwed", "Bcy", "Bcy", "Because", "Because", "Bernoullis", "Bernoullis", "Beta", "Beta", "Bfr", "Bfr", "Bopf", "Bopf", "Breve", "Breve", "Bscr", "Bscr", "Bumpeq", "Bumpeq", "CHcy", "CHcy", "COPY", "COPY", "Cacute", "Cacute", "Cap", "Cap", "CapitalDifferentialD", 
-"CapitalDifferentialD", "Cayleys", "Cayleys", "Ccaron", "Ccaron", "Ccedil", "Ccedil", "Ccirc", "Ccirc", "Cconint", "Cconint", "Cdot", "Cdot", "Cedilla", "Cedilla", "CenterDot", "CenterDot", "Cfr", "Cfr", "Chi", "Chi", "CircleDot", "CircleDot", "CircleMinus", "CircleMinus", "CirclePlus", "CirclePlus", "CircleTimes", "CircleTimes", 
-"ClockwiseContourIntegral", "ClockwiseContourIntegral", "CloseCurlyDoubleQuote", "CloseCurlyDoubleQuote", "CloseCurlyQuote", "CloseCurlyQuote", "Colon", "Colon", "Colone", "Colone", "Congruent", "Congruent", "Conint", "Conint", "ContourIntegral", "ContourIntegral", "Copf", "Copf", "Coproduct", "Coproduct", "CounterClockwiseContourIntegral", 
-"CounterClockwiseContourIntegral", "Cross", "Cross", "Cscr", "Cscr", "Cup", "Cup", "CupCap", "CupCap", "DD", "DD", "DDotrahd", "DDotrahd", "DJcy", "DJcy", "DScy", "DScy", "DZcy", "DZcy", "Dagger", "Dagger", "Darr", "Darr", "Dashv", "Dashv", "Dcaron", "Dcaron", "Dcy", "Dcy", "Del", "Del", "Delta", "Delta", "Dfr", "Dfr", 
-"DiacriticalAcute", "DiacriticalAcute", "DiacriticalDot", "DiacriticalDot", "DiacriticalDoubleAcute", "DiacriticalDoubleAcute", "DiacriticalGrave", "DiacriticalGrave", "DiacriticalTilde", "DiacriticalTilde", "Diamond", "Diamond", "DifferentialD", "DifferentialD", "Dopf", "Dopf", "Dot", "Dot", "DotDot", "DotDot", "DotEqual", 
-"DotEqual", "DoubleContourIntegral", "DoubleContourIntegral", "DoubleDot", "DoubleDot", "DoubleDownArrow", "DoubleDownArrow", "DoubleLeftArrow", "DoubleLeftArrow", "DoubleLeftRightArrow", "DoubleLeftRightArrow", "DoubleLeftTee", "DoubleLeftTee", "DoubleLongLeftArrow", "DoubleLongLeftArrow", "DoubleLongLeftRightArrow", 
-"DoubleLongLeftRightArrow", "DoubleLongRightArrow", "DoubleLongRightArrow", "DoubleRightArrow", "DoubleRightArrow", "DoubleRightTee", "DoubleRightTee", "DoubleUpArrow", "DoubleUpArrow", "DoubleUpDownArrow", "DoubleUpDownArrow", "DoubleVerticalBar", "DoubleVerticalBar", "DownArrow", "DownArrow", "DownArrowBar", "DownArrowBar", 
-"DownArrowUpArrow", "DownArrowUpArrow", "DownBreve", "DownBreve", "DownLeftRightVector", "DownLeftRightVector", "DownLeftTeeVector", "DownLeftTeeVector", "DownLeftVector", "DownLeftVector", "DownLeftVectorBar", "DownLeftVectorBar", "DownRightTeeVector", "DownRightTeeVector", "DownRightVector", "DownRightVector", "DownRightVectorBar", 
-"DownRightVectorBar", "DownTee", "DownTee", "DownTeeArrow", "DownTeeArrow", "Downarrow", "Downarrow", "Dscr", "Dscr", "Dstrok", "Dstrok", "ENG", "ENG", "ETH", "ETH", "Eacute", "Eacute", "Ecaron", "Ecaron", "Ecirc", "Ecirc", "Ecy", "Ecy", "Edot", "Edot", "Efr", "Efr", "Egrave", "Egrave", "Element", "Element", "Emacr", "Emacr", 
-"EmptySmallSquare", "EmptySmallSquare", "EmptyVerySmallSquare", "EmptyVerySmallSquare", "Eogon", "Eogon", "Eopf", "Eopf", "Epsilon", "Epsilon", "Equal", "Equal", "EqualTilde", "EqualTilde", "Equilibrium", "Equilibrium", "Escr", "Escr", "Esim", "Esim", "Eta", "Eta", "Euml", "Euml", "Exists", "Exists", "ExponentialE", "ExponentialE", 
-"Fcy", "Fcy", "Ffr", "Ffr", "FilledSmallSquare", "FilledSmallSquare", "FilledVerySmallSquare", "FilledVerySmallSquare", "Fopf", "Fopf", "ForAll", "ForAll", "Fouriertrf", "Fouriertrf", "Fscr", "Fscr", "GJcy", "GJcy", "GT", "GT", "Gamma", "Gamma", "Gammad", "Gammad", "Gbreve", "Gbreve", "Gcedil", "Gcedil", "Gcirc", "Gcirc", 
-"Gcy", "Gcy", "Gdot", "Gdot", "Gfr", "Gfr", "Gg", "Gg", "Gopf", "Gopf", "GreaterEqual", "GreaterEqual", "GreaterEqualLess", "GreaterEqualLess", "GreaterFullEqual", "GreaterFullEqual", "GreaterGreater", "GreaterGreater", "GreaterLess", "GreaterLess", "GreaterSlantEqual", "GreaterSlantEqual", "GreaterTilde", "GreaterTilde", 
-"Gscr", "Gscr", "Gt", "Gt", "HARDcy", "HARDcy", "Hacek", "Hacek", "Hat", "Hat", "Hcirc", "Hcirc", "Hfr", "Hfr", "HilbertSpace", "HilbertSpace", "Hopf", "Hopf", "HorizontalLine", "HorizontalLine", "Hscr", "Hscr", "Hstrok", "Hstrok", "HumpDownHump", "HumpDownHump", "HumpEqual", "HumpEqual", "IEcy", "IEcy", "IJlig", "IJlig", 
-"IOcy", "IOcy", "Iacute", "Iacute", "Icirc", "Icirc", "Icy", "Icy", "Idot", "Idot", "Ifr", "Ifr", "Igrave", "Igrave", "Im", "Im", "Imacr", "Imacr", "ImaginaryI", "ImaginaryI", "Implies", "Implies", "Int", "Int", "Integral", "Integral", "Intersection", "Intersection", "InvisibleComma", "InvisibleComma", "InvisibleTimes", 
-"InvisibleTimes", "Iogon", "Iogon", "Iopf", "Iopf", "Iota", "Iota", "Iscr", "Iscr", "Itilde", "Itilde", "Iukcy", "Iukcy", "Iuml", "Iuml", "Jcirc", "Jcirc", "Jcy", "Jcy", "Jfr", "Jfr", "Jopf", "Jopf", "Jscr", "Jscr", "Jsercy", "Jsercy", "Jukcy", "Jukcy", "KHcy", "KHcy", "KJcy", "KJcy", "Kappa", "Kappa", "Kcedil", "Kcedil", 
-"Kcy", "Kcy", "Kfr", "Kfr", "Kopf", "Kopf", "Kscr", "Kscr", "LJcy", "LJcy", "LT", "LT", "Lacute", "Lacute", "Lambda", "Lambda", "Lang", "Lang", "Laplacetrf", "Laplacetrf", "Larr", "Larr", "Lcaron", "Lcaron", "Lcedil", "Lcedil", "Lcy", "Lcy", "LeftAngleBracket", "LeftAngleBracket", "LeftArrow", "LeftArrow", "LeftArrowBar", 
-"LeftArrowBar", "LeftArrowRightArrow", "LeftArrowRightArrow", "LeftCeiling", "LeftCeiling", "LeftDoubleBracket", "LeftDoubleBracket", "LeftDownTeeVector", "LeftDownTeeVector", "LeftDownVector", "LeftDownVector", "LeftDownVectorBar", "LeftDownVectorBar", "LeftFloor", "LeftFloor", "LeftRightArrow", "LeftRightArrow", "LeftRightVector", 
-"LeftRightVector", "LeftTee", "LeftTee", "LeftTeeArrow", "LeftTeeArrow", "LeftTeeVector", "LeftTeeVector", "LeftTriangle", "LeftTriangle", "LeftTriangleBar", "LeftTriangleBar", "LeftTriangleEqual", "LeftTriangleEqual", "LeftUpDownVector", "LeftUpDownVector", "LeftUpTeeVector", "LeftUpTeeVector", "LeftUpVector", "LeftUpVector", 
-"LeftUpVectorBar", "LeftUpVectorBar", "LeftVector", "LeftVector", "LeftVectorBar", "LeftVectorBar", "Leftarrow", "Leftarrow", "Leftrightarrow", "Leftrightarrow", "LessEqualGreater", "LessEqualGreater", "LessFullEqual", "LessFullEqual", "LessGreater", "LessGreater", "LessLess", "LessLess", "LessSlantEqual", "LessSlantEqual", 
-"LessTilde", "LessTilde", "Lfr", "Lfr", "Ll", "Ll", "Lleftarrow", "Lleftarrow", "Lmidot", "Lmidot", "LongLeftArrow", "LongLeftArrow", "LongLeftRightArrow", "LongLeftRightArrow", "LongRightArrow", "LongRightArrow", "Longleftarrow", "Longleftarrow", "Longleftrightarrow", "Longleftrightarrow", "Longrightarrow", "Longrightarrow", 
-"Lopf", "Lopf", "LowerLeftArrow", "LowerLeftArrow", "LowerRightArrow", "LowerRightArrow", "Lscr", "Lscr", "Lsh", "Lsh", "Lstrok", "Lstrok", "Lt", "Lt", "Map", "Map", "Mcy", "Mcy", "MediumSpace", "MediumSpace", "Mellintrf", "Mellintrf", "Mfr", "Mfr", "MinusPlus", "MinusPlus", "Mopf", "Mopf", "Mscr", "Mscr", "Mu", "Mu", 
-"NJcy", "NJcy", "Nacute", "Nacute", "Ncaron", "Ncaron", "Ncedil", "Ncedil", "Ncy", "Ncy", "NegativeMediumSpace", "NegativeMediumSpace", "NegativeThickSpace", "NegativeThickSpace", "NegativeThinSpace", "NegativeThinSpace", "NegativeVeryThinSpace", "NegativeVeryThinSpace", "NestedGreaterGreater", "NestedGreaterGreater", 
-"NestedLessLess", "NestedLessLess", "NewLine", "NewLine", "Nfr", "Nfr", "NoBreak", "NoBreak", "NonBreakingSpace", "NonBreakingSpace", "Nopf", "Nopf", "Not", "Not", "NotCongruent", "NotCongruent", "NotCupCap", "NotCupCap", "NotDoubleVerticalBar", "NotDoubleVerticalBar", "NotElement", "NotElement", "NotEqual", "NotEqual", 
-"NotExists", "NotExists", "NotGreater", "NotGreater", "NotGreaterEqual", "NotGreaterEqual", "NotGreaterLess", "NotGreaterLess", "NotGreaterTilde", "NotGreaterTilde", "NotLeftTriangle", "NotLeftTriangle", "NotLeftTriangleEqual", "NotLeftTriangleEqual", "NotLess", "NotLess", "NotLessEqual", "NotLessEqual", "NotLessGreater", 
-"NotLessGreater", "NotLessTilde", "NotLessTilde", "NotPrecedes", "NotPrecedes", "NotPrecedesSlantEqual", "NotPrecedesSlantEqual", "NotReverseElement", "NotReverseElement", "NotRightTriangle", "NotRightTriangle", "NotRightTriangleEqual", "NotRightTriangleEqual", "NotSquareSubsetEqual", "NotSquareSubsetEqual", "NotSquareSupersetEqual", 
-"NotSquareSupersetEqual", "NotSubsetEqual", "NotSubsetEqual", "NotSucceeds", "NotSucceeds", "NotSucceedsSlantEqual", "NotSucceedsSlantEqual", "NotSupersetEqual", "NotSupersetEqual", "NotTilde", "NotTilde", "NotTildeEqual", "NotTildeEqual", "NotTildeFullEqual", "NotTildeFullEqual", "NotTildeTilde", "NotTildeTilde", "NotVerticalBar", 
-"NotVerticalBar", "Nscr", "Nscr", "Ntilde", "Ntilde", "Nu", "Nu", "OElig", "OElig", "Oacute", "Oacute", "Ocirc", "Ocirc", "Ocy", "Ocy", "Odblac", "Odblac", "Ofr", "Ofr", "Ograve", "Ograve", "Omacr", "Omacr", "Omega", "Omega", "Omicron", "Omicron", "Oopf", "Oopf", "OpenCurlyDoubleQuote", "OpenCurlyDoubleQuote", "OpenCurlyQuote", 
-"OpenCurlyQuote", "Or", "Or", "Oscr", "Oscr", "Oslash", "Oslash", "Otilde", "Otilde", "Otimes", "Otimes", "Ouml", "Ouml", "OverBar", "OverBar", "OverBrace", "OverBrace", "OverBracket", "OverBracket", "OverParenthesis", "OverParenthesis", "PartialD", "PartialD", "Pcy", "Pcy", "Pfr", "Pfr", "Phi", "Phi", "Pi", "Pi", "PlusMinus", 
-"PlusMinus", "Poincareplane", "Poincareplane", "Popf", "Popf", "Pr", "Pr", "Precedes", "Precedes", "PrecedesEqual", "PrecedesEqual", "PrecedesSlantEqual", "PrecedesSlantEqual", "PrecedesTilde", "PrecedesTilde", "Prime", "Prime", "Product", "Product", "Proportion", "Proportion", "Proportional", "Proportional", "Pscr", "Pscr", 
-"Psi", "Psi", "QUOT", "QUOT", "Qfr", "Qfr", "Qopf", "Qopf", "Qscr", "Qscr", "RBarr", "RBarr", "REG", "REG", "Racute", "Racute", "Rang", "Rang", "Rarr", "Rarr", "Rarrtl", "Rarrtl", "Rcaron", "Rcaron", "Rcedil", "Rcedil", "Rcy", "Rcy", "Re", "Re", "ReverseElement", "ReverseElement", "ReverseEquilibrium", "ReverseEquilibrium", 
-"ReverseUpEquilibrium", "ReverseUpEquilibrium", "Rfr", "Rfr", "Rho", "Rho", "RightAngleBracket", "RightAngleBracket", "RightArrow", "RightArrow", "RightArrowBar", "RightArrowBar", "RightArrowLeftArrow", "RightArrowLeftArrow", "RightCeiling", "RightCeiling", "RightDoubleBracket", "RightDoubleBracket", "RightDownTeeVector", 
-"RightDownTeeVector", "RightDownVector", "RightDownVector", "RightDownVectorBar", "RightDownVectorBar", "RightFloor", "RightFloor", "RightTee", "RightTee", "RightTeeArrow", "RightTeeArrow", "RightTeeVector", "RightTeeVector", "RightTriangle", "RightTriangle", "RightTriangleBar", "RightTriangleBar", "RightTriangleEqual", 
-"RightTriangleEqual", "RightUpDownVector", "RightUpDownVector", "RightUpTeeVector", "RightUpTeeVector", "RightUpVector", "RightUpVector", "RightUpVectorBar", "RightUpVectorBar", "RightVector", "RightVector", "RightVectorBar", "RightVectorBar", "Rightarrow", "Rightarrow", "Ropf", "Ropf", "RoundImplies", "RoundImplies", 
-"Rrightarrow", "Rrightarrow", "Rscr", "Rscr", "Rsh", "Rsh", "RuleDelayed", "RuleDelayed", "SHCHcy", "SHCHcy", "SHcy", "SHcy", "SOFTcy", "SOFTcy", "Sacute", "Sacute", "Sc", "Sc", "Scaron", "Scaron", "Scedil", "Scedil", "Scirc", "Scirc", "Scy", "Scy", "Sfr", "Sfr", "ShortDownArrow", "ShortDownArrow", "ShortLeftArrow", "ShortLeftArrow", 
-"ShortRightArrow", "ShortRightArrow", "ShortUpArrow", "ShortUpArrow", "Sigma", "Sigma", "SmallCircle", "SmallCircle", "Sopf", "Sopf", "Sqrt", "Sqrt", "Square", "Square", "SquareIntersection", "SquareIntersection", "SquareSubset", "SquareSubset", "SquareSubsetEqual", "SquareSubsetEqual", "SquareSuperset", "SquareSuperset", 
-"SquareSupersetEqual", "SquareSupersetEqual", "SquareUnion", "SquareUnion", "Sscr", "Sscr", "Star", "Star", "Sub", "Sub", "Subset", "Subset", "SubsetEqual", "SubsetEqual", "Succeeds", "Succeeds", "SucceedsEqual", "SucceedsEqual", "SucceedsSlantEqual", "SucceedsSlantEqual", "SucceedsTilde", "SucceedsTilde", "SuchThat", 
-"SuchThat", "Sum", "Sum", "Sup", "Sup", "Superset", "Superset", "SupersetEqual", "SupersetEqual", "Supset", "Supset", "THORN", "THORN", "TRADE", "TRADE", "TSHcy", "TSHcy", "TScy", "TScy", "Tab", "Tab", "Tau", "Tau", "Tcaron", "Tcaron", "Tcedil", "Tcedil", "Tcy", "Tcy", "Tfr", "Tfr", "Therefore", "Therefore", "Theta", "Theta", 
-"ThinSpace", "ThinSpace", "Tilde", "Tilde", "TildeEqual", "TildeEqual", "TildeFullEqual", "TildeFullEqual", "TildeTilde", "TildeTilde", "Topf", "Topf", "TripleDot", "TripleDot", "Tscr", "Tscr", "Tstrok", "Tstrok", "Uacute", "Uacute", "Uarr", "Uarr", "Uarrocir", "Uarrocir", "Ubrcy", "Ubrcy", "Ubreve", "Ubreve", "Ucirc", 
-"Ucirc", "Ucy", "Ucy", "Udblac", "Udblac", "Ufr", "Ufr", "Ugrave", "Ugrave", "Umacr", "Umacr", "UnderBar", "UnderBar", "UnderBrace", "UnderBrace", "UnderBracket", "UnderBracket", "UnderParenthesis", "UnderParenthesis", "Union", "Union", "UnionPlus", "UnionPlus", "Uogon", "Uogon", "Uopf", "Uopf", "UpArrow", "UpArrow", "UpArrowBar", 
-"UpArrowBar", "UpArrowDownArrow", "UpArrowDownArrow", "UpDownArrow", "UpDownArrow", "UpEquilibrium", "UpEquilibrium", "UpTee", "UpTee", "UpTeeArrow", "UpTeeArrow", "Uparrow", "Uparrow", "Updownarrow", "Updownarrow", "UpperLeftArrow", "UpperLeftArrow", "UpperRightArrow", "UpperRightArrow", "Upsi", "Upsi", "Upsilon", "Upsilon", 
-"Uring", "Uring", "Uscr", "Uscr", "Utilde", "Utilde", "Uuml", "Uuml", "VDash", "VDash", "Vbar", "Vbar", "Vcy", "Vcy", "Vdash", "Vdash", "Vdashl", "Vdashl", "Vee", "Vee", "Verbar", "Verbar", "Vert", "Vert", "VerticalBar", "VerticalBar", "VerticalLine", "VerticalLine", "VerticalSeparator", "VerticalSeparator", "VerticalTilde", 
-"VerticalTilde", "VeryThinSpace", "VeryThinSpace", "Vfr", "Vfr", "Vopf", "Vopf", "Vscr", "Vscr", "Vvdash", "Vvdash", "Wcirc", "Wcirc", "Wedge", "Wedge", "Wfr", "Wfr", "Wopf", "Wopf", "Wscr", "Wscr", "Xfr", "Xfr", "Xi", "Xi", "Xopf", "Xopf", "Xscr", "Xscr", "YAcy", "YAcy", "YIcy", "YIcy", "YUcy", "YUcy", "Yacute", "Yacute", 
-"Ycirc", "Ycirc", "Ycy", "Ycy", "Yfr", "Yfr", "Yopf", "Yopf", "Yscr", "Yscr", "Yuml", "Yuml", "ZHcy", "ZHcy", "Zacute", "Zacute", "Zcaron", "Zcaron", "Zcy", "Zcy", "Zdot", "Zdot", "ZeroWidthSpace", "ZeroWidthSpace", "Zeta", "Zeta", "Zfr", "Zfr", "Zopf", "Zopf", "Zscr", "Zscr", "aacute", "aacute", "abreve", "abreve", "ac", 
-"ac", "acd", "acd", "acirc", "acirc", "acute", "acute", "acy", "acy", "aelig", "aelig", "af", "af", "afr", "afr", "agrave", "agrave", "alefsym", "alefsym", "aleph", "aleph", "alpha", "alpha", "amacr", "amacr", "amalg", "amalg", "and", "and", "andand", "andand", "andd", "andd", "andslope", "andslope", "andv", "andv", "ang", 
-"ang", "ange", "ange", "angle", "angle", "angmsd", "angmsd", "angmsdaa", "angmsdaa", "angmsdab", "angmsdab", "angmsdac", "angmsdac", "angmsdad", "angmsdad", "angmsdae", "angmsdae", "angmsdaf", "angmsdaf", "angmsdag", "angmsdag", "angmsdah", "angmsdah", "angrt", "angrt", "angrtvb", "angrtvb", "angrtvbd", "angrtvbd", "angsph", 
-"angsph", "angst", "angst", "angzarr", "angzarr", "aogon", "aogon", "aopf", "aopf", "ap", "ap", "apE", "apE", "apacir", "apacir", "ape", "ape", "apid", "apid", "approx", "approx", "approxeq", "approxeq", "aring", "aring", "ascr", "ascr", "ast", "ast", "asymp", "asymp", "asympeq", "asympeq", "atilde", "atilde", "auml", 
-"auml", "awconint", "awconint", "awint", "awint", "bNot", "bNot", "backcong", "backcong", "backepsilon", "backepsilon", "backprime", "backprime", "backsim", "backsim", "backsimeq", "backsimeq", "barvee", "barvee", "barwed", "barwed", "barwedge", "barwedge", "bbrk", "bbrk", "bbrktbrk", "bbrktbrk", "bcong", "bcong", "bcy", 
-"bcy", "bdquo", "bdquo", "becaus", "becaus", "because", "because", "bemptyv", "bemptyv", "bepsi", "bepsi", "bernou", "bernou", "beta", "beta", "beth", "beth", "between", "between", "bfr", "bfr", "bigcap", "bigcap", "bigcirc", "bigcirc", "bigcup", "bigcup", "bigodot", "bigodot", "bigoplus", "bigoplus", "bigotimes", "bigotimes", 
-"bigsqcup", "bigsqcup", "bigstar", "bigstar", "bigtriangledown", "bigtriangledown", "bigtriangleup", "bigtriangleup", "biguplus", "biguplus", "bigvee", "bigvee", "bigwedge", "bigwedge", "bkarow", "bkarow", "blacklozenge", "blacklozenge", "blacksquare", "blacksquare", "blacktriangle", "blacktriangle", "blacktriangledown", 
-"blacktriangledown", "blacktriangleleft", "blacktriangleleft", "blacktriangleright", "blacktriangleright", "blank", "blank", "blk12", "blk12", "blk14", "blk14", "blk34", "blk34", "block", "block", "bnot", "bnot", "bopf", "bopf", "bot", "bot", "bottom", "bottom", "bowtie", "bowtie", "boxDL", "boxDL", "boxDR", "boxDR", "boxDl", 
-"boxDl", "boxDr", "boxDr", "boxH", "boxH", "boxHD", "boxHD", "boxHU", "boxHU", "boxHd", "boxHd", "boxHu", "boxHu", "boxUL", "boxUL", "boxUR", "boxUR", "boxUl", "boxUl", "boxUr", "boxUr", "boxV", "boxV", "boxVH", "boxVH", "boxVL", "boxVL", "boxVR", "boxVR", "boxVh", "boxVh", "boxVl", "boxVl", "boxVr", "boxVr", "boxbox", 
-"boxbox", "boxdL", "boxdL", "boxdR", "boxdR", "boxdl", "boxdl", "boxdr", "boxdr", "boxh", "boxh", "boxhD", "boxhD", "boxhU", "boxhU", "boxhd", "boxhd", "boxhu", "boxhu", "boxminus", "boxminus", "boxplus", "boxplus", "boxtimes", "boxtimes", "boxuL", "boxuL", "boxuR", "boxuR", "boxul", "boxul", "boxur", "boxur", "boxv", 
-"boxv", "boxvH", "boxvH", "boxvL", "boxvL", "boxvR", "boxvR", "boxvh", "boxvh", "boxvl", "boxvl", "boxvr", "boxvr", "bprime", "bprime", "breve", "breve", "brvbar", "brvbar", "bscr", "bscr", "bsemi", "bsemi", "bsim", "bsim", "bsime", "bsime", "bsol", "bsol", "bsolb", "bsolb", "bsolhsub", "bsolhsub", "bull", "bull", "bullet", 
-"bullet", "bump", "bump", "bumpE", "bumpE", "bumpe", "bumpe", "bumpeq", "bumpeq", "cacute", "cacute", "cap", "cap", "capand", "capand", "capbrcup", "capbrcup", "capcap", "capcap", "capcup", "capcup", "capdot", "capdot", "caret", "caret", "caron", "caron", "ccaps", "ccaps", "ccaron", "ccaron", "ccedil", "ccedil", "ccirc", 
-"ccirc", "ccups", "ccups", "ccupssm", "ccupssm", "cdot", "cdot", "cedil", "cedil", "cemptyv", "cemptyv", "cent", "cent", "centerdot", "centerdot", "cfr", "cfr", "chcy", "chcy", "check", "check", "checkmark", "checkmark", "chi", "chi", "cir", "cir", "cirE", "cirE", "circ", "circ", "circeq", "circeq", "circlearrowleft", 
-"circlearrowleft", "circlearrowright", "circlearrowright", "circledR", "circledR", "circledS", "circledS", "circledast", "circledast", "circledcirc", "circledcirc", "circleddash", "circleddash", "cire", "cire", "cirfnint", "cirfnint", "cirmid", "cirmid", "cirscir", "cirscir", "clubs", "clubs", "clubsuit", "clubsuit", "colon", 
-"colon", "colone", "colone", "coloneq", "coloneq", "comma", "comma", "commat", "commat", "comp", "comp", "compfn", "compfn", "complement", "complement", "complexes", "complexes", "cong", "cong", "congdot", "congdot", "conint", "conint", "copf", "copf", "coprod", "coprod", "copy", "copy", "copysr", "copysr", "crarr", "crarr", 
-"cross", "cross", "cscr", "cscr", "csub", "csub", "csube", "csube", "csup", "csup", "csupe", "csupe", "ctdot", "ctdot", "cudarrl", "cudarrl", "cudarrr", "cudarrr", "cuepr", "cuepr", "cuesc", "cuesc", "cularr", "cularr", "cularrp", "cularrp", "cup", "cup", "cupbrcap", "cupbrcap", "cupcap", "cupcap", "cupcup", "cupcup", 
-"cupdot", "cupdot", "cupor", "cupor", "curarr", "curarr", "curarrm", "curarrm", "curlyeqprec", "curlyeqprec", "curlyeqsucc", "curlyeqsucc", "curlyvee", "curlyvee", "curlywedge", "curlywedge", "curren", "curren", "curvearrowleft", "curvearrowleft", "curvearrowright", "curvearrowright", "cuvee", "cuvee", "cuwed", "cuwed", 
-"cwconint", "cwconint", "cwint", "cwint", "cylcty", "cylcty", "dArr", "dArr", "dHar", "dHar", "dagger", "dagger", "daleth", "daleth", "darr", "darr", "dash", "dash", "dashv", "dashv", "dbkarow", "dbkarow", "dblac", "dblac", "dcaron", "dcaron", "dcy", "dcy", "dd", "dd", "ddagger", "ddagger", "ddarr", "ddarr", "ddotseq", 
-"ddotseq", "deg", "deg", "delta", "delta", "demptyv", "demptyv", "dfisht", "dfisht", "dfr", "dfr", "dharl", "dharl", "dharr", "dharr", "diam", "diam", "diamond", "diamond", "diamondsuit", "diamondsuit", "diams", "diams", "die", "die", "digamma", "digamma", "disin", "disin", "div", "div", "divide", "divide", "divideontimes", 
-"divideontimes", "divonx", "divonx", "djcy", "djcy", "dlcorn", "dlcorn", "dlcrop", "dlcrop", "dollar", "dollar", "dopf", "dopf", "dot", "dot", "doteq", "doteq", "doteqdot", "doteqdot", "dotminus", "dotminus", "dotplus", "dotplus", "dotsquare", "dotsquare", "doublebarwedge", "doublebarwedge", "downarrow", "downarrow", "downdownarrows", 
-"downdownarrows", "downharpoonleft", "downharpoonleft", "downharpoonright", "downharpoonright", "drbkarow", "drbkarow", "drcorn", "drcorn", "drcrop", "drcrop", "dscr", "dscr", "dscy", "dscy", "dsol", "dsol", "dstrok", "dstrok", "dtdot", "dtdot", "dtri", "dtri", "dtrif", "dtrif", "duarr", "duarr", "duhar", "duhar", "dwangle", 
-"dwangle", "dzcy", "dzcy", "dzigrarr", "dzigrarr", "eDDot", "eDDot", "eDot", "eDot", "eacute", "eacute", "easter", "easter", "ecaron", "ecaron", "ecir", "ecir", "ecirc", "ecirc", "ecolon", "ecolon", "ecy", "ecy", "edot", "edot", "ee", "ee", "efDot", "efDot", "efr", "efr", "eg", "eg", "egrave", "egrave", "egs", "egs", "egsdot", 
-"egsdot", "el", "el", "elinters", "elinters", "ell", "ell", "els", "els", "elsdot", "elsdot", "emacr", "emacr", "empty", "empty", "emptyset", "emptyset", "emptyv", "emptyv", "emsp", "emsp", "emsp13", "emsp13", "emsp14", "emsp14", "eng", "eng", "ensp", "ensp", "eogon", "eogon", "eopf", "eopf", "epar", "epar", "eparsl", 
-"eparsl", "eplus", "eplus", "epsi", "epsi", "epsilon", "epsilon", "epsiv", "epsiv", "eqcirc", "eqcirc", "eqcolon", "eqcolon", "eqsim", "eqsim", "eqslantgtr", "eqslantgtr", "eqslantless", "eqslantless", "equals", "equals", "equest", "equest", "equiv", "equiv", "equivDD", "equivDD", "eqvparsl", "eqvparsl", "erDot", "erDot", 
-"erarr", "erarr", "escr", "escr", "esdot", "esdot", "esim", "esim", "eta", "eta", "eth", "eth", "euml", "euml", "euro", "euro", "excl", "excl", "exist", "exist", "expectation", "expectation", "exponentiale", "exponentiale", "fallingdotseq", "fallingdotseq", "fcy", "fcy", "female", "female", "ffilig", "ffilig", "fflig", 
-"fflig", "ffllig", "ffllig", "ffr", "ffr", "filig", "filig", "flat", "flat", "fllig", "fllig", "fltns", "fltns", "fnof", "fnof", "fopf", "fopf", "forall", "forall", "fork", "fork", "forkv", "forkv", "fpartint", "fpartint", "frac12", "frac12", "frac13", "frac13", "frac14", "frac14", "frac15", "frac15", "frac16", "frac16", 
-"frac18", "frac18", "frac23", "frac23", "frac25", "frac25", "frac34", "frac34", "frac35", "frac35", "frac38", "frac38", "frac45", "frac45", "frac56", "frac56", "frac58", "frac58", "frac78", "frac78", "frasl", "frasl", "frown", "frown", "fscr", "fscr", "gE", "gE", "gEl", "gEl", "gacute", "gacute", "gamma", "gamma", "gammad", 
-"gammad", "gap", "gap", "gbreve", "gbreve", "gcirc", "gcirc", "gcy", "gcy", "gdot", "gdot", "ge", "ge", "gel", "gel", "geq", "geq", "geqq", "geqq", "geqslant", "geqslant", "ges", "ges", "gescc", "gescc", "gesdot", "gesdot", "gesdoto", "gesdoto", "gesdotol", "gesdotol", "gesles", "gesles", "gfr", "gfr", "gg", "gg", "ggg", 
-"ggg", "gimel", "gimel", "gjcy", "gjcy", "gl", "gl", "glE", "glE", "gla", "gla", "glj", "glj", "gnE", "gnE", "gnap", "gnap", "gnapprox", "gnapprox", "gne", "gne", "gneq", "gneq", "gneqq", "gneqq", "gnsim", "gnsim", "gopf", "gopf", "grave", "grave", "gscr", "gscr", "gsim", "gsim", "gsime", "gsime", "gsiml", "gsiml", "gtcc", 
-"gtcc", "gtcir", "gtcir", "gtdot", "gtdot", "gtlPar", "gtlPar", "gtquest", "gtquest", "gtrapprox", "gtrapprox", "gtrarr", "gtrarr", "gtrdot", "gtrdot", "gtreqless", "gtreqless", "gtreqqless", "gtreqqless", "gtrless", "gtrless", "gtrsim", "gtrsim", "hArr", "hArr", "hairsp", "hairsp", "half", "half", "hamilt", "hamilt", 
-"hardcy", "hardcy", "harr", "harr", "harrcir", "harrcir", "harrw", "harrw", "hbar", "hbar", "hcirc", "hcirc", "hearts", "hearts", "heartsuit", "heartsuit", "hellip", "hellip", "hercon", "hercon", "hfr", "hfr", "hksearow", "hksearow", "hkswarow", "hkswarow", "hoarr", "hoarr", "homtht", "homtht", "hookleftarrow", "hookleftarrow", 
-"hookrightarrow", "hookrightarrow", "hopf", "hopf", "horbar", "horbar", "hscr", "hscr", "hslash", "hslash", "hstrok", "hstrok", "hybull", "hybull", "hyphen", "hyphen", "iacute", "iacute", "ic", "ic", "icirc", "icirc", "icy", "icy", "iecy", "iecy", "iexcl", "iexcl", "iff", "iff", "ifr", "ifr", "igrave", "igrave", "ii", 
-"ii", "iiiint", "iiiint", "iiint", "iiint", "iinfin", "iinfin", "iiota", "iiota", "ijlig", "ijlig", "imacr", "imacr", "image", "image", "imagline", "imagline", "imagpart", "imagpart", "imath", "imath", "imof", "imof", "imped", "imped", "in", "in", "incare", "incare", "infin", "infin", "infintie", "infintie", "inodot", 
-"inodot", "int", "int", "intcal", "intcal", "integers", "integers", "intercal", "intercal", "intlarhk", "intlarhk", "intprod", "intprod", "iocy", "iocy", "iogon", "iogon", "iopf", "iopf", "iota", "iota", "iprod", "iprod", "iquest", "iquest", "iscr", "iscr", "isin", "isin", "isinE", "isinE", "isindot", "isindot", "isins", 
-"isins", "isinsv", "isinsv", "isinv", "isinv", "it", "it", "itilde", "itilde", "iukcy", "iukcy", "iuml", "iuml", "jcirc", "jcirc", "jcy", "jcy", "jfr", "jfr", "jmath", "jmath", "jopf", "jopf", "jscr", "jscr", "jsercy", "jsercy", "jukcy", "jukcy", "kappa", "kappa", "kappav", "kappav", "kcedil", "kcedil", "kcy", "kcy", "kfr", 
-"kfr", "kgreen", "kgreen", "khcy", "khcy", "kjcy", "kjcy", "kopf", "kopf", "kscr", "kscr", "lAarr", "lAarr", "lArr", "lArr", "lAtail", "lAtail", "lBarr", "lBarr", "lE", "lE", "lEg", "lEg", "lHar", "lHar", "lacute", "lacute", "laemptyv", "laemptyv", "lagran", "lagran", "lambda", "lambda", "lang", "lang", "langd", "langd", 
-"langle", "langle", "lap", "lap", "laquo", "laquo", "larr", "larr", "larrb", "larrb", "larrbfs", "larrbfs", "larrfs", "larrfs", "larrhk", "larrhk", "larrlp", "larrlp", "larrpl", "larrpl", "larrsim", "larrsim", "larrtl", "larrtl", "lat", "lat", "latail", "latail", "late", "late", "lbarr", "lbarr", "lbbrk", "lbbrk", "lbrace", 
-"lbrace", "lbrack", "lbrack", "lbrke", "lbrke", "lbrksld", "lbrksld", "lbrkslu", "lbrkslu", "lcaron", "lcaron", "lcedil", "lcedil", "lceil", "lceil", "lcub", "lcub", "lcy", "lcy", "ldca", "ldca", "ldquo", "ldquo", "ldquor", "ldquor", "ldrdhar", "ldrdhar", "ldrushar", "ldrushar", "ldsh", "ldsh", "le", "le", "leftarrow", 
-"leftarrow", "leftarrowtail", "leftarrowtail", "leftharpoondown", "leftharpoondown", "leftharpoonup", "leftharpoonup", "leftleftarrows", "leftleftarrows", "leftrightarrow", "leftrightarrow", "leftrightarrows", "leftrightarrows", "leftrightharpoons", "leftrightharpoons", "leftrightsquigarrow", "leftrightsquigarrow", "leftthreetimes", 
-"leftthreetimes", "leg", "leg", "leq", "leq", "leqq", "leqq", "leqslant", "leqslant", "les", "les", "lescc", "lescc", "lesdot", "lesdot", "lesdoto", "lesdoto", "lesdotor", "lesdotor", "lesges", "lesges", "lessapprox", "lessapprox", "lessdot", "lessdot", "lesseqgtr", "lesseqgtr", "lesseqqgtr", "lesseqqgtr", "lessgtr", "lessgtr", 
-"lesssim", "lesssim", "lfisht", "lfisht", "lfloor", "lfloor", "lfr", "lfr", "lg", "lg", "lgE", "lgE", "lhard", "lhard", "lharu", "lharu", "lharul", "lharul", "lhblk", "lhblk", "ljcy", "ljcy", "ll", "ll", "llarr", "llarr", "llcorner", "llcorner", "llhard", "llhard", "lltri", "lltri", "lmidot", "lmidot", "lmoust", "lmoust", 
-"lmoustache", "lmoustache", "lnE", "lnE", "lnap", "lnap", "lnapprox", "lnapprox", "lne", "lne", "lneq", "lneq", "lneqq", "lneqq", "lnsim", "lnsim", "loang", "loang", "loarr", "loarr", "lobrk", "lobrk", "longleftarrow", "longleftarrow", "longleftrightarrow", "longleftrightarrow", "longmapsto", "longmapsto", "longrightarrow", 
-"longrightarrow", "looparrowleft", "looparrowleft", "looparrowright", "looparrowright", "lopar", "lopar", "lopf", "lopf", "loplus", "loplus", "lotimes", "lotimes", "lowast", "lowast", "lowbar", "lowbar", "loz", "loz", "lozenge", "lozenge", "lozf", "lozf", "lpar", "lpar", "lparlt", "lparlt", "lrarr", "lrarr", "lrcorner", 
-"lrcorner", "lrhar", "lrhar", "lrhard", "lrhard", "lrm", "lrm", "lrtri", "lrtri", "lsaquo", "lsaquo", "lscr", "lscr", "lsh", "lsh", "lsim", "lsim", "lsime", "lsime", "lsimg", "lsimg", "lsqb", "lsqb", "lsquo", "lsquo", "lsquor", "lsquor", "lstrok", "lstrok", "ltcc", "ltcc", "ltcir", "ltcir", "ltdot", "ltdot", "lthree", 
-"lthree", "ltimes", "ltimes", "ltlarr", "ltlarr", "ltquest", "ltquest", "ltrPar", "ltrPar", "ltri", "ltri", "ltrie", "ltrie", "ltrif", "ltrif", "lurdshar", "lurdshar", "luruhar", "luruhar", "mDDot", "mDDot", "macr", "macr", "male", "male", "malt", "malt", "maltese", "maltese", "map", "map", "mapsto", "mapsto", "mapstodown", 
-"mapstodown", "mapstoleft", "mapstoleft", "mapstoup", "mapstoup", "marker", "marker", "mcomma", "mcomma", "mcy", "mcy", "mdash", "mdash", "measuredangle", "measuredangle", "mfr", "mfr", "mho", "mho", "micro", "micro", "mid", "mid", "midast", "midast", "midcir", "midcir", "middot", "middot", "minus", "minus", "minusb", 
-"minusb", "minusd", "minusd", "minusdu", "minusdu", "mlcp", "mlcp", "mldr", "mldr", "mnplus", "mnplus", "models", "models", "mopf", "mopf", "mp", "mp", "mscr", "mscr", "mstpos", "mstpos", "mu", "mu", "multimap", "multimap", "mumap", "mumap", "nLeftarrow", "nLeftarrow", "nLeftrightarrow", "nLeftrightarrow", "nRightarrow", 
-"nRightarrow", "nVDash", "nVDash", "nVdash", "nVdash", "nabla", "nabla", "nacute", "nacute", "nap", "nap", "napos", "napos", "napprox", "napprox", "natur", "natur", "natural", "natural", "naturals", "naturals", "nbsp", "nbsp", "ncap", "ncap", "ncaron", "ncaron", "ncedil", "ncedil", "ncong", "ncong", "ncup", "ncup", "ncy", 
-"ncy", "ndash", "ndash", "ne", "ne", "neArr", "neArr", "nearhk", "nearhk", "nearr", "nearr", "nearrow", "nearrow", "nequiv", "nequiv", "nesear", "nesear", "nexist", "nexist", "nexists", "nexists", "nfr", "nfr", "nge", "nge", "ngeq", "ngeq", "ngsim", "ngsim", "ngt", "ngt", "ngtr", "ngtr", "nhArr", "nhArr", "nharr", "nharr", 
-"nhpar", "nhpar", "ni", "ni", "nis", "nis", "nisd", "nisd", "niv", "niv", "njcy", "njcy", "nlArr", "nlArr", "nlarr", "nlarr", "nldr", "nldr", "nle", "nle", "nleftarrow", "nleftarrow", "nleftrightarrow", "nleftrightarrow", "nleq", "nleq", "nless", "nless", "nlsim", "nlsim", "nlt", "nlt", "nltri", "nltri", "nltrie", "nltrie", 
-"nmid", "nmid", "nopf", "nopf", "not", "not", "notin", "notin", "notinva", "notinva", "notinvb", "notinvb", "notinvc", "notinvc", "notni", "notni", "notniva", "notniva", "notnivb", "notnivb", "notnivc", "notnivc", "npar", "npar", "nparallel", "nparallel", "npolint", "npolint", "npr", "npr", "nprcue", "nprcue", "nprec", 
-"nprec", "nrArr", "nrArr", "nrarr", "nrarr", "nrightarrow", "nrightarrow", "nrtri", "nrtri", "nrtrie", "nrtrie", "nsc", "nsc", "nsccue", "nsccue", "nscr", "nscr", "nshortmid", "nshortmid", "nshortparallel", "nshortparallel", "nsim", "nsim", "nsime", "nsime", "nsimeq", "nsimeq", "nsmid", "nsmid", "nspar", "nspar", "nsqsube", 
-"nsqsube", "nsqsupe", "nsqsupe", "nsub", "nsub", "nsube", "nsube", "nsubseteq", "nsubseteq", "nsucc", "nsucc", "nsup", "nsup", "nsupe", "nsupe", "nsupseteq", "nsupseteq", "ntgl", "ntgl", "ntilde", "ntilde", "ntlg", "ntlg", "ntriangleleft", "ntriangleleft", "ntrianglelefteq", "ntrianglelefteq", "ntriangleright", "ntriangleright", 
-"ntrianglerighteq", "ntrianglerighteq", "nu", "nu", "num", "num", "numero", "numero", "numsp", "numsp", "nvDash", "nvDash", "nvHarr", "nvHarr", "nvdash", "nvdash", "nvinfin", "nvinfin", "nvlArr", "nvlArr", "nvrArr", "nvrArr", "nwArr", "nwArr", "nwarhk", "nwarhk", "nwarr", "nwarr", "nwarrow", "nwarrow", "nwnear", "nwnear", 
-"oS", "oS", "oacute", "oacute", "oast", "oast", "ocir", "ocir", "ocirc", "ocirc", "ocy", "ocy", "odash", "odash", "odblac", "odblac", "odiv", "odiv", "odot", "odot", "odsold", "odsold", "oelig", "oelig", "ofcir", "ofcir", "ofr", "ofr", "ogon", "ogon", "ograve", "ograve", "ogt", "ogt", "ohbar", "ohbar", "ohm", "ohm", "oint", 
-"oint", "olarr", "olarr", "olcir", "olcir", "olcross", "olcross", "oline", "oline", "olt", "olt", "omacr", "omacr", "omega", "omega", "omicron", "omicron", "omid", "omid", "ominus", "ominus", "oopf", "oopf", "opar", "opar", "operp", "operp", "oplus", "oplus", "or", "or", "orarr", "orarr", "ord", "ord", "order", "order", 
-"orderof", "orderof", "ordf", "ordf", "ordm", "ordm", "origof", "origof", "oror", "oror", "orslope", "orslope", "orv", "orv", "oscr", "oscr", "oslash", "oslash", "osol", "osol", "otilde", "otilde", "otimes", "otimes", "otimesas", "otimesas", "ouml", "ouml", "ovbar", "ovbar", "par", "par", "para", "para", "parallel", "parallel", 
-"parsim", "parsim", "parsl", "parsl", "part", "part", "pcy", "pcy", "percnt", "percnt", "period", "period", "permil", "permil", "perp", "perp", "pertenk", "pertenk", "pfr", "pfr", "phi", "phi", "phiv", "phiv", "phmmat", "phmmat", "phone", "phone", "pi", "pi", "pitchfork", "pitchfork", "piv", "piv", "planck", "planck", 
-"planckh", "planckh", "plankv", "plankv", "plus", "plus", "plusacir", "plusacir", "plusb", "plusb", "pluscir", "pluscir", "plusdo", "plusdo", "plusdu", "plusdu", "pluse", "pluse", "plusmn", "plusmn", "plussim", "plussim", "plustwo", "plustwo", "pm", "pm", "pointint", "pointint", "popf", "popf", "pound", "pound", "pr", 
-"pr", "prE", "prE", "prap", "prap", "prcue", "prcue", "pre", "pre", "prec", "prec", "precapprox", "precapprox", "preccurlyeq", "preccurlyeq", "preceq", "preceq", "precnapprox", "precnapprox", "precneqq", "precneqq", "precnsim", "precnsim", "precsim", "precsim", "prime", "prime", "primes", "primes", "prnE", "prnE", "prnap", 
-"prnap", "prnsim", "prnsim", "prod", "prod", "profalar", "profalar", "profline", "profline", "profsurf", "profsurf", "prop", "prop", "propto", "propto", "prsim", "prsim", "prurel", "prurel", "pscr", "pscr", "psi", "psi", "puncsp", "puncsp", "qfr", "qfr", "qint", "qint", "qopf", "qopf", "qprime", "qprime", "qscr", "qscr", 
-"quaternions", "quaternions", "quatint", "quatint", "quest", "quest", "questeq", "questeq", "rAarr", "rAarr", "rArr", "rArr", "rAtail", "rAtail", "rBarr", "rBarr", "rHar", "rHar", "racute", "racute", "radic", "radic", "raemptyv", "raemptyv", "rang", "rang", "rangd", "rangd", "range", "range", "rangle", "rangle", "raquo", 
-"raquo", "rarr", "rarr", "rarrap", "rarrap", "rarrb", "rarrb", "rarrbfs", "rarrbfs", "rarrc", "rarrc", "rarrfs", "rarrfs", "rarrhk", "rarrhk", "rarrlp", "rarrlp", "rarrpl", "rarrpl", "rarrsim", "rarrsim", "rarrtl", "rarrtl", "rarrw", "rarrw", "ratail", "ratail", "ratio", "ratio", "rationals", "rationals", "rbarr", "rbarr", 
-"rbbrk", "rbbrk", "rbrace", "rbrace", "rbrack", "rbrack", "rbrke", "rbrke", "rbrksld", "rbrksld", "rbrkslu", "rbrkslu", "rcaron", "rcaron", "rcedil", "rcedil", "rceil", "rceil", "rcub", "rcub", "rcy", "rcy", "rdca", "rdca", "rdldhar", "rdldhar", "rdquo", "rdquo", "rdquor", "rdquor", "rdsh", "rdsh", "real", "real", "realine", 
-"realine", "realpart", "realpart", "reals", "reals", "rect", "rect", "reg", "reg", "rfisht", "rfisht", "rfloor", "rfloor", "rfr", "rfr", "rhard", "rhard", "rharu", "rharu", "rharul", "rharul", "rho", "rho", "rhov", "rhov", "rightarrow", "rightarrow", "rightarrowtail", "rightarrowtail", "rightharpoondown", "rightharpoondown", 
-"rightharpoonup", "rightharpoonup", "rightleftarrows", "rightleftarrows", "rightleftharpoons", "rightleftharpoons", "rightrightarrows", "rightrightarrows", "rightsquigarrow", "rightsquigarrow", "rightthreetimes", "rightthreetimes", "ring", "ring", "risingdotseq", "risingdotseq", "rlarr", "rlarr", "rlhar", "rlhar", "rlm", 
-"rlm", "rmoust", "rmoust", "rmoustache", "rmoustache", "rnmid", "rnmid", "roang", "roang", "roarr", "roarr", "robrk", "robrk", "ropar", "ropar", "ropf", "ropf", "roplus", "roplus", "rotimes", "rotimes", "rpar", "rpar", "rpargt", "rpargt", "rppolint", "rppolint", "rrarr", "rrarr", "rsaquo", "rsaquo", "rscr", "rscr", "rsh", 
-"rsh", "rsqb", "rsqb", "rsquo", "rsquo", "rsquor", "rsquor", "rthree", "rthree", "rtimes", "rtimes", "rtri", "rtri", "rtrie", "rtrie", "rtrif", "rtrif", "rtriltri", "rtriltri", "ruluhar", "ruluhar", "rx", "rx", "sacute", "sacute", "sbquo", "sbquo", "sc", "sc", "scE", "scE", "scap", "scap", "scaron", "scaron", "sccue", 
-"sccue", "sce", "sce", "scedil", "scedil", "scirc", "scirc", "scnE", "scnE", "scnap", "scnap", "scnsim", "scnsim", "scpolint", "scpolint", "scsim", "scsim", "scy", "scy", "sdot", "sdot", "sdotb", "sdotb", "sdote", "sdote", "seArr", "seArr", "searhk", "searhk", "searr", "searr", "searrow", "searrow", "sect", "sect", "semi", 
-"semi", "seswar", "seswar", "setminus", "setminus", "setmn", "setmn", "sext", "sext", "sfr", "sfr", "sfrown", "sfrown", "sharp", "sharp", "shchcy", "shchcy", "shcy", "shcy", "shortmid", "shortmid", "shortparallel", "shortparallel", "shy", "shy", "sigma", "sigma", "sigmaf", "sigmaf", "sigmav", "sigmav", "sim", "sim", "simdot", 
-"simdot", "sime", "sime", "simeq", "simeq", "simg", "simg", "simgE", "simgE", "siml", "siml", "simlE", "simlE", "simne", "simne", "simplus", "simplus", "simrarr", "simrarr", "slarr", "slarr", "smallsetminus", "smallsetminus", "smashp", "smashp", "smeparsl", "smeparsl", "smid", "smid", "smile", "smile", "smt", "smt", "smte", 
-"smte", "softcy", "softcy", "sol", "sol", "solb", "solb", "solbar", "solbar", "sopf", "sopf", "spades", "spades", "spadesuit", "spadesuit", "spar", "spar", "sqcap", "sqcap", "sqcup", "sqcup", "sqsub", "sqsub", "sqsube", "sqsube", "sqsubset", "sqsubset", "sqsubseteq", "sqsubseteq", "sqsup", "sqsup", "sqsupe", "sqsupe", 
-"sqsupset", "sqsupset", "sqsupseteq", "sqsupseteq", "squ", "squ", "square", "square", "squarf", "squarf", "squf", "squf", "srarr", "srarr", "sscr", "sscr", "ssetmn", "ssetmn", "ssmile", "ssmile", "sstarf", "sstarf", "star", "star", "starf", "starf", "straightepsilon", "straightepsilon", "straightphi", "straightphi", "strns", 
-"strns", "sub", "sub", "subE", "subE", "subdot", "subdot", "sube", "sube", "subedot", "subedot", "submult", "submult", "subnE", "subnE", "subne", "subne", "subplus", "subplus", "subrarr", "subrarr", "subset", "subset", "subseteq", "subseteq", "subseteqq", "subseteqq", "subsetneq", "subsetneq", "subsetneqq", "subsetneqq", 
-"subsim", "subsim", "subsub", "subsub", "subsup", "subsup", "succ", "succ", "succapprox", "succapprox", "succcurlyeq", "succcurlyeq", "succeq", "succeq", "succnapprox", "succnapprox", "succneqq", "succneqq", "succnsim", "succnsim", "succsim", "succsim", "sum", "sum", "sung", "sung", "sup", "sup", "sup1", "sup1", "sup2", 
-"sup2", "sup3", "sup3", "supE", "supE", "supdot", "supdot", "supdsub", "supdsub", "supe", "supe", "supedot", "supedot", "suphsol", "suphsol", "suphsub", "suphsub", "suplarr", "suplarr", "supmult", "supmult", "supnE", "supnE", "supne", "supne", "supplus", "supplus", "supset", "supset", "supseteq", "supseteq", "supseteqq", 
-"supseteqq", "supsetneq", "supsetneq", "supsetneqq", "supsetneqq", "supsim", "supsim", "supsub", "supsub", "supsup", "supsup", "swArr", "swArr", "swarhk", "swarhk", "swarr", "swarr", "swarrow", "swarrow", "swnwar", "swnwar", "szlig", "szlig", "target", "target", "tau", "tau", "tbrk", "tbrk", "tcaron", "tcaron", "tcedil", 
-"tcedil", "tcy", "tcy", "tdot", "tdot", "telrec", "telrec", "tfr", "tfr", "there4", "there4", "therefore", "therefore", "theta", "theta", "thetasym", "thetasym", "thetav", "thetav", "thickapprox", "thickapprox", "thicksim", "thicksim", "thinsp", "thinsp", "thkap", "thkap", "thksim", "thksim", "thorn", "thorn", "tilde", 
-"tilde", "times", "times", "timesb", "timesb", "timesbar", "timesbar", "timesd", "timesd", "tint", "tint", "toea", "toea", "top", "top", "topbot", "topbot", "topcir", "topcir", "topf", "topf", "topfork", "topfork", "tosa", "tosa", "tprime", "tprime", "trade", "trade", "triangle", "triangle", "triangledown", "triangledown", 
-"triangleleft", "triangleleft", "trianglelefteq", "trianglelefteq", "triangleq", "triangleq", "triangleright", "triangleright", "trianglerighteq", "trianglerighteq", "tridot", "tridot", "trie", "trie", "triminus", "triminus", "triplus", "triplus", "trisb", "trisb", "tritime", "tritime", "trpezium", "trpezium", "tscr", 
-"tscr", "tscy", "tscy", "tshcy", "tshcy", "tstrok", "tstrok", "twixt", "twixt", "twoheadleftarrow", "twoheadleftarrow", "twoheadrightarrow", "twoheadrightarrow", "uArr", "uArr", "uHar", "uHar", "uacute", "uacute", "uarr", "uarr", "ubrcy", "ubrcy", "ubreve", "ubreve", "ucirc", "ucirc", "ucy", "ucy", "udarr", "udarr", "udblac", 
-"udblac", "udhar", "udhar", "ufisht", "ufisht", "ufr", "ufr", "ugrave", "ugrave", "uharl", "uharl", "uharr", "uharr", "uhblk", "uhblk", "ulcorn", "ulcorn", "ulcorner", "ulcorner", "ulcrop", "ulcrop", "ultri", "ultri", "umacr", "umacr", "uml", "uml", "uogon", "uogon", "uopf", "uopf", "uparrow", "uparrow", "updownarrow", 
-"updownarrow", "upharpoonleft", "upharpoonleft", "upharpoonright", "upharpoonright", "uplus", "uplus", "upsi", "upsi", "upsih", "upsih", "upsilon", "upsilon", "upuparrows", "upuparrows", "urcorn", "urcorn", "urcorner", "urcorner", "urcrop", "urcrop", "uring", "uring", "urtri", "urtri", "uscr", "uscr", "utdot", "utdot", 
-"utilde", "utilde", "utri", "utri", "utrif", "utrif", "uuarr", "uuarr", "uuml", "uuml", "uwangle", "uwangle", "vArr", "vArr", "vBar", "vBar", "vBarv", "vBarv", "vDash", "vDash", "vangrt", "vangrt", "varepsilon", "varepsilon", "varkappa", "varkappa", "varnothing", "varnothing", "varphi", "varphi", "varpi", "varpi", "varpropto", 
-"varpropto", "varr", "varr", "varrho", "varrho", "varsigma", "varsigma", "vartheta", "vartheta", "vartriangleleft", "vartriangleleft", "vartriangleright", "vartriangleright", "vcy", "vcy", "vdash", "vdash", "vee", "vee", "veebar", "veebar", "veeeq", "veeeq", "vellip", "vellip", "verbar", "verbar", "vert", "vert", "vfr", 
-"vfr", "vltri", "vltri", "vopf", "vopf", "vprop", "vprop", "vrtri", "vrtri", "vscr", "vscr", "vzigzag", "vzigzag", "wcirc", "wcirc", "wedbar", "wedbar", "wedge", "wedge", "wedgeq", "wedgeq", "weierp", "weierp", "wfr", "wfr", "wopf", "wopf", "wp", "wp", "wr", "wr", "wreath", "wreath", "wscr", "wscr", "xcap", "xcap", "xcirc", 
-"xcirc", "xcup", "xcup", "xdtri", "xdtri", "xfr", "xfr", "xhArr", "xhArr", "xharr", "xharr", "xi", "xi", "xlArr", "xlArr", "xlarr", "xlarr", "xmap", "xmap", "xnis", "xnis", "xodot", "xodot", "xopf", "xopf", "xoplus", "xoplus", "xotime", "xotime", "xrArr", "xrArr", "xrarr", "xrarr", "xscr", "xscr", "xsqcup", "xsqcup", "xuplus", 
-"xuplus", "xutri", "xutri", "xvee", "xvee", "xwedge", "xwedge", "yacute", "yacute", "yacy", "yacy", "ycirc", "ycirc", "ycy", "ycy", "yen", "yen", "yfr", "yfr", "yicy", "yicy", "yopf", "yopf", "yscr", "yscr", "yucy", "yucy", "yuml", "yuml", "zacute", "zacute", "zcaron", "zcaron", "zcy", "zcy", "zdot", "zdot", "zeetrf", 
-"zeetrf", "zeta", "zeta", "zfr", "zfr", "zhcy", "zhcy", "zigrarr", "zigrarr", "zopf", "zopf", "zscr", "zscr", "zwj", "zwj", "zwnj", "zwnj", ];
+["AElig", "AMP", "Aacute", "Abreve", "Acirc", "Acy", "Afr", "Agrave", "Alpha", "Amacr", "And", "Aogon", "Aopf", "ApplyFunction", "Aring", "Ascr", "Assign", "Atilde", "Auml", "Backslash", "Barv", "Barwed", "Bcy", "Because", "Bernoullis", "Beta", "Bfr", "Bopf", "Breve", "Bscr", "Bumpeq", "CHcy", "COPY", "Cacute", "Cap", "CapitalDifferentialD", 
+"Cayleys", "Ccaron", "Ccedil", "Ccirc", "Cconint", "Cdot", "Cedilla", "CenterDot", "Cfr", "Chi", "CircleDot", "CircleMinus", "CirclePlus", "CircleTimes", "ClockwiseContourIntegral", "CloseCurlyDoubleQuote", "CloseCurlyQuote", "Colon", "Colone", "Congruent", "Conint", "ContourIntegral", "Copf", "Coproduct", "CounterClockwiseContourIntegral", 
+"Cross", "Cscr", "Cup", "CupCap", "DD", "DDotrahd", "DJcy", "DScy", "DZcy", "Dagger", "Darr", "Dashv", "Dcaron", "Dcy", "Del", "Delta", "Dfr", "DiacriticalAcute", "DiacriticalDot", "DiacriticalDoubleAcute", "DiacriticalGrave", "DiacriticalTilde", "Diamond", "DifferentialD", "Dopf", "Dot", "DotDot", "DotEqual", "DoubleContourIntegral", 
+"DoubleDot", "DoubleDownArrow", "DoubleLeftArrow", "DoubleLeftRightArrow", "DoubleLeftTee", "DoubleLongLeftArrow", "DoubleLongLeftRightArrow", "DoubleLongRightArrow", "DoubleRightArrow", "DoubleRightTee", "DoubleUpArrow", "DoubleUpDownArrow", "DoubleVerticalBar", "DownArrow", "DownArrowBar", "DownArrowUpArrow", "DownBreve", 
+"DownLeftRightVector", "DownLeftTeeVector", "DownLeftVector", "DownLeftVectorBar", "DownRightTeeVector", "DownRightVector", "DownRightVectorBar", "DownTee", "DownTeeArrow", "Downarrow", "Dscr", "Dstrok", "ENG", "ETH", "Eacute", "Ecaron", "Ecirc", "Ecy", "Edot", "Efr", "Egrave", "Element", "Emacr", "EmptySmallSquare", "EmptyVerySmallSquare", 
+"Eogon", "Eopf", "Epsilon", "Equal", "EqualTilde", "Equilibrium", "Escr", "Esim", "Eta", "Euml", "Exists", "ExponentialE", "Fcy", "Ffr", "FilledSmallSquare", "FilledVerySmallSquare", "Fopf", "ForAll", "Fouriertrf", "Fscr", "GJcy", "GT", "Gamma", "Gammad", "Gbreve", "Gcedil", "Gcirc", "Gcy", "Gdot", "Gfr", "Gg", "Gopf", 
+"GreaterEqual", "GreaterEqualLess", "GreaterFullEqual", "GreaterGreater", "GreaterLess", "GreaterSlantEqual", "GreaterTilde", "Gscr", "Gt", "HARDcy", "Hacek", "Hat", "Hcirc", "Hfr", "HilbertSpace", "Hopf", "HorizontalLine", "Hscr", "Hstrok", "HumpDownHump", "HumpEqual", "IEcy", "IJlig", "IOcy", "Iacute", "Icirc", "Icy", 
+"Idot", "Ifr", "Igrave", "Im", "Imacr", "ImaginaryI", "Implies", "Int", "Integral", "Intersection", "InvisibleComma", "InvisibleTimes", "Iogon", "Iopf", "Iota", "Iscr", "Itilde", "Iukcy", "Iuml", "Jcirc", "Jcy", "Jfr", "Jopf", "Jscr", "Jsercy", "Jukcy", "KHcy", "KJcy", "Kappa", "Kcedil", "Kcy", "Kfr", "Kopf", "Kscr", "LJcy", 
+"LT", "Lacute", "Lambda", "Lang", "Laplacetrf", "Larr", "Lcaron", "Lcedil", "Lcy", "LeftAngleBracket", "LeftArrow", "LeftArrowBar", "LeftArrowRightArrow", "LeftCeiling", "LeftDoubleBracket", "LeftDownTeeVector", "LeftDownVector", "LeftDownVectorBar", "LeftFloor", "LeftRightArrow", "LeftRightVector", "LeftTee", "LeftTeeArrow", 
+"LeftTeeVector", "LeftTriangle", "LeftTriangleBar", "LeftTriangleEqual", "LeftUpDownVector", "LeftUpTeeVector", "LeftUpVector", "LeftUpVectorBar", "LeftVector", "LeftVectorBar", "Leftarrow", "Leftrightarrow", "LessEqualGreater", "LessFullEqual", "LessGreater", "LessLess", "LessSlantEqual", "LessTilde", "Lfr", "Ll", "Lleftarrow", 
+"Lmidot", "LongLeftArrow", "LongLeftRightArrow", "LongRightArrow", "Longleftarrow", "Longleftrightarrow", "Longrightarrow", "Lopf", "LowerLeftArrow", "LowerRightArrow", "Lscr", "Lsh", "Lstrok", "Lt", "Map", "Mcy", "MediumSpace", "Mellintrf", "Mfr", "MinusPlus", "Mopf", "Mscr", "Mu", "NJcy", "Nacute", "Ncaron", "Ncedil", 
+"Ncy", "NegativeMediumSpace", "NegativeThickSpace", "NegativeThinSpace", "NegativeVeryThinSpace", "NestedGreaterGreater", "NestedLessLess", "NewLine", "Nfr", "NoBreak", "NonBreakingSpace", "Nopf", "Not", "NotCongruent", "NotCupCap", "NotDoubleVerticalBar", "NotElement", "NotEqual", "NotExists", "NotGreater", "NotGreaterEqual", 
+"NotGreaterLess", "NotGreaterTilde", "NotLeftTriangle", "NotLeftTriangleEqual", "NotLess", "NotLessEqual", "NotLessGreater", "NotLessTilde", "NotPrecedes", "NotPrecedesSlantEqual", "NotReverseElement", "NotRightTriangle", "NotRightTriangleEqual", "NotSquareSubsetEqual", "NotSquareSupersetEqual", "NotSubsetEqual", "NotSucceeds", 
+"NotSucceedsSlantEqual", "NotSupersetEqual", "NotTilde", "NotTildeEqual", "NotTildeFullEqual", "NotTildeTilde", "NotVerticalBar", "Nscr", "Ntilde", "Nu", "OElig", "Oacute", "Ocirc", "Ocy", "Odblac", "Ofr", "Ograve", "Omacr", "Omega", "Omicron", "Oopf", "OpenCurlyDoubleQuote", "OpenCurlyQuote", "Or", "Oscr", "Oslash", "Otilde", 
+"Otimes", "Ouml", "OverBar", "OverBrace", "OverBracket", "OverParenthesis", "PartialD", "Pcy", "Pfr", "Phi", "Pi", "PlusMinus", "Poincareplane", "Popf", "Pr", "Precedes", "PrecedesEqual", "PrecedesSlantEqual", "PrecedesTilde", "Prime", "Product", "Proportion", "Proportional", "Pscr", "Psi", "QUOT", "Qfr", "Qopf", "Qscr", 
+"RBarr", "REG", "Racute", "Rang", "Rarr", "Rarrtl", "Rcaron", "Rcedil", "Rcy", "Re", "ReverseElement", "ReverseEquilibrium", "ReverseUpEquilibrium", "Rfr", "Rho", "RightAngleBracket", "RightArrow", "RightArrowBar", "RightArrowLeftArrow", "RightCeiling", "RightDoubleBracket", "RightDownTeeVector", "RightDownVector", "RightDownVectorBar", 
+"RightFloor", "RightTee", "RightTeeArrow", "RightTeeVector", "RightTriangle", "RightTriangleBar", "RightTriangleEqual", "RightUpDownVector", "RightUpTeeVector", "RightUpVector", "RightUpVectorBar", "RightVector", "RightVectorBar", "Rightarrow", "Ropf", "RoundImplies", "Rrightarrow", "Rscr", "Rsh", "RuleDelayed", "SHCHcy", 
+"SHcy", "SOFTcy", "Sacute", "Sc", "Scaron", "Scedil", "Scirc", "Scy", "Sfr", "ShortDownArrow", "ShortLeftArrow", "ShortRightArrow", "ShortUpArrow", "Sigma", "SmallCircle", "Sopf", "Sqrt", "Square", "SquareIntersection", "SquareSubset", "SquareSubsetEqual", "SquareSuperset", "SquareSupersetEqual", "SquareUnion", "Sscr", 
+"Star", "Sub", "Subset", "SubsetEqual", "Succeeds", "SucceedsEqual", "SucceedsSlantEqual", "SucceedsTilde", "SuchThat", "Sum", "Sup", "Superset", "SupersetEqual", "Supset", "THORN", "TRADE", "TSHcy", "TScy", "Tab", "Tau", "Tcaron", "Tcedil", "Tcy", "Tfr", "Therefore", "Theta", "ThinSpace", "Tilde", "TildeEqual", "TildeFullEqual", 
+"TildeTilde", "Topf", "TripleDot", "Tscr", "Tstrok", "Uacute", "Uarr", "Uarrocir", "Ubrcy", "Ubreve", "Ucirc", "Ucy", "Udblac", "Ufr", "Ugrave", "Umacr", "UnderBar", "UnderBrace", "UnderBracket", "UnderParenthesis", "Union", "UnionPlus", "Uogon", "Uopf", "UpArrow", "UpArrowBar", "UpArrowDownArrow", "UpDownArrow", "UpEquilibrium", 
+"UpTee", "UpTeeArrow", "Uparrow", "Updownarrow", "UpperLeftArrow", "UpperRightArrow", "Upsi", "Upsilon", "Uring", "Uscr", "Utilde", "Uuml", "VDash", "Vbar", "Vcy", "Vdash", "Vdashl", "Vee", "Verbar", "Vert", "VerticalBar", "VerticalLine", "VerticalSeparator", "VerticalTilde", "VeryThinSpace", "Vfr", "Vopf", "Vscr", "Vvdash", 
+"Wcirc", "Wedge", "Wfr", "Wopf", "Wscr", "Xfr", "Xi", "Xopf", "Xscr", "YAcy", "YIcy", "YUcy", "Yacute", "Ycirc", "Ycy", "Yfr", "Yopf", "Yscr", "Yuml", "ZHcy", "Zacute", "Zcaron", "Zcy", "Zdot", "ZeroWidthSpace", "Zeta", "Zfr", "Zopf", "Zscr", "aacute", "abreve", "ac", "acd", "acirc", "acute", "acy", "aelig", "af", "afr", 
+"agrave", "alefsym", "aleph", "alpha", "amacr", "amalg", "and", "andand", "andd", "andslope", "andv", "ang", "ange", "angle", "angmsd", "angmsdaa", "angmsdab", "angmsdac", "angmsdad", "angmsdae", "angmsdaf", "angmsdag", "angmsdah", "angrt", "angrtvb", "angrtvbd", "angsph", "angst", "angzarr", "aogon", "aopf", "ap", "apE", 
+"apacir", "ape", "apid", "approx", "approxeq", "aring", "ascr", "ast", "asymp", "asympeq", "atilde", "auml", "awconint", "awint", "bNot", "backcong", "backepsilon", "backprime", "backsim", "backsimeq", "barvee", "barwed", "barwedge", "bbrk", "bbrktbrk", "bcong", "bcy", "bdquo", "becaus", "because", "bemptyv", "bepsi", 
+"bernou", "beta", "beth", "between", "bfr", "bigcap", "bigcirc", "bigcup", "bigodot", "bigoplus", "bigotimes", "bigsqcup", "bigstar", "bigtriangledown", "bigtriangleup", "biguplus", "bigvee", "bigwedge", "bkarow", "blacklozenge", "blacksquare", "blacktriangle", "blacktriangledown", "blacktriangleleft", "blacktriangleright", 
+"blank", "blk12", "blk14", "blk34", "block", "bnot", "bopf", "bot", "bottom", "bowtie", "boxDL", "boxDR", "boxDl", "boxDr", "boxH", "boxHD", "boxHU", "boxHd", "boxHu", "boxUL", "boxUR", "boxUl", "boxUr", "boxV", "boxVH", "boxVL", "boxVR", "boxVh", "boxVl", "boxVr", "boxbox", "boxdL", "boxdR", "boxdl", "boxdr", "boxh", 
+"boxhD", "boxhU", "boxhd", "boxhu", "boxminus", "boxplus", "boxtimes", "boxuL", "boxuR", "boxul", "boxur", "boxv", "boxvH", "boxvL", "boxvR", "boxvh", "boxvl", "boxvr", "bprime", "breve", "brvbar", "bscr", "bsemi", "bsim", "bsime", "bsol", "bsolb", "bsolhsub", "bull", "bullet", "bump", "bumpE", "bumpe", "bumpeq", "cacute", 
+"cap", "capand", "capbrcup", "capcap", "capcup", "capdot", "caret", "caron", "ccaps", "ccaron", "ccedil", "ccirc", "ccups", "ccupssm", "cdot", "cedil", "cemptyv", "cent", "centerdot", "cfr", "chcy", "check", "checkmark", "chi", "cir", "cirE", "circ", "circeq", "circlearrowleft", "circlearrowright", "circledR", "circledS", 
+"circledast", "circledcirc", "circleddash", "cire", "cirfnint", "cirmid", "cirscir", "clubs", "clubsuit", "colon", "colone", "coloneq", "comma", "commat", "comp", "compfn", "complement", "complexes", "cong", "congdot", "conint", "copf", "coprod", "copy", "copysr", "crarr", "cross", "cscr", "csub", "csube", "csup", "csupe", 
+"ctdot", "cudarrl", "cudarrr", "cuepr", "cuesc", "cularr", "cularrp", "cup", "cupbrcap", "cupcap", "cupcup", "cupdot", "cupor", "curarr", "curarrm", "curlyeqprec", "curlyeqsucc", "curlyvee", "curlywedge", "curren", "curvearrowleft", "curvearrowright", "cuvee", "cuwed", "cwconint", "cwint", "cylcty", "dArr", "dHar", "dagger", 
+"daleth", "darr", "dash", "dashv", "dbkarow", "dblac", "dcaron", "dcy", "dd", "ddagger", "ddarr", "ddotseq", "deg", "delta", "demptyv", "dfisht", "dfr", "dharl", "dharr", "diam", "diamond", "diamondsuit", "diams", "die", "digamma", "disin", "div", "divide", "divideontimes", "divonx", "djcy", "dlcorn", "dlcrop", "dollar", 
+"dopf", "dot", "doteq", "doteqdot", "dotminus", "dotplus", "dotsquare", "doublebarwedge", "downarrow", "downdownarrows", "downharpoonleft", "downharpoonright", "drbkarow", "drcorn", "drcrop", "dscr", "dscy", "dsol", "dstrok", "dtdot", "dtri", "dtrif", "duarr", "duhar", "dwangle", "dzcy", "dzigrarr", "eDDot", "eDot", "eacute", 
+"easter", "ecaron", "ecir", "ecirc", "ecolon", "ecy", "edot", "ee", "efDot", "efr", "eg", "egrave", "egs", "egsdot", "el", "elinters", "ell", "els", "elsdot", "emacr", "empty", "emptyset", "emptyv", "emsp", "emsp13", "emsp14", "eng", "ensp", "eogon", "eopf", "epar", "eparsl", "eplus", "epsi", "epsilon", "epsiv", "eqcirc", 
+"eqcolon", "eqsim", "eqslantgtr", "eqslantless", "equals", "equest", "equiv", "equivDD", "eqvparsl", "erDot", "erarr", "escr", "esdot", "esim", "eta", "eth", "euml", "euro", "excl", "exist", "expectation", "exponentiale", "fallingdotseq", "fcy", "female", "ffilig", "fflig", "ffllig", "ffr", "filig", "flat", "fllig", "fltns", 
+"fnof", "fopf", "forall", "fork", "forkv", "fpartint", "frac12", "frac13", "frac14", "frac15", "frac16", "frac18", "frac23", "frac25", "frac34", "frac35", "frac38", "frac45", "frac56", "frac58", "frac78", "frasl", "frown", "fscr", "gE", "gEl", "gacute", "gamma", "gammad", "gap", "gbreve", "gcirc", "gcy", "gdot", "ge", 
+"gel", "geq", "geqq", "geqslant", "ges", "gescc", "gesdot", "gesdoto", "gesdotol", "gesles", "gfr", "gg", "ggg", "gimel", "gjcy", "gl", "glE", "gla", "glj", "gnE", "gnap", "gnapprox", "gne", "gneq", "gneqq", "gnsim", "gopf", "grave", "gscr", "gsim", "gsime", "gsiml", "gtcc", "gtcir", "gtdot", "gtlPar", "gtquest", "gtrapprox", 
+"gtrarr", "gtrdot", "gtreqless", "gtreqqless", "gtrless", "gtrsim", "hArr", "hairsp", "half", "hamilt", "hardcy", "harr", "harrcir", "harrw", "hbar", "hcirc", "hearts", "heartsuit", "hellip", "hercon", "hfr", "hksearow", "hkswarow", "hoarr", "homtht", "hookleftarrow", "hookrightarrow", "hopf", "horbar", "hscr", "hslash", 
+"hstrok", "hybull", "hyphen", "iacute", "ic", "icirc", "icy", "iecy", "iexcl", "iff", "ifr", "igrave", "ii", "iiiint", "iiint", "iinfin", "iiota", "ijlig", "imacr", "image", "imagline", "imagpart", "imath", "imof", "imped", "in", "incare", "infin", "infintie", "inodot", "int", "intcal", "integers", "intercal", "intlarhk", 
+"intprod", "iocy", "iogon", "iopf", "iota", "iprod", "iquest", "iscr", "isin", "isinE", "isindot", "isins", "isinsv", "isinv", "it", "itilde", "iukcy", "iuml", "jcirc", "jcy", "jfr", "jmath", "jopf", "jscr", "jsercy", "jukcy", "kappa", "kappav", "kcedil", "kcy", "kfr", "kgreen", "khcy", "kjcy", "kopf", "kscr", "lAarr", 
+"lArr", "lAtail", "lBarr", "lE", "lEg", "lHar", "lacute", "laemptyv", "lagran", "lambda", "lang", "langd", "langle", "lap", "laquo", "larr", "larrb", "larrbfs", "larrfs", "larrhk", "larrlp", "larrpl", "larrsim", "larrtl", "lat", "latail", "late", "lbarr", "lbbrk", "lbrace", "lbrack", "lbrke", "lbrksld", "lbrkslu", "lcaron", 
+"lcedil", "lceil", "lcub", "lcy", "ldca", "ldquo", "ldquor", "ldrdhar", "ldrushar", "ldsh", "le", "leftarrow", "leftarrowtail", "leftharpoondown", "leftharpoonup", "leftleftarrows", "leftrightarrow", "leftrightarrows", "leftrightharpoons", "leftrightsquigarrow", "leftthreetimes", "leg", "leq", "leqq", "leqslant", "les", 
+"lescc", "lesdot", "lesdoto", "lesdotor", "lesges", "lessapprox", "lessdot", "lesseqgtr", "lesseqqgtr", "lessgtr", "lesssim", "lfisht", "lfloor", "lfr", "lg", "lgE", "lhard", "lharu", "lharul", "lhblk", "ljcy", "ll", "llarr", "llcorner", "llhard", "lltri", "lmidot", "lmoust", "lmoustache", "lnE", "lnap", "lnapprox", "lne", 
+"lneq", "lneqq", "lnsim", "loang", "loarr", "lobrk", "longleftarrow", "longleftrightarrow", "longmapsto", "longrightarrow", "looparrowleft", "looparrowright", "lopar", "lopf", "loplus", "lotimes", "lowast", "lowbar", "loz", "lozenge", "lozf", "lpar", "lparlt", "lrarr", "lrcorner", "lrhar", "lrhard", "lrm", "lrtri", "lsaquo", 
+"lscr", "lsh", "lsim", "lsime", "lsimg", "lsqb", "lsquo", "lsquor", "lstrok", "ltcc", "ltcir", "ltdot", "lthree", "ltimes", "ltlarr", "ltquest", "ltrPar", "ltri", "ltrie", "ltrif", "lurdshar", "luruhar", "mDDot", "macr", "male", "malt", "maltese", "map", "mapsto", "mapstodown", "mapstoleft", "mapstoup", "marker", "mcomma", 
+"mcy", "mdash", "measuredangle", "mfr", "mho", "micro", "mid", "midast", "midcir", "middot", "minus", "minusb", "minusd", "minusdu", "mlcp", "mldr", "mnplus", "models", "mopf", "mp", "mscr", "mstpos", "mu", "multimap", "mumap", "nLeftarrow", "nLeftrightarrow", "nRightarrow", "nVDash", "nVdash", "nabla", "nacute", "nap", 
+"napos", "napprox", "natur", "natural", "naturals", "nbsp", "ncap", "ncaron", "ncedil", "ncong", "ncup", "ncy", "ndash", "ne", "neArr", "nearhk", "nearr", "nearrow", "nequiv", "nesear", "nexist", "nexists", "nfr", "nge", "ngeq", "ngsim", "ngt", "ngtr", "nhArr", "nharr", "nhpar", "ni", "nis", "nisd", "niv", "njcy", "nlArr", 
+"nlarr", "nldr", "nle", "nleftarrow", "nleftrightarrow", "nleq", "nless", "nlsim", "nlt", "nltri", "nltrie", "nmid", "nopf", "not", "notin", "notinva", "notinvb", "notinvc", "notni", "notniva", "notnivb", "notnivc", "npar", "nparallel", "npolint", "npr", "nprcue", "nprec", "nrArr", "nrarr", "nrightarrow", "nrtri", "nrtrie", 
+"nsc", "nsccue", "nscr", "nshortmid", "nshortparallel", "nsim", "nsime", "nsimeq", "nsmid", "nspar", "nsqsube", "nsqsupe", "nsub", "nsube", "nsubseteq", "nsucc", "nsup", "nsupe", "nsupseteq", "ntgl", "ntilde", "ntlg", "ntriangleleft", "ntrianglelefteq", "ntriangleright", "ntrianglerighteq", "nu", "num", "numero", "numsp", 
+"nvDash", "nvHarr", "nvdash", "nvinfin", "nvlArr", "nvrArr", "nwArr", "nwarhk", "nwarr", "nwarrow", "nwnear", "oS", "oacute", "oast", "ocir", "ocirc", "ocy", "odash", "odblac", "odiv", "odot", "odsold", "oelig", "ofcir", "ofr", "ogon", "ograve", "ogt", "ohbar", "ohm", "oint", "olarr", "olcir", "olcross", "oline", "olt", 
+"omacr", "omega", "omicron", "omid", "ominus", "oopf", "opar", "operp", "oplus", "or", "orarr", "ord", "order", "orderof", "ordf", "ordm", "origof", "oror", "orslope", "orv", "oscr", "oslash", "osol", "otilde", "otimes", "otimesas", "ouml", "ovbar", "par", "para", "parallel", "parsim", "parsl", "part", "pcy", "percnt", 
+"period", "permil", "perp", "pertenk", "pfr", "phi", "phiv", "phmmat", "phone", "pi", "pitchfork", "piv", "planck", "planckh", "plankv", "plus", "plusacir", "plusb", "pluscir", "plusdo", "plusdu", "pluse", "plusmn", "plussim", "plustwo", "pm", "pointint", "popf", "pound", "pr", "prE", "prap", "prcue", "pre", "prec", "precapprox", 
+"preccurlyeq", "preceq", "precnapprox", "precneqq", "precnsim", "precsim", "prime", "primes", "prnE", "prnap", "prnsim", "prod", "profalar", "profline", "profsurf", "prop", "propto", "prsim", "prurel", "pscr", "psi", "puncsp", "qfr", "qint", "qopf", "qprime", "qscr", "quaternions", "quatint", "quest", "questeq", "rAarr", 
+"rArr", "rAtail", "rBarr", "rHar", "racute", "radic", "raemptyv", "rang", "rangd", "range", "rangle", "raquo", "rarr", "rarrap", "rarrb", "rarrbfs", "rarrc", "rarrfs", "rarrhk", "rarrlp", "rarrpl", "rarrsim", "rarrtl", "rarrw", "ratail", "ratio", "rationals", "rbarr", "rbbrk", "rbrace", "rbrack", "rbrke", "rbrksld", "rbrkslu", 
+"rcaron", "rcedil", "rceil", "rcub", "rcy", "rdca", "rdldhar", "rdquo", "rdquor", "rdsh", "real", "realine", "realpart", "reals", "rect", "reg", "rfisht", "rfloor", "rfr", "rhard", "rharu", "rharul", "rho", "rhov", "rightarrow", "rightarrowtail", "rightharpoondown", "rightharpoonup", "rightleftarrows", "rightleftharpoons", 
+"rightrightarrows", "rightsquigarrow", "rightthreetimes", "ring", "risingdotseq", "rlarr", "rlhar", "rlm", "rmoust", "rmoustache", "rnmid", "roang", "roarr", "robrk", "ropar", "ropf", "roplus", "rotimes", "rpar", "rpargt", "rppolint", "rrarr", "rsaquo", "rscr", "rsh", "rsqb", "rsquo", "rsquor", "rthree", "rtimes", "rtri", 
+"rtrie", "rtrif", "rtriltri", "ruluhar", "rx", "sacute", "sbquo", "sc", "scE", "scap", "scaron", "sccue", "sce", "scedil", "scirc", "scnE", "scnap", "scnsim", "scpolint", "scsim", "scy", "sdot", "sdotb", "sdote", "seArr", "searhk", "searr", "searrow", "sect", "semi", "seswar", "setminus", "setmn", "sext", "sfr", "sfrown", 
+"sharp", "shchcy", "shcy", "shortmid", "shortparallel", "shy", "sigma", "sigmaf", "sigmav", "sim", "simdot", "sime", "simeq", "simg", "simgE", "siml", "simlE", "simne", "simplus", "simrarr", "slarr", "smallsetminus", "smashp", "smeparsl", "smid", "smile", "smt", "smte", "softcy", "sol", "solb", "solbar", "sopf", "spades", 
+"spadesuit", "spar", "sqcap", "sqcup", "sqsub", "sqsube", "sqsubset", "sqsubseteq", "sqsup", "sqsupe", "sqsupset", "sqsupseteq", "squ", "square", "squarf", "squf", "srarr", "sscr", "ssetmn", "ssmile", "sstarf", "star", "starf", "straightepsilon", "straightphi", "strns", "sub", "subE", "subdot", "sube", "subedot", "submult", 
+"subnE", "subne", "subplus", "subrarr", "subset", "subseteq", "subseteqq", "subsetneq", "subsetneqq", "subsim", "subsub", "subsup", "succ", "succapprox", "succcurlyeq", "succeq", "succnapprox", "succneqq", "succnsim", "succsim", "sum", "sung", "sup", "sup1", "sup2", "sup3", "supE", "supdot", "supdsub", "supe", "supedot", 
+"suphsol", "suphsub", "suplarr", "supmult", "supnE", "supne", "supplus", "supset", "supseteq", "supseteqq", "supsetneq", "supsetneqq", "supsim", "supsub", "supsup", "swArr", "swarhk", "swarr", "swarrow", "swnwar", "szlig", "target", "tau", "tbrk", "tcaron", "tcedil", "tcy", "tdot", "telrec", "tfr", "there4", "therefore", 
+"theta", "thetasym", "thetav", "thickapprox", "thicksim", "thinsp", "thkap", "thksim", "thorn", "tilde", "times", "timesb", "timesbar", "timesd", "tint", "toea", "top", "topbot", "topcir", "topf", "topfork", "tosa", "tprime", "trade", "triangle", "triangledown", "triangleleft", "trianglelefteq", "triangleq", "triangleright", 
+"trianglerighteq", "tridot", "trie", "triminus", "triplus", "trisb", "tritime", "trpezium", "tscr", "tscy", "tshcy", "tstrok", "twixt", "twoheadleftarrow", "twoheadrightarrow", "uArr", "uHar", "uacute", "uarr", "ubrcy", "ubreve", "ucirc", "ucy", "udarr", "udblac", "udhar", "ufisht", "ufr", "ugrave", "uharl", "uharr", "uhblk", 
+"ulcorn", "ulcorner", "ulcrop", "ultri", "umacr", "uml", "uogon", "uopf", "uparrow", "updownarrow", "upharpoonleft", "upharpoonright", "uplus", "upsi", "upsih", "upsilon", "upuparrows", "urcorn", "urcorner", "urcrop", "uring", "urtri", "uscr", "utdot", "utilde", "utri", "utrif", "uuarr", "uuml", "uwangle", "vArr", "vBar", 
+"vBarv", "vDash", "vangrt", "varepsilon", "varkappa", "varnothing", "varphi", "varpi", "varpropto", "varr", "varrho", "varsigma", "vartheta", "vartriangleleft", "vartriangleright", "vcy", "vdash", "vee", "veebar", "veeeq", "vellip", "verbar", "vert", "vfr", "vltri", "vopf", "vprop", "vrtri", "vscr", "vzigzag", "wcirc", 
+"wedbar", "wedge", "wedgeq", "weierp", "wfr", "wopf", "wp", "wr", "wreath", "wscr", "xcap", "xcirc", "xcup", "xdtri", "xfr", "xhArr", "xharr", "xi", "xlArr", "xlarr", "xmap", "xnis", "xodot", "xopf", "xoplus", "xotime", "xrArr", "xrarr", "xscr", "xsqcup", "xuplus", "xutri", "xvee", "xwedge", "yacute", "yacy", "ycirc", 
+"ycy", "yen", "yfr", "yicy", "yopf", "yscr", "yucy", "yuml", "zacute", "zcaron", "zcy", "zdot", "zeetrf", "zeta", "zfr", "zhcy", "zigrarr", "zopf", "zscr", "zwj", "zwnj", ];
 
 immutable dchar[] availableEntitiesValues =
-['\u00c6', '\u00c6', '\u0026', '\u0026', '\u00c1', '\u00c1', '\u0102', '\u0102', '\u00c2', '\u00c2', '\u0410', '\u0410', '\U0001d504', '\U0001d504', '\u00c0', '\u00c0', '\u0391', '\u0391', '\u0100', '\u0100', '\u2a53', '\u2a53', '\u0104', '\u0104', '\U0001d538', '\U0001d538', '\u2061', '\u2061', '\u00c5', '\u00c5', '\U0001d49c', '\U0001d49c', '\u2254', '\u2254', '\u00c3', 
-'\u00c3', '\u00c4', '\u00c4', '\u2216', '\u2216', '\u2ae7', '\u2ae7', '\u2306', '\u2306', '\u0411', '\u0411', '\u2235', '\u2235', '\u212c', '\u212c', '\u0392', '\u0392', '\U0001d505', '\U0001d505', '\U0001d539', '\U0001d539', '\u02d8', '\u02d8', '\u212c', '\u212c', '\u224e', '\u224e', '\u0427', '\u0427', '\u00a9', '\u00a9', '\u0106', '\u0106', '\u22d2', '\u22d2', '\u2145', 
-'\u2145', '\u212d', '\u212d', '\u010c', '\u010c', '\u00c7', '\u00c7', '\u0108', '\u0108', '\u2230', '\u2230', '\u010a', '\u010a', '\u00b8', '\u00b8', '\u00b7', '\u00b7', '\u212d', '\u212d', '\u03a7', '\u03a7', '\u2299', '\u2299', '\u2296', '\u2296', '\u2295', '\u2295', '\u2297', '\u2297', 
-'\u2232', '\u2232', '\u201d', '\u201d', '\u2019', '\u2019', '\u2237', '\u2237', '\u2a74', '\u2a74', '\u2261', '\u2261', '\u222f', '\u222f', '\u222e', '\u222e', '\u2102', '\u2102', '\u2210', '\u2210', '\u2233', 
-'\u2233', '\u2a2f', '\u2a2f', '\U0001d49e', '\U0001d49e', '\u22d3', '\u22d3', '\u224d', '\u224d', '\u2145', '\u2145', '\u2911', '\u2911', '\u0402', '\u0402', '\u0405', '\u0405', '\u040f', '\u040f', '\u2021', '\u2021', '\u21a1', '\u21a1', '\u2ae4', '\u2ae4', '\u010e', '\u010e', '\u0414', '\u0414', '\u2207', '\u2207', '\u0394', '\u0394', '\U0001d507', '\U0001d507', 
-'\u00b4', '\u00b4', '\u02d9', '\u02d9', '\u02dd', '\u02dd', '\u0060', '\u0060', '\u02dc', '\u02dc', '\u22c4', '\u22c4', '\u2146', '\u2146', '\U0001d53b', '\U0001d53b', '\u00a8', '\u00a8', '\u20dc', '\u20dc', '\u2250', 
-'\u2250', '\u222f', '\u222f', '\u00a8', '\u00a8', '\u21d3', '\u21d3', '\u21d0', '\u21d0', '\u21d4', '\u21d4', '\u2ae4', '\u2ae4', '\u27f8', '\u27f8', '\u27fa', 
-'\u27fa', '\u27f9', '\u27f9', '\u21d2', '\u21d2', '\u22a8', '\u22a8', '\u21d1', '\u21d1', '\u21d5', '\u21d5', '\u2225', '\u2225', '\u2193', '\u2193', '\u2913', '\u2913', 
-'\u21f5', '\u21f5', '\u0311', '\u0311', '\u2950', '\u2950', '\u295e', '\u295e', '\u21bd', '\u21bd', '\u2956', '\u2956', '\u295f', '\u295f', '\u21c1', '\u21c1', '\u2957', 
-'\u2957', '\u22a4', '\u22a4', '\u21a7', '\u21a7', '\u21d3', '\u21d3', '\U0001d49f', '\U0001d49f', '\u0110', '\u0110', '\u014a', '\u014a', '\u00d0', '\u00d0', '\u00c9', '\u00c9', '\u011a', '\u011a', '\u00ca', '\u00ca', '\u042d', '\u042d', '\u0116', '\u0116', '\U0001d508', '\U0001d508', '\u00c8', '\u00c8', '\u2208', '\u2208', '\u0112', '\u0112', 
-'\u25fb', '\u25fb', '\u25ab', '\u25ab', '\u0118', '\u0118', '\U0001d53c', '\U0001d53c', '\u0395', '\u0395', '\u2a75', '\u2a75', '\u2242', '\u2242', '\u21cc', '\u21cc', '\u2130', '\u2130', '\u2a73', '\u2a73', '\u0397', '\u0397', '\u00cb', '\u00cb', '\u2203', '\u2203', '\u2147', '\u2147', 
-'\u0424', '\u0424', '\U0001d509', '\U0001d509', '\u25fc', '\u25fc', '\u25aa', '\u25aa', '\U0001d53d', '\U0001d53d', '\u2200', '\u2200', '\u2131', '\u2131', '\u2131', '\u2131', '\u0403', '\u0403', '\u003e', '\u003e', '\u0393', '\u0393', '\u03dc', '\u03dc', '\u011e', '\u011e', '\u0122', '\u0122', '\u011c', '\u011c', 
-'\u0413', '\u0413', '\u0120', '\u0120', '\U0001d50a', '\U0001d50a', '\u22d9', '\u22d9', '\U0001d53e', '\U0001d53e', '\u2265', '\u2265', '\u22db', '\u22db', '\u2267', '\u2267', '\u2aa2', '\u2aa2', '\u2277', '\u2277', '\u2a7e', '\u2a7e', '\u2273', '\u2273', 
-'\U0001d4a2', '\U0001d4a2', '\u226b', '\u226b', '\u042a', '\u042a', '\u02c7', '\u02c7', '\u005e', '\u005e', '\u0124', '\u0124', '\u210c', '\u210c', '\u210b', '\u210b', '\u210d', '\u210d', '\u2500', '\u2500', '\u210b', '\u210b', '\u0126', '\u0126', '\u224e', '\u224e', '\u224f', '\u224f', '\u0415', '\u0415', '\u0132', '\u0132', 
-'\u0401', '\u0401', '\u00cd', '\u00cd', '\u00ce', '\u00ce', '\u0418', '\u0418', '\u0130', '\u0130', '\u2111', '\u2111', '\u00cc', '\u00cc', '\u2111', '\u2111', '\u012a', '\u012a', '\u2148', '\u2148', '\u21d2', '\u21d2', '\u222c', '\u222c', '\u222b', '\u222b', '\u22c2', '\u22c2', '\u2063', '\u2063', '\u2062', 
-'\u2062', '\u012e', '\u012e', '\U0001d540', '\U0001d540', '\u0399', '\u0399', '\u2110', '\u2110', '\u0128', '\u0128', '\u0406', '\u0406', '\u00cf', '\u00cf', '\u0134', '\u0134', '\u0419', '\u0419', '\U0001d50d', '\U0001d50d', '\U0001d541', '\U0001d541', '\U0001d4a5', '\U0001d4a5', '\u0408', '\u0408', '\u0404', '\u0404', '\u0425', '\u0425', '\u040c', '\u040c', '\u039a', '\u039a', '\u0136', '\u0136', 
-'\u041a', '\u041a', '\U0001d50e', '\U0001d50e', '\U0001d542', '\U0001d542', '\U0001d4a6', '\U0001d4a6', '\u0409', '\u0409', '\u003c', '\u003c', '\u0139', '\u0139', '\u039b', '\u039b', '\u27ea', '\u27ea', '\u2112', '\u2112', '\u219e', '\u219e', '\u013d', '\u013d', '\u013b', '\u013b', '\u041b', '\u041b', '\u27e8', '\u27e8', '\u2190', '\u2190', '\u21e4', 
-'\u21e4', '\u21c6', '\u21c6', '\u2308', '\u2308', '\u27e6', '\u27e6', '\u2961', '\u2961', '\u21c3', '\u21c3', '\u2959', '\u2959', '\u230a', '\u230a', '\u2194', '\u2194', '\u294e', 
-'\u294e', '\u22a3', '\u22a3', '\u21a4', '\u21a4', '\u295a', '\u295a', '\u22b2', '\u22b2', '\u29cf', '\u29cf', '\u22b4', '\u22b4', '\u2951', '\u2951', '\u2960', '\u2960', '\u21bf', '\u21bf', 
-'\u2958', '\u2958', '\u21bc', '\u21bc', '\u2952', '\u2952', '\u21d0', '\u21d0', '\u21d4', '\u21d4', '\u22da', '\u22da', '\u2266', '\u2266', '\u2276', '\u2276', '\u2aa1', '\u2aa1', '\u2a7d', '\u2a7d', 
-'\u2272', '\u2272', '\U0001d50f', '\U0001d50f', '\u22d8', '\u22d8', '\u21da', '\u21da', '\u013f', '\u013f', '\u27f5', '\u27f5', '\u27f7', '\u27f7', '\u27f6', '\u27f6', '\u27f8', '\u27f8', '\u27fa', '\u27fa', '\u27f9', '\u27f9', 
-'\U0001d543', '\U0001d543', '\u2199', '\u2199', '\u2198', '\u2198', '\u2112', '\u2112', '\u21b0', '\u21b0', '\u0141', '\u0141', '\u226a', '\u226a', '\u2905', '\u2905', '\u041c', '\u041c', '\u205f', '\u205f', '\u2133', '\u2133', '\U0001d510', '\U0001d510', '\u2213', '\u2213', '\U0001d544', '\U0001d544', '\u2133', '\u2133', '\u039c', '\u039c', 
-'\u040a', '\u040a', '\u0143', '\u0143', '\u0147', '\u0147', '\u0145', '\u0145', '\u041d', '\u041d', '\u200b', '\u200b', '\u200b', '\u200b', '\u200b', '\u200b', '\u200b', '\u200b', '\u226b', '\u226b', 
-'\u226a', '\u226a', '\u000a', '\u000a', '\U0001d511', '\U0001d511', '\u2060', '\u2060', '\u00a0', '\u00a0', '\u2115', '\u2115', '\u2aec', '\u2aec', '\u2262', '\u2262', '\u226d', '\u226d', '\u2226', '\u2226', '\u2209', '\u2209', '\u2260', '\u2260', 
-'\u2204', '\u2204', '\u226f', '\u226f', '\u2271', '\u2271', '\u2279', '\u2279', '\u2275', '\u2275', '\u22ea', '\u22ea', '\u22ec', '\u22ec', '\u226e', '\u226e', '\u2270', '\u2270', '\u2278', 
-'\u2278', '\u2274', '\u2274', '\u2280', '\u2280', '\u22e0', '\u22e0', '\u220c', '\u220c', '\u22eb', '\u22eb', '\u22ed', '\u22ed', '\u22e2', '\u22e2', '\u22e3', 
-'\u22e3', '\u2288', '\u2288', '\u2281', '\u2281', '\u22e1', '\u22e1', '\u2289', '\u2289', '\u2241', '\u2241', '\u2244', '\u2244', '\u2247', '\u2247', '\u2249', '\u2249', '\u2224', 
-'\u2224', '\U0001d4a9', '\U0001d4a9', '\u00d1', '\u00d1', '\u039d', '\u039d', '\u0152', '\u0152', '\u00d3', '\u00d3', '\u00d4', '\u00d4', '\u041e', '\u041e', '\u0150', '\u0150', '\U0001d512', '\U0001d512', '\u00d2', '\u00d2', '\u014c', '\u014c', '\u03a9', '\u03a9', '\u039f', '\u039f', '\U0001d546', '\U0001d546', '\u201c', '\u201c', '\u2018', 
-'\u2018', '\u2a54', '\u2a54', '\U0001d4aa', '\U0001d4aa', '\u00d8', '\u00d8', '\u00d5', '\u00d5', '\u2a37', '\u2a37', '\u00d6', '\u00d6', '\u203e', '\u203e', '\u23de', '\u23de', '\u23b4', '\u23b4', '\u23dc', '\u23dc', '\u2202', '\u2202', '\u041f', '\u041f', '\U0001d513', '\U0001d513', '\u03a6', '\u03a6', '\u03a0', '\u03a0', '\u00b1', 
-'\u00b1', '\u210c', '\u210c', '\u2119', '\u2119', '\u2abb', '\u2abb', '\u227a', '\u227a', '\u2aaf', '\u2aaf', '\u227c', '\u227c', '\u227e', '\u227e', '\u2033', '\u2033', '\u220f', '\u220f', '\u2237', '\u2237', '\u221d', '\u221d', '\U0001d4ab', '\U0001d4ab', 
-'\u03a8', '\u03a8', '\u0022', '\u0022', '\U0001d514', '\U0001d514', '\u211a', '\u211a', '\U0001d4ac', '\U0001d4ac', '\u2910', '\u2910', '\u00ae', '\u00ae', '\u0154', '\u0154', '\u27eb', '\u27eb', '\u21a0', '\u21a0', '\u2916', '\u2916', '\u0158', '\u0158', '\u0156', '\u0156', '\u0420', '\u0420', '\u211c', '\u211c', '\u220b', '\u220b', '\u21cb', '\u21cb', 
-'\u296f', '\u296f', '\u211c', '\u211c', '\u03a1', '\u03a1', '\u27e9', '\u27e9', '\u2192', '\u2192', '\u21e5', '\u21e5', '\u21c4', '\u21c4', '\u2309', '\u2309', '\u27e7', '\u27e7', '\u295d', 
-'\u295d', '\u21c2', '\u21c2', '\u2955', '\u2955', '\u230b', '\u230b', '\u22a2', '\u22a2', '\u21a6', '\u21a6', '\u295b', '\u295b', '\u22b3', '\u22b3', '\u29d0', '\u29d0', '\u22b5', 
-'\u22b5', '\u294f', '\u294f', '\u295c', '\u295c', '\u21be', '\u21be', '\u2954', '\u2954', '\u21c0', '\u21c0', '\u2953', '\u2953', '\u21d2', '\u21d2', '\u211d', '\u211d', '\u2970', '\u2970', 
-'\u21db', '\u21db', '\u211b', '\u211b', '\u21b1', '\u21b1', '\u29f4', '\u29f4', '\u0429', '\u0429', '\u0428', '\u0428', '\u042c', '\u042c', '\u015a', '\u015a', '\u2abc', '\u2abc', '\u0160', '\u0160', '\u015e', '\u015e', '\u015c', '\u015c', '\u0421', '\u0421', '\U0001d516', '\U0001d516', '\u2193', '\u2193', '\u2190', '\u2190', 
-'\u2192', '\u2192', '\u2191', '\u2191', '\u03a3', '\u03a3', '\u2218', '\u2218', '\U0001d54a', '\U0001d54a', '\u221a', '\u221a', '\u25a1', '\u25a1', '\u2293', '\u2293', '\u228f', '\u228f', '\u2291', '\u2291', '\u2290', '\u2290', 
-'\u2292', '\u2292', '\u2294', '\u2294', '\U0001d4ae', '\U0001d4ae', '\u22c6', '\u22c6', '\u22d0', '\u22d0', '\u22d0', '\u22d0', '\u2286', '\u2286', '\u227b', '\u227b', '\u2ab0', '\u2ab0', '\u227d', '\u227d', '\u227f', '\u227f', '\u220b', 
-'\u220b', '\u2211', '\u2211', '\u22d1', '\u22d1', '\u2283', '\u2283', '\u2287', '\u2287', '\u22d1', '\u22d1', '\u00de', '\u00de', '\u2122', '\u2122', '\u040b', '\u040b', '\u0426', '\u0426', '\u0009', '\u0009', '\u03a4', '\u03a4', '\u0164', '\u0164', '\u0162', '\u0162', '\u0422', '\u0422', '\U0001d517', '\U0001d517', '\u2234', '\u2234', '\u0398', '\u0398', 
-'\u2009', '\u2009', '\u223c', '\u223c', '\u2243', '\u2243', '\u2245', '\u2245', '\u2248', '\u2248', '\U0001d54b', '\U0001d54b', '\u20db', '\u20db', '\U0001d4af', '\U0001d4af', '\u0166', '\u0166', '\u00da', '\u00da', '\u219f', '\u219f', '\u2949', '\u2949', '\u040e', '\u040e', '\u016c', '\u016c', '\u00db', 
-'\u00db', '\u0423', '\u0423', '\u0170', '\u0170', '\U0001d518', '\U0001d518', '\u00d9', '\u00d9', '\u016a', '\u016a', '\u005f', '\u005f', '\u23df', '\u23df', '\u23b5', '\u23b5', '\u23dd', '\u23dd', '\u22c3', '\u22c3', '\u228e', '\u228e', '\u0172', '\u0172', '\U0001d54c', '\U0001d54c', '\u2191', '\u2191', '\u2912', 
-'\u2912', '\u21c5', '\u21c5', '\u2195', '\u2195', '\u296e', '\u296e', '\u22a5', '\u22a5', '\u21a5', '\u21a5', '\u21d1', '\u21d1', '\u21d5', '\u21d5', '\u2196', '\u2196', '\u2197', '\u2197', '\u03d2', '\u03d2', '\u03a5', '\u03a5', 
-'\u016e', '\u016e', '\U0001d4b0', '\U0001d4b0', '\u0168', '\u0168', '\u00dc', '\u00dc', '\u22ab', '\u22ab', '\u2aeb', '\u2aeb', '\u0412', '\u0412', '\u22a9', '\u22a9', '\u2ae6', '\u2ae6', '\u22c1', '\u22c1', '\u2016', '\u2016', '\u2016', '\u2016', '\u2223', '\u2223', '\u007c', '\u007c', '\u2758', '\u2758', '\u2240', 
-'\u2240', '\u200a', '\u200a', '\U0001d519', '\U0001d519', '\U0001d54d', '\U0001d54d', '\U0001d4b1', '\U0001d4b1', '\u22aa', '\u22aa', '\u0174', '\u0174', '\u22c0', '\u22c0', '\U0001d51a', '\U0001d51a', '\U0001d54e', '\U0001d54e', '\U0001d4b2', '\U0001d4b2', '\U0001d51b', '\U0001d51b', '\u039e', '\u039e', '\U0001d54f', '\U0001d54f', '\U0001d4b3', '\U0001d4b3', '\u042f', '\u042f', '\u0407', '\u0407', '\u042e', '\u042e', '\u00dd', '\u00dd', 
-'\u0176', '\u0176', '\u042b', '\u042b', '\U0001d51c', '\U0001d51c', '\U0001d550', '\U0001d550', '\U0001d4b4', '\U0001d4b4', '\u0178', '\u0178', '\u0416', '\u0416', '\u0179', '\u0179', '\u017d', '\u017d', '\u0417', '\u0417', '\u017b', '\u017b', '\u200b', '\u200b', '\u0396', '\u0396', '\u2128', '\u2128', '\u2124', '\u2124', '\U0001d4b5', '\U0001d4b5', '\u00e1', '\u00e1', '\u0103', '\u0103', '\u223e', 
-'\u223e', '\u223f', '\u223f', '\u00e2', '\u00e2', '\u00b4', '\u00b4', '\u0430', '\u0430', '\u00e6', '\u00e6', '\u2061', '\u2061', '\U0001d51e', '\U0001d51e', '\u00e0', '\u00e0', '\u2135', '\u2135', '\u2135', '\u2135', '\u03b1', '\u03b1', '\u0101', '\u0101', '\u2a3f', '\u2a3f', '\u2227', '\u2227', '\u2a55', '\u2a55', '\u2a5c', '\u2a5c', '\u2a58', '\u2a58', '\u2a5a', '\u2a5a', '\u2220', 
-'\u2220', '\u29a4', '\u29a4', '\u2220', '\u2220', '\u2221', '\u2221', '\u29a8', '\u29a8', '\u29a9', '\u29a9', '\u29aa', '\u29aa', '\u29ab', '\u29ab', '\u29ac', '\u29ac', '\u29ad', '\u29ad', '\u29ae', '\u29ae', '\u29af', '\u29af', '\u221f', '\u221f', '\u22be', '\u22be', '\u299d', '\u299d', '\u2222', 
-'\u2222', '\u00c5', '\u00c5', '\u237c', '\u237c', '\u0105', '\u0105', '\U0001d552', '\U0001d552', '\u2248', '\u2248', '\u2a70', '\u2a70', '\u2a6f', '\u2a6f', '\u224a', '\u224a', '\u224b', '\u224b', '\u2248', '\u2248', '\u224a', '\u224a', '\u00e5', '\u00e5', '\U0001d4b6', '\U0001d4b6', '\u002a', '\u002a', '\u2248', '\u2248', '\u224d', '\u224d', '\u00e3', '\u00e3', '\u00e4', 
-'\u00e4', '\u2233', '\u2233', '\u2a11', '\u2a11', '\u2aed', '\u2aed', '\u224c', '\u224c', '\u03f6', '\u03f6', '\u2035', '\u2035', '\u223d', '\u223d', '\u22cd', '\u22cd', '\u22bd', '\u22bd', '\u2305', '\u2305', '\u2305', '\u2305', '\u23b5', '\u23b5', '\u23b6', '\u23b6', '\u224c', '\u224c', '\u0431', 
-'\u0431', '\u201e', '\u201e', '\u2235', '\u2235', '\u2235', '\u2235', '\u29b0', '\u29b0', '\u03f6', '\u03f6', '\u212c', '\u212c', '\u03b2', '\u03b2', '\u2136', '\u2136', '\u226c', '\u226c', '\U0001d51f', '\U0001d51f', '\u22c2', '\u22c2', '\u25ef', '\u25ef', '\u22c3', '\u22c3', '\u2a00', '\u2a00', '\u2a01', '\u2a01', '\u2a02', '\u2a02', 
-'\u2a06', '\u2a06', '\u2605', '\u2605', '\u25bd', '\u25bd', '\u25b3', '\u25b3', '\u2a04', '\u2a04', '\u22c1', '\u22c1', '\u22c0', '\u22c0', '\u290d', '\u290d', '\u29eb', '\u29eb', '\u25aa', '\u25aa', '\u25b4', '\u25b4', '\u25be', 
-'\u25be', '\u25c2', '\u25c2', '\u25b8', '\u25b8', '\u2423', '\u2423', '\u2592', '\u2592', '\u2591', '\u2591', '\u2593', '\u2593', '\u2588', '\u2588', '\u2310', '\u2310', '\U0001d553', '\U0001d553', '\u22a5', '\u22a5', '\u22a5', '\u22a5', '\u22c8', '\u22c8', '\u2557', '\u2557', '\u2554', '\u2554', '\u2556', 
-'\u2556', '\u2553', '\u2553', '\u2550', '\u2550', '\u2566', '\u2566', '\u2569', '\u2569', '\u2564', '\u2564', '\u2567', '\u2567', '\u255d', '\u255d', '\u255a', '\u255a', '\u255c', '\u255c', '\u2559', '\u2559', '\u2551', '\u2551', '\u256c', '\u256c', '\u2563', '\u2563', '\u2560', '\u2560', '\u256b', '\u256b', '\u2562', '\u2562', '\u255f', '\u255f', '\u29c9', 
-'\u29c9', '\u2555', '\u2555', '\u2552', '\u2552', '\u2510', '\u2510', '\u250c', '\u250c', '\u2500', '\u2500', '\u2565', '\u2565', '\u2568', '\u2568', '\u252c', '\u252c', '\u2534', '\u2534', '\u229f', '\u229f', '\u229e', '\u229e', '\u22a0', '\u22a0', '\u255b', '\u255b', '\u2558', '\u2558', '\u2518', '\u2518', '\u2514', '\u2514', '\u2502', 
-'\u2502', '\u256a', '\u256a', '\u2561', '\u2561', '\u255e', '\u255e', '\u253c', '\u253c', '\u2524', '\u2524', '\u251c', '\u251c', '\u2035', '\u2035', '\u02d8', '\u02d8', '\u00a6', '\u00a6', '\U0001d4b7', '\U0001d4b7', '\u204f', '\u204f', '\u223d', '\u223d', '\u22cd', '\u22cd', '\u005c', '\u005c', '\u29c5', '\u29c5', '\u27c8', '\u27c8', '\u2022', '\u2022', '\u2022', 
-'\u2022', '\u224e', '\u224e', '\u2aae', '\u2aae', '\u224f', '\u224f', '\u224f', '\u224f', '\u0107', '\u0107', '\u2229', '\u2229', '\u2a44', '\u2a44', '\u2a49', '\u2a49', '\u2a4b', '\u2a4b', '\u2a47', '\u2a47', '\u2a40', '\u2a40', '\u2041', '\u2041', '\u02c7', '\u02c7', '\u2a4d', '\u2a4d', '\u010d', '\u010d', '\u00e7', '\u00e7', '\u0109', 
-'\u0109', '\u2a4c', '\u2a4c', '\u2a50', '\u2a50', '\u010b', '\u010b', '\u00b8', '\u00b8', '\u29b2', '\u29b2', '\u00a2', '\u00a2', '\u00b7', '\u00b7', '\U0001d520', '\U0001d520', '\u0447', '\u0447', '\u2713', '\u2713', '\u2713', '\u2713', '\u03c7', '\u03c7', '\u25cb', '\u25cb', '\u29c3', '\u29c3', '\u02c6', '\u02c6', '\u2257', '\u2257', '\u21ba', 
-'\u21ba', '\u21bb', '\u21bb', '\u00ae', '\u00ae', '\u24c8', '\u24c8', '\u229b', '\u229b', '\u229a', '\u229a', '\u229d', '\u229d', '\u2257', '\u2257', '\u2a10', '\u2a10', '\u2aef', '\u2aef', '\u29c2', '\u29c2', '\u2663', '\u2663', '\u2663', '\u2663', '\u003a', 
-'\u003a', '\u2254', '\u2254', '\u2254', '\u2254', '\u002c', '\u002c', '\u0040', '\u0040', '\u2201', '\u2201', '\u2218', '\u2218', '\u2201', '\u2201', '\u2102', '\u2102', '\u2245', '\u2245', '\u2a6d', '\u2a6d', '\u222e', '\u222e', '\U0001d554', '\U0001d554', '\u2210', '\u2210', '\u00a9', '\u00a9', '\u2117', '\u2117', '\u21b5', '\u21b5', 
-'\u2717', '\u2717', '\U0001d4b8', '\U0001d4b8', '\u2acf', '\u2acf', '\u2ad1', '\u2ad1', '\u2ad0', '\u2ad0', '\u2ad2', '\u2ad2', '\u22ef', '\u22ef', '\u2938', '\u2938', '\u2935', '\u2935', '\u22de', '\u22de', '\u22df', '\u22df', '\u21b6', '\u21b6', '\u293d', '\u293d', '\u222a', '\u222a', '\u2a48', '\u2a48', '\u2a46', '\u2a46', '\u2a4a', '\u2a4a', 
-'\u228d', '\u228d', '\u2a45', '\u2a45', '\u21b7', '\u21b7', '\u293c', '\u293c', '\u22de', '\u22de', '\u22df', '\u22df', '\u22ce', '\u22ce', '\u22cf', '\u22cf', '\u00a4', '\u00a4', '\u21b6', '\u21b6', '\u21b7', '\u21b7', '\u22ce', '\u22ce', '\u22cf', '\u22cf', 
-'\u2232', '\u2232', '\u2231', '\u2231', '\u232d', '\u232d', '\u21d3', '\u21d3', '\u2965', '\u2965', '\u2020', '\u2020', '\u2138', '\u2138', '\u2193', '\u2193', '\u2010', '\u2010', '\u22a3', '\u22a3', '\u290f', '\u290f', '\u02dd', '\u02dd', '\u010f', '\u010f', '\u0434', '\u0434', '\u2146', '\u2146', '\u2021', '\u2021', '\u21ca', '\u21ca', '\u2a77', 
-'\u2a77', '\u00b0', '\u00b0', '\u03b4', '\u03b4', '\u29b1', '\u29b1', '\u297f', '\u297f', '\U0001d521', '\U0001d521', '\u21c3', '\u21c3', '\u21c2', '\u21c2', '\u22c4', '\u22c4', '\u22c4', '\u22c4', '\u2666', '\u2666', '\u2666', '\u2666', '\u00a8', '\u00a8', '\u03dd', '\u03dd', '\u22f2', '\u22f2', '\u00f7', '\u00f7', '\u00f7', '\u00f7', '\u22c7', 
-'\u22c7', '\u22c7', '\u22c7', '\u0452', '\u0452', '\u231e', '\u231e', '\u230d', '\u230d', '\u0024', '\u0024', '\U0001d555', '\U0001d555', '\u02d9', '\u02d9', '\u2250', '\u2250', '\u2251', '\u2251', '\u2238', '\u2238', '\u2214', '\u2214', '\u22a1', '\u22a1', '\u2306', '\u2306', '\u2193', '\u2193', '\u21ca', 
-'\u21ca', '\u21c3', '\u21c3', '\u21c2', '\u21c2', '\u2910', '\u2910', '\u231f', '\u231f', '\u230c', '\u230c', '\U0001d4b9', '\U0001d4b9', '\u0455', '\u0455', '\u29f6', '\u29f6', '\u0111', '\u0111', '\u22f1', '\u22f1', '\u25bf', '\u25bf', '\u25be', '\u25be', '\u21f5', '\u21f5', '\u296f', '\u296f', '\u29a6', 
-'\u29a6', '\u045f', '\u045f', '\u27ff', '\u27ff', '\u2a77', '\u2a77', '\u2251', '\u2251', '\u00e9', '\u00e9', '\u2a6e', '\u2a6e', '\u011b', '\u011b', '\u2256', '\u2256', '\u00ea', '\u00ea', '\u2255', '\u2255', '\u044d', '\u044d', '\u0117', '\u0117', '\u2147', '\u2147', '\u2252', '\u2252', '\U0001d522', '\U0001d522', '\u2a9a', '\u2a9a', '\u00e8', '\u00e8', '\u2a96', '\u2a96', '\u2a98', 
-'\u2a98', '\u2a99', '\u2a99', '\u23e7', '\u23e7', '\u2113', '\u2113', '\u2a95', '\u2a95', '\u2a97', '\u2a97', '\u0113', '\u0113', '\u2205', '\u2205', '\u2205', '\u2205', '\u2205', '\u2205', '\u2003', '\u2003', '\u2004', '\u2004', '\u2005', '\u2005', '\u014b', '\u014b', '\u2002', '\u2002', '\u0119', '\u0119', '\U0001d556', '\U0001d556', '\u22d5', '\u22d5', '\u29e3', 
-'\u29e3', '\u2a71', '\u2a71', '\u03b5', '\u03b5', '\u03b5', '\u03b5', '\u03f5', '\u03f5', '\u2256', '\u2256', '\u2255', '\u2255', '\u2242', '\u2242', '\u2a96', '\u2a96', '\u2a95', '\u2a95', '\u003d', '\u003d', '\u225f', '\u225f', '\u2261', '\u2261', '\u2a78', '\u2a78', '\u29e5', '\u29e5', '\u2253', '\u2253', 
-'\u2971', '\u2971', '\u212f', '\u212f', '\u2250', '\u2250', '\u2242', '\u2242', '\u03b7', '\u03b7', '\u00f0', '\u00f0', '\u00eb', '\u00eb', '\u20ac', '\u20ac', '\u0021', '\u0021', '\u2203', '\u2203', '\u2130', '\u2130', '\u2147', '\u2147', '\u2252', '\u2252', '\u0444', '\u0444', '\u2640', '\u2640', '\ufb03', '\ufb03', '\ufb00', 
-'\ufb00', '\ufb04', '\ufb04', '\U0001d523', '\U0001d523', '\ufb01', '\ufb01', '\u266d', '\u266d', '\ufb02', '\ufb02', '\u25b1', '\u25b1', '\u0192', '\u0192', '\U0001d557', '\U0001d557', '\u2200', '\u2200', '\u22d4', '\u22d4', '\u2ad9', '\u2ad9', '\u2a0d', '\u2a0d', '\u00bd', '\u00bd', '\u2153', '\u2153', '\u00bc', '\u00bc', '\u2155', '\u2155', '\u2159', '\u2159', 
-'\u215b', '\u215b', '\u2154', '\u2154', '\u2156', '\u2156', '\u00be', '\u00be', '\u2157', '\u2157', '\u215c', '\u215c', '\u2158', '\u2158', '\u215a', '\u215a', '\u215d', '\u215d', '\u215e', '\u215e', '\u2044', '\u2044', '\u2322', '\u2322', '\U0001d4bb', '\U0001d4bb', '\u2267', '\u2267', '\u2a8c', '\u2a8c', '\u01f5', '\u01f5', '\u03b3', '\u03b3', '\u03dd', 
-'\u03dd', '\u2a86', '\u2a86', '\u011f', '\u011f', '\u011d', '\u011d', '\u0433', '\u0433', '\u0121', '\u0121', '\u2265', '\u2265', '\u22db', '\u22db', '\u2265', '\u2265', '\u2267', '\u2267', '\u2a7e', '\u2a7e', '\u2a7e', '\u2a7e', '\u2aa9', '\u2aa9', '\u2a80', '\u2a80', '\u2a82', '\u2a82', '\u2a84', '\u2a84', '\u2a94', '\u2a94', '\U0001d524', '\U0001d524', '\u226b', '\u226b', '\u22d9', 
-'\u22d9', '\u2137', '\u2137', '\u0453', '\u0453', '\u2277', '\u2277', '\u2a92', '\u2a92', '\u2aa5', '\u2aa5', '\u2aa4', '\u2aa4', '\u2269', '\u2269', '\u2a8a', '\u2a8a', '\u2a8a', '\u2a8a', '\u2a88', '\u2a88', '\u2a88', '\u2a88', '\u2269', '\u2269', '\u22e7', '\u22e7', '\U0001d558', '\U0001d558', '\u0060', '\u0060', '\u210a', '\u210a', '\u2273', '\u2273', '\u2a8e', '\u2a8e', '\u2a90', '\u2a90', '\u2aa7', 
-'\u2aa7', '\u2a7a', '\u2a7a', '\u22d7', '\u22d7', '\u2995', '\u2995', '\u2a7c', '\u2a7c', '\u2a86', '\u2a86', '\u2978', '\u2978', '\u22d7', '\u22d7', '\u22db', '\u22db', '\u2a8c', '\u2a8c', '\u2277', '\u2277', '\u2273', '\u2273', '\u21d4', '\u21d4', '\u200a', '\u200a', '\u00bd', '\u00bd', '\u210b', '\u210b', 
-'\u044a', '\u044a', '\u2194', '\u2194', '\u2948', '\u2948', '\u21ad', '\u21ad', '\u210f', '\u210f', '\u0125', '\u0125', '\u2665', '\u2665', '\u2665', '\u2665', '\u2026', '\u2026', '\u22b9', '\u22b9', '\U0001d525', '\U0001d525', '\u2925', '\u2925', '\u2926', '\u2926', '\u21ff', '\u21ff', '\u223b', '\u223b', '\u21a9', '\u21a9', 
-'\u21aa', '\u21aa', '\U0001d559', '\U0001d559', '\u2015', '\u2015', '\U0001d4bd', '\U0001d4bd', '\u210f', '\u210f', '\u0127', '\u0127', '\u2043', '\u2043', '\u2010', '\u2010', '\u00ed', '\u00ed', '\u2063', '\u2063', '\u00ee', '\u00ee', '\u0438', '\u0438', '\u0435', '\u0435', '\u00a1', '\u00a1', '\u21d4', '\u21d4', '\U0001d526', '\U0001d526', '\u00ec', '\u00ec', '\u2148', 
-'\u2148', '\u2a0c', '\u2a0c', '\u222d', '\u222d', '\u29dc', '\u29dc', '\u2129', '\u2129', '\u0133', '\u0133', '\u012b', '\u012b', '\u2111', '\u2111', '\u2110', '\u2110', '\u2111', '\u2111', '\u0131', '\u0131', '\u22b7', '\u22b7', '\u01b5', '\u01b5', '\u2208', '\u2208', '\u2105', '\u2105', '\u221e', '\u221e', '\u29dd', '\u29dd', '\u0131', 
-'\u0131', '\u222b', '\u222b', '\u22ba', '\u22ba', '\u2124', '\u2124', '\u22ba', '\u22ba', '\u2a17', '\u2a17', '\u2a3c', '\u2a3c', '\u0451', '\u0451', '\u012f', '\u012f', '\U0001d55a', '\U0001d55a', '\u03b9', '\u03b9', '\u2a3c', '\u2a3c', '\u00bf', '\u00bf', '\U0001d4be', '\U0001d4be', '\u2208', '\u2208', '\u22f9', '\u22f9', '\u22f5', '\u22f5', '\u22f4', 
-'\u22f4', '\u22f3', '\u22f3', '\u2208', '\u2208', '\u2062', '\u2062', '\u0129', '\u0129', '\u0456', '\u0456', '\u00ef', '\u00ef', '\u0135', '\u0135', '\u0439', '\u0439', '\U0001d527', '\U0001d527', '\u0237', '\u0237', '\U0001d55b', '\U0001d55b', '\U0001d4bf', '\U0001d4bf', '\u0458', '\u0458', '\u0454', '\u0454', '\u03ba', '\u03ba', '\u03f0', '\u03f0', '\u0137', '\u0137', '\u043a', '\u043a', '\U0001d528', 
-'\U0001d528', '\u0138', '\u0138', '\u0445', '\u0445', '\u045c', '\u045c', '\U0001d55c', '\U0001d55c', '\U0001d4c0', '\U0001d4c0', '\u21da', '\u21da', '\u21d0', '\u21d0', '\u291b', '\u291b', '\u290e', '\u290e', '\u2266', '\u2266', '\u2a8b', '\u2a8b', '\u2962', '\u2962', '\u013a', '\u013a', '\u29b4', '\u29b4', '\u2112', '\u2112', '\u03bb', '\u03bb', '\u27e8', '\u27e8', '\u2991', '\u2991', 
-'\u27e8', '\u27e8', '\u2a85', '\u2a85', '\u00ab', '\u00ab', '\u2190', '\u2190', '\u21e4', '\u21e4', '\u291f', '\u291f', '\u291d', '\u291d', '\u21a9', '\u21a9', '\u21ab', '\u21ab', '\u2939', '\u2939', '\u2973', '\u2973', '\u21a2', '\u21a2', '\u2aab', '\u2aab', '\u2919', '\u2919', '\u2aad', '\u2aad', '\u290c', '\u290c', '\u2772', '\u2772', '\u007b', 
-'\u007b', '\u005b', '\u005b', '\u298b', '\u298b', '\u298f', '\u298f', '\u298d', '\u298d', '\u013e', '\u013e', '\u013c', '\u013c', '\u2308', '\u2308', '\u007b', '\u007b', '\u043b', '\u043b', '\u2936', '\u2936', '\u201c', '\u201c', '\u201e', '\u201e', '\u2967', '\u2967', '\u294b', '\u294b', '\u21b2', '\u21b2', '\u2264', '\u2264', '\u2190', 
-'\u2190', '\u21a2', '\u21a2', '\u21bd', '\u21bd', '\u21bc', '\u21bc', '\u21c7', '\u21c7', '\u2194', '\u2194', '\u21c6', '\u21c6', '\u21cb', '\u21cb', '\u21ad', '\u21ad', '\u22cb', 
-'\u22cb', '\u22da', '\u22da', '\u2264', '\u2264', '\u2266', '\u2266', '\u2a7d', '\u2a7d', '\u2a7d', '\u2a7d', '\u2aa8', '\u2aa8', '\u2a7f', '\u2a7f', '\u2a81', '\u2a81', '\u2a83', '\u2a83', '\u2a93', '\u2a93', '\u2a85', '\u2a85', '\u22d6', '\u22d6', '\u22da', '\u22da', '\u2a8b', '\u2a8b', '\u2276', '\u2276', 
-'\u2272', '\u2272', '\u297c', '\u297c', '\u230a', '\u230a', '\U0001d529', '\U0001d529', '\u2276', '\u2276', '\u2a91', '\u2a91', '\u21bd', '\u21bd', '\u21bc', '\u21bc', '\u296a', '\u296a', '\u2584', '\u2584', '\u0459', '\u0459', '\u226a', '\u226a', '\u21c7', '\u21c7', '\u231e', '\u231e', '\u296b', '\u296b', '\u25fa', '\u25fa', '\u0140', '\u0140', '\u23b0', '\u23b0', 
-'\u23b0', '\u23b0', '\u2268', '\u2268', '\u2a89', '\u2a89', '\u2a89', '\u2a89', '\u2a87', '\u2a87', '\u2a87', '\u2a87', '\u2268', '\u2268', '\u22e6', '\u22e6', '\u27ec', '\u27ec', '\u21fd', '\u21fd', '\u27e6', '\u27e6', '\u27f5', '\u27f5', '\u27f7', '\u27f7', '\u27fc', '\u27fc', '\u27f6', 
-'\u27f6', '\u21ab', '\u21ab', '\u21ac', '\u21ac', '\u2985', '\u2985', '\U0001d55d', '\U0001d55d', '\u2a2d', '\u2a2d', '\u2a34', '\u2a34', '\u2217', '\u2217', '\u005f', '\u005f', '\u25ca', '\u25ca', '\u25ca', '\u25ca', '\u29eb', '\u29eb', '\u0028', '\u0028', '\u2993', '\u2993', '\u21c6', '\u21c6', '\u231f', 
-'\u231f', '\u21cb', '\u21cb', '\u296d', '\u296d', '\u200e', '\u200e', '\u22bf', '\u22bf', '\u2039', '\u2039', '\U0001d4c1', '\U0001d4c1', '\u21b0', '\u21b0', '\u2272', '\u2272', '\u2a8d', '\u2a8d', '\u2a8f', '\u2a8f', '\u005b', '\u005b', '\u2018', '\u2018', '\u201a', '\u201a', '\u0142', '\u0142', '\u2aa6', '\u2aa6', '\u2a79', '\u2a79', '\u22d6', '\u22d6', '\u22cb', 
-'\u22cb', '\u22c9', '\u22c9', '\u2976', '\u2976', '\u2a7b', '\u2a7b', '\u2996', '\u2996', '\u25c3', '\u25c3', '\u22b4', '\u22b4', '\u25c2', '\u25c2', '\u294a', '\u294a', '\u2966', '\u2966', '\u223a', '\u223a', '\u00af', '\u00af', '\u2642', '\u2642', '\u2720', '\u2720', '\u2720', '\u2720', '\u21a6', '\u21a6', '\u21a6', '\u21a6', '\u21a7', 
-'\u21a7', '\u21a4', '\u21a4', '\u21a5', '\u21a5', '\u25ae', '\u25ae', '\u2a29', '\u2a29', '\u043c', '\u043c', '\u2014', '\u2014', '\u2221', '\u2221', '\U0001d52a', '\U0001d52a', '\u2127', '\u2127', '\u00b5', '\u00b5', '\u2223', '\u2223', '\u002a', '\u002a', '\u2af0', '\u2af0', '\u00b7', '\u00b7', '\u2212', '\u2212', '\u229f', 
-'\u229f', '\u2238', '\u2238', '\u2a2a', '\u2a2a', '\u2adb', '\u2adb', '\u2026', '\u2026', '\u2213', '\u2213', '\u22a7', '\u22a7', '\U0001d55e', '\U0001d55e', '\u2213', '\u2213', '\U0001d4c2', '\U0001d4c2', '\u223e', '\u223e', '\u03bc', '\u03bc', '\u22b8', '\u22b8', '\u22b8', '\u22b8', '\u21cd', '\u21cd', '\u21ce', '\u21ce', '\u21cf', 
-'\u21cf', '\u22af', '\u22af', '\u22ae', '\u22ae', '\u2207', '\u2207', '\u0144', '\u0144', '\u2249', '\u2249', '\u0149', '\u0149', '\u2249', '\u2249', '\u266e', '\u266e', '\u266e', '\u266e', '\u2115', '\u2115', '\u00a0', '\u00a0', '\u2a43', '\u2a43', '\u0148', '\u0148', '\u0146', '\u0146', '\u2247', '\u2247', '\u2a42', '\u2a42', '\u043d', 
-'\u043d', '\u2013', '\u2013', '\u2260', '\u2260', '\u21d7', '\u21d7', '\u2924', '\u2924', '\u2197', '\u2197', '\u2197', '\u2197', '\u2262', '\u2262', '\u2928', '\u2928', '\u2204', '\u2204', '\u2204', '\u2204', '\U0001d52b', '\U0001d52b', '\u2271', '\u2271', '\u2271', '\u2271', '\u2275', '\u2275', '\u226f', '\u226f', '\u226f', '\u226f', '\u21ce', '\u21ce', '\u21ae', '\u21ae', 
-'\u2af2', '\u2af2', '\u220b', '\u220b', '\u22fc', '\u22fc', '\u22fa', '\u22fa', '\u220b', '\u220b', '\u045a', '\u045a', '\u21cd', '\u21cd', '\u219a', '\u219a', '\u2025', '\u2025', '\u2270', '\u2270', '\u219a', '\u219a', '\u21ae', '\u21ae', '\u2270', '\u2270', '\u226e', '\u226e', '\u2274', '\u2274', '\u226e', '\u226e', '\u22ea', '\u22ea', '\u22ec', '\u22ec', 
-'\u2224', '\u2224', '\U0001d55f', '\U0001d55f', '\u00ac', '\u00ac', '\u2209', '\u2209', '\u2209', '\u2209', '\u22f7', '\u22f7', '\u22f6', '\u22f6', '\u220c', '\u220c', '\u220c', '\u220c', '\u22fe', '\u22fe', '\u22fd', '\u22fd', '\u2226', '\u2226', '\u2226', '\u2226', '\u2a14', '\u2a14', '\u2280', '\u2280', '\u22e0', '\u22e0', '\u2280', 
-'\u2280', '\u21cf', '\u21cf', '\u219b', '\u219b', '\u219b', '\u219b', '\u22eb', '\u22eb', '\u22ed', '\u22ed', '\u2281', '\u2281', '\u22e1', '\u22e1', '\U0001d4c3', '\U0001d4c3', '\u2224', '\u2224', '\u2226', '\u2226', '\u2241', '\u2241', '\u2244', '\u2244', '\u2244', '\u2244', '\u2224', '\u2224', '\u2226', '\u2226', '\u22e2', 
-'\u22e2', '\u22e3', '\u22e3', '\u2284', '\u2284', '\u2288', '\u2288', '\u2288', '\u2288', '\u2281', '\u2281', '\u2285', '\u2285', '\u2289', '\u2289', '\u2289', '\u2289', '\u2279', '\u2279', '\u00f1', '\u00f1', '\u2278', '\u2278', '\u22ea', '\u22ea', '\u22ec', '\u22ec', '\u22eb', '\u22eb', 
-'\u22ed', '\u22ed', '\u03bd', '\u03bd', '\u0023', '\u0023', '\u2116', '\u2116', '\u2007', '\u2007', '\u22ad', '\u22ad', '\u2904', '\u2904', '\u22ac', '\u22ac', '\u29de', '\u29de', '\u2902', '\u2902', '\u2903', '\u2903', '\u21d6', '\u21d6', '\u2923', '\u2923', '\u2196', '\u2196', '\u2196', '\u2196', '\u2927', '\u2927', 
-'\u24c8', '\u24c8', '\u00f3', '\u00f3', '\u229b', '\u229b', '\u229a', '\u229a', '\u00f4', '\u00f4', '\u043e', '\u043e', '\u229d', '\u229d', '\u0151', '\u0151', '\u2a38', '\u2a38', '\u2299', '\u2299', '\u29bc', '\u29bc', '\u0153', '\u0153', '\u29bf', '\u29bf', '\U0001d52c', '\U0001d52c', '\u02db', '\u02db', '\u00f2', '\u00f2', '\u29c1', '\u29c1', '\u29b5', '\u29b5', '\u03a9', '\u03a9', '\u222e', 
-'\u222e', '\u21ba', '\u21ba', '\u29be', '\u29be', '\u29bb', '\u29bb', '\u203e', '\u203e', '\u29c0', '\u29c0', '\u014d', '\u014d', '\u03c9', '\u03c9', '\u03bf', '\u03bf', '\u29b6', '\u29b6', '\u2296', '\u2296', '\U0001d560', '\U0001d560', '\u29b7', '\u29b7', '\u29b9', '\u29b9', '\u2295', '\u2295', '\u2228', '\u2228', '\u21bb', '\u21bb', '\u2a5d', '\u2a5d', '\u2134', '\u2134', 
-'\u2134', '\u2134', '\u00aa', '\u00aa', '\u00ba', '\u00ba', '\u22b6', '\u22b6', '\u2a56', '\u2a56', '\u2a57', '\u2a57', '\u2a5b', '\u2a5b', '\u2134', '\u2134', '\u00f8', '\u00f8', '\u2298', '\u2298', '\u00f5', '\u00f5', '\u2297', '\u2297', '\u2a36', '\u2a36', '\u00f6', '\u00f6', '\u233d', '\u233d', '\u2225', '\u2225', '\u00b6', '\u00b6', '\u2225', '\u2225', 
-'\u2af3', '\u2af3', '\u2afd', '\u2afd', '\u2202', '\u2202', '\u043f', '\u043f', '\u0025', '\u0025', '\u002e', '\u002e', '\u2030', '\u2030', '\u22a5', '\u22a5', '\u2031', '\u2031', '\U0001d52d', '\U0001d52d', '\u03c6', '\u03c6', '\u03d5', '\u03d5', '\u2133', '\u2133', '\u260e', '\u260e', '\u03c0', '\u03c0', '\u22d4', '\u22d4', '\u03d6', '\u03d6', '\u210f', '\u210f', 
-'\u210e', '\u210e', '\u210f', '\u210f', '\u002b', '\u002b', '\u2a23', '\u2a23', '\u229e', '\u229e', '\u2a22', '\u2a22', '\u2214', '\u2214', '\u2a25', '\u2a25', '\u2a72', '\u2a72', '\u00b1', '\u00b1', '\u2a26', '\u2a26', '\u2a27', '\u2a27', '\u00b1', '\u00b1', '\u2a15', '\u2a15', '\U0001d561', '\U0001d561', '\u00a3', '\u00a3', '\u227a', 
-'\u227a', '\u2ab3', '\u2ab3', '\u2ab7', '\u2ab7', '\u227c', '\u227c', '\u2aaf', '\u2aaf', '\u227a', '\u227a', '\u2ab7', '\u2ab7', '\u227c', '\u227c', '\u2aaf', '\u2aaf', '\u2ab9', '\u2ab9', '\u2ab5', '\u2ab5', '\u22e8', '\u22e8', '\u227e', '\u227e', '\u2032', '\u2032', '\u2119', '\u2119', '\u2ab5', '\u2ab5', '\u2ab9', 
-'\u2ab9', '\u22e8', '\u22e8', '\u220f', '\u220f', '\u232e', '\u232e', '\u2312', '\u2312', '\u2313', '\u2313', '\u221d', '\u221d', '\u221d', '\u221d', '\u227e', '\u227e', '\u22b0', '\u22b0', '\U0001d4c5', '\U0001d4c5', '\u03c8', '\u03c8', '\u2008', '\u2008', '\U0001d52e', '\U0001d52e', '\u2a0c', '\u2a0c', '\U0001d562', '\U0001d562', '\u2057', '\u2057', '\U0001d4c6', '\U0001d4c6', 
-'\u210d', '\u210d', '\u2a16', '\u2a16', '\u003f', '\u003f', '\u225f', '\u225f', '\u21db', '\u21db', '\u21d2', '\u21d2', '\u291c', '\u291c', '\u290f', '\u290f', '\u2964', '\u2964', '\u0155', '\u0155', '\u221a', '\u221a', '\u29b3', '\u29b3', '\u27e9', '\u27e9', '\u2992', '\u2992', '\u29a5', '\u29a5', '\u27e9', '\u27e9', '\u00bb', 
-'\u00bb', '\u2192', '\u2192', '\u2975', '\u2975', '\u21e5', '\u21e5', '\u2920', '\u2920', '\u2933', '\u2933', '\u291e', '\u291e', '\u21aa', '\u21aa', '\u21ac', '\u21ac', '\u2945', '\u2945', '\u2974', '\u2974', '\u21a3', '\u21a3', '\u219d', '\u219d', '\u291a', '\u291a', '\u2236', '\u2236', '\u211a', '\u211a', '\u290d', '\u290d', 
-'\u2773', '\u2773', '\u007d', '\u007d', '\u005d', '\u005d', '\u298c', '\u298c', '\u298e', '\u298e', '\u2990', '\u2990', '\u0159', '\u0159', '\u0157', '\u0157', '\u2309', '\u2309', '\u007d', '\u007d', '\u0440', '\u0440', '\u2937', '\u2937', '\u2969', '\u2969', '\u201d', '\u201d', '\u201d', '\u201d', '\u21b3', '\u21b3', '\u211c', '\u211c', '\u211b', 
-'\u211b', '\u211c', '\u211c', '\u211d', '\u211d', '\u25ad', '\u25ad', '\u00ae', '\u00ae', '\u297d', '\u297d', '\u230b', '\u230b', '\U0001d52f', '\U0001d52f', '\u21c1', '\u21c1', '\u21c0', '\u21c0', '\u296c', '\u296c', '\u03c1', '\u03c1', '\u03f1', '\u03f1', '\u2192', '\u2192', '\u21a3', '\u21a3', '\u21c1', '\u21c1', 
-'\u21c0', '\u21c0', '\u21c4', '\u21c4', '\u21cc', '\u21cc', '\u21c9', '\u21c9', '\u219d', '\u219d', '\u22cc', '\u22cc', '\u02da', '\u02da', '\u2253', '\u2253', '\u21c4', '\u21c4', '\u21cc', '\u21cc', '\u200f', 
-'\u200f', '\u23b1', '\u23b1', '\u23b1', '\u23b1', '\u2aee', '\u2aee', '\u27ed', '\u27ed', '\u21fe', '\u21fe', '\u27e7', '\u27e7', '\u2986', '\u2986', '\U0001d563', '\U0001d563', '\u2a2e', '\u2a2e', '\u2a35', '\u2a35', '\u0029', '\u0029', '\u2994', '\u2994', '\u2a12', '\u2a12', '\u21c9', '\u21c9', '\u203a', '\u203a', '\U0001d4c7', '\U0001d4c7', '\u21b1', 
-'\u21b1', '\u005d', '\u005d', '\u2019', '\u2019', '\u2019', '\u2019', '\u22cc', '\u22cc', '\u22ca', '\u22ca', '\u25b9', '\u25b9', '\u22b5', '\u22b5', '\u25b8', '\u25b8', '\u29ce', '\u29ce', '\u2968', '\u2968', '\u211e', '\u211e', '\u015b', '\u015b', '\u201a', '\u201a', '\u227b', '\u227b', '\u2ab4', '\u2ab4', '\u2ab8', '\u2ab8', '\u0161', '\u0161', '\u227d', 
-'\u227d', '\u2ab0', '\u2ab0', '\u015f', '\u015f', '\u015d', '\u015d', '\u2ab6', '\u2ab6', '\u2aba', '\u2aba', '\u22e9', '\u22e9', '\u2a13', '\u2a13', '\u227f', '\u227f', '\u0441', '\u0441', '\u22c5', '\u22c5', '\u22a1', '\u22a1', '\u2a66', '\u2a66', '\u21d8', '\u21d8', '\u2925', '\u2925', '\u2198', '\u2198', '\u2198', '\u2198', '\u00a7', '\u00a7', '\u003b', 
-'\u003b', '\u2929', '\u2929', '\u2216', '\u2216', '\u2216', '\u2216', '\u2736', '\u2736', '\U0001d530', '\U0001d530', '\u2322', '\u2322', '\u266f', '\u266f', '\u0449', '\u0449', '\u0448', '\u0448', '\u2223', '\u2223', '\u2225', '\u2225', '\u00ad', '\u00ad', '\u03c3', '\u03c3', '\u03c2', '\u03c2', '\u03c2', '\u03c2', '\u223c', '\u223c', '\u2a6a', 
-'\u2a6a', '\u2243', '\u2243', '\u2243', '\u2243', '\u2a9e', '\u2a9e', '\u2aa0', '\u2aa0', '\u2a9d', '\u2a9d', '\u2a9f', '\u2a9f', '\u2246', '\u2246', '\u2a24', '\u2a24', '\u2972', '\u2972', '\u2190', '\u2190', '\u2216', '\u2216', '\u2a33', '\u2a33', '\u29e4', '\u29e4', '\u2223', '\u2223', '\u2323', '\u2323', '\u2aaa', '\u2aaa', '\u2aac', 
-'\u2aac', '\u044c', '\u044c', '\u002f', '\u002f', '\u29c4', '\u29c4', '\u233f', '\u233f', '\U0001d564', '\U0001d564', '\u2660', '\u2660', '\u2660', '\u2660', '\u2225', '\u2225', '\u2293', '\u2293', '\u2294', '\u2294', '\u228f', '\u228f', '\u2291', '\u2291', '\u228f', '\u228f', '\u2291', '\u2291', '\u2290', '\u2290', '\u2292', '\u2292', 
-'\u2290', '\u2290', '\u2292', '\u2292', '\u25a1', '\u25a1', '\u25a1', '\u25a1', '\u25aa', '\u25aa', '\u25aa', '\u25aa', '\u2192', '\u2192', '\U0001d4c8', '\U0001d4c8', '\u2216', '\u2216', '\u2323', '\u2323', '\u22c6', '\u22c6', '\u2606', '\u2606', '\u2605', '\u2605', '\u03f5', '\u03f5', '\u03d5', '\u03d5', '\u00af', 
-'\u00af', '\u2282', '\u2282', '\u2ac5', '\u2ac5', '\u2abd', '\u2abd', '\u2286', '\u2286', '\u2ac3', '\u2ac3', '\u2ac1', '\u2ac1', '\u2acb', '\u2acb', '\u228a', '\u228a', '\u2abf', '\u2abf', '\u2979', '\u2979', '\u2282', '\u2282', '\u2286', '\u2286', '\u2ac5', '\u2ac5', '\u228a', '\u228a', '\u2acb', '\u2acb', 
-'\u2ac7', '\u2ac7', '\u2ad5', '\u2ad5', '\u2ad3', '\u2ad3', '\u227b', '\u227b', '\u2ab8', '\u2ab8', '\u227d', '\u227d', '\u2ab0', '\u2ab0', '\u2aba', '\u2aba', '\u2ab6', '\u2ab6', '\u22e9', '\u22e9', '\u227f', '\u227f', '\u2211', '\u2211', '\u266a', '\u266a', '\u2283', '\u2283', '\u00b9', '\u00b9', '\u00b2', 
-'\u00b2', '\u00b3', '\u00b3', '\u2ac6', '\u2ac6', '\u2abe', '\u2abe', '\u2ad8', '\u2ad8', '\u2287', '\u2287', '\u2ac4', '\u2ac4', '\u27c9', '\u27c9', '\u2ad7', '\u2ad7', '\u297b', '\u297b', '\u2ac2', '\u2ac2', '\u2acc', '\u2acc', '\u228b', '\u228b', '\u2ac0', '\u2ac0', '\u2283', '\u2283', '\u2287', '\u2287', '\u2ac6', 
-'\u2ac6', '\u228b', '\u228b', '\u2acc', '\u2acc', '\u2ac8', '\u2ac8', '\u2ad4', '\u2ad4', '\u2ad6', '\u2ad6', '\u21d9', '\u21d9', '\u2926', '\u2926', '\u2199', '\u2199', '\u2199', '\u2199', '\u292a', '\u292a', '\u00df', '\u00df', '\u2316', '\u2316', '\u03c4', '\u03c4', '\u23b4', '\u23b4', '\u0165', '\u0165', '\u0163', 
-'\u0163', '\u0442', '\u0442', '\u20db', '\u20db', '\u2315', '\u2315', '\U0001d531', '\U0001d531', '\u2234', '\u2234', '\u2234', '\u2234', '\u03b8', '\u03b8', '\u03d1', '\u03d1', '\u03d1', '\u03d1', '\u2248', '\u2248', '\u223c', '\u223c', '\u2009', '\u2009', '\u2248', '\u2248', '\u223c', '\u223c', '\u00fe', '\u00fe', '\u02dc', 
-'\u02dc', '\u00d7', '\u00d7', '\u22a0', '\u22a0', '\u2a31', '\u2a31', '\u2a30', '\u2a30', '\u222d', '\u222d', '\u2928', '\u2928', '\u22a4', '\u22a4', '\u2336', '\u2336', '\u2af1', '\u2af1', '\U0001d565', '\U0001d565', '\u2ada', '\u2ada', '\u2929', '\u2929', '\u2034', '\u2034', '\u2122', '\u2122', '\u25b5', '\u25b5', '\u25bf', '\u25bf', 
-'\u25c3', '\u25c3', '\u22b4', '\u22b4', '\u225c', '\u225c', '\u25b9', '\u25b9', '\u22b5', '\u22b5', '\u25ec', '\u25ec', '\u225c', '\u225c', '\u2a3a', '\u2a3a', '\u2a39', '\u2a39', '\u29cd', '\u29cd', '\u2a3b', '\u2a3b', '\u23e2', '\u23e2', '\U0001d4c9', 
-'\U0001d4c9', '\u0446', '\u0446', '\u045b', '\u045b', '\u0167', '\u0167', '\u226c', '\u226c', '\u219e', '\u219e', '\u21a0', '\u21a0', '\u21d1', '\u21d1', '\u2963', '\u2963', '\u00fa', '\u00fa', '\u2191', '\u2191', '\u045e', '\u045e', '\u016d', '\u016d', '\u00fb', '\u00fb', '\u0443', '\u0443', '\u21c5', '\u21c5', '\u0171', 
-'\u0171', '\u296e', '\u296e', '\u297e', '\u297e', '\U0001d532', '\U0001d532', '\u00f9', '\u00f9', '\u21bf', '\u21bf', '\u21be', '\u21be', '\u2580', '\u2580', '\u231c', '\u231c', '\u231c', '\u231c', '\u230f', '\u230f', '\u25f8', '\u25f8', '\u016b', '\u016b', '\u00a8', '\u00a8', '\u0173', '\u0173', '\U0001d566', '\U0001d566', '\u2191', '\u2191', '\u2195', 
-'\u2195', '\u21bf', '\u21bf', '\u21be', '\u21be', '\u228e', '\u228e', '\u03c5', '\u03c5', '\u03d2', '\u03d2', '\u03c5', '\u03c5', '\u21c8', '\u21c8', '\u231d', '\u231d', '\u231d', '\u231d', '\u230e', '\u230e', '\u016f', '\u016f', '\u25f9', '\u25f9', '\U0001d4ca', '\U0001d4ca', '\u22f0', '\u22f0', 
-'\u0169', '\u0169', '\u25b5', '\u25b5', '\u25b4', '\u25b4', '\u21c8', '\u21c8', '\u00fc', '\u00fc', '\u29a7', '\u29a7', '\u21d5', '\u21d5', '\u2ae8', '\u2ae8', '\u2ae9', '\u2ae9', '\u22a8', '\u22a8', '\u299c', '\u299c', '\u03f5', '\u03f5', '\u03f0', '\u03f0', '\u2205', '\u2205', '\u03d5', '\u03d5', '\u03d6', '\u03d6', '\u221d', 
-'\u221d', '\u2195', '\u2195', '\u03f1', '\u03f1', '\u03c2', '\u03c2', '\u03d1', '\u03d1', '\u22b2', '\u22b2', '\u22b3', '\u22b3', '\u0432', '\u0432', '\u22a2', '\u22a2', '\u2228', '\u2228', '\u22bb', '\u22bb', '\u225a', '\u225a', '\u22ee', '\u22ee', '\u007c', '\u007c', '\u007c', '\u007c', '\U0001d533', 
-'\U0001d533', '\u22b2', '\u22b2', '\U0001d567', '\U0001d567', '\u221d', '\u221d', '\u22b3', '\u22b3', '\U0001d4cb', '\U0001d4cb', '\u299a', '\u299a', '\u0175', '\u0175', '\u2a5f', '\u2a5f', '\u2227', '\u2227', '\u2259', '\u2259', '\u2118', '\u2118', '\U0001d534', '\U0001d534', '\U0001d568', '\U0001d568', '\u2118', '\u2118', '\u2240', '\u2240', '\u2240', '\u2240', '\U0001d4cc', '\U0001d4cc', '\u22c2', '\u22c2', '\u25ef', 
-'\u25ef', '\u22c3', '\u22c3', '\u25bd', '\u25bd', '\U0001d535', '\U0001d535', '\u27fa', '\u27fa', '\u27f7', '\u27f7', '\u03be', '\u03be', '\u27f8', '\u27f8', '\u27f5', '\u27f5', '\u27fc', '\u27fc', '\u22fb', '\u22fb', '\u2a00', '\u2a00', '\U0001d569', '\U0001d569', '\u2a01', '\u2a01', '\u2a02', '\u2a02', '\u27f9', '\u27f9', '\u27f6', '\u27f6', '\U0001d4cd', '\U0001d4cd', '\u2a06', '\u2a06', '\u2a04', 
-'\u2a04', '\u25b3', '\u25b3', '\u22c1', '\u22c1', '\u22c0', '\u22c0', '\u00fd', '\u00fd', '\u044f', '\u044f', '\u0177', '\u0177', '\u044b', '\u044b', '\u00a5', '\u00a5', '\U0001d536', '\U0001d536', '\u0457', '\u0457', '\U0001d56a', '\U0001d56a', '\U0001d4ce', '\U0001d4ce', '\u044e', '\u044e', '\u00ff', '\u00ff', '\u017a', '\u017a', '\u017e', '\u017e', '\u0437', '\u0437', '\u017c', '\u017c', '\u2128', 
-'\u2128', '\u03b6', '\u03b6', '\U0001d537', '\U0001d537', '\u0436', '\u0436', '\u21dd', '\u21dd', '\U0001d56b', '\U0001d56b', '\U0001d4cf', '\U0001d4cf', '\u200d', '\u200d', '\u200c', '\u200c', ];
+['\u00c6', '\u0026', '\u00c1', '\u0102', '\u00c2', '\u0410', '\U0001d504', '\u00c0', '\u0391', '\u0100', '\u2a53', '\u0104', '\U0001d538', '\u2061', '\u00c5', '\U0001d49c', '\u2254', '\u00c3', '\u00c4', '\u2216', '\u2ae7', '\u2306', '\u0411', '\u2235', '\u212c', '\u0392', '\U0001d505', '\U0001d539', '\u02d8', '\u212c', '\u224e', '\u0427', '\u00a9', '\u0106', '\u22d2', '\u2145', 
+'\u212d', '\u010c', '\u00c7', '\u0108', '\u2230', '\u010a', '\u00b8', '\u00b7', '\u212d', '\u03a7', '\u2299', '\u2296', '\u2295', '\u2297', '\u2232', '\u201d', '\u2019', '\u2237', '\u2a74', '\u2261', '\u222f', '\u222e', '\u2102', '\u2210', '\u2233', 
+'\u2a2f', '\U0001d49e', '\u22d3', '\u224d', '\u2145', '\u2911', '\u0402', '\u0405', '\u040f', '\u2021', '\u21a1', '\u2ae4', '\u010e', '\u0414', '\u2207', '\u0394', '\U0001d507', '\u00b4', '\u02d9', '\u02dd', '\u0060', '\u02dc', '\u22c4', '\u2146', '\U0001d53b', '\u00a8', '\u20dc', '\u2250', '\u222f', 
+'\u00a8', '\u21d3', '\u21d0', '\u21d4', '\u2ae4', '\u27f8', '\u27fa', '\u27f9', '\u21d2', '\u22a8', '\u21d1', '\u21d5', '\u2225', '\u2193', '\u2913', '\u21f5', '\u0311', 
+'\u2950', '\u295e', '\u21bd', '\u2956', '\u295f', '\u21c1', '\u2957', '\u22a4', '\u21a7', '\u21d3', '\U0001d49f', '\u0110', '\u014a', '\u00d0', '\u00c9', '\u011a', '\u00ca', '\u042d', '\u0116', '\U0001d508', '\u00c8', '\u2208', '\u0112', '\u25fb', '\u25ab', 
+'\u0118', '\U0001d53c', '\u0395', '\u2a75', '\u2242', '\u21cc', '\u2130', '\u2a73', '\u0397', '\u00cb', '\u2203', '\u2147', '\u0424', '\U0001d509', '\u25fc', '\u25aa', '\U0001d53d', '\u2200', '\u2131', '\u2131', '\u0403', '\u003e', '\u0393', '\u03dc', '\u011e', '\u0122', '\u011c', '\u0413', '\u0120', '\U0001d50a', '\u22d9', '\U0001d53e', 
+'\u2265', '\u22db', '\u2267', '\u2aa2', '\u2277', '\u2a7e', '\u2273', '\U0001d4a2', '\u226b', '\u042a', '\u02c7', '\u005e', '\u0124', '\u210c', '\u210b', '\u210d', '\u2500', '\u210b', '\u0126', '\u224e', '\u224f', '\u0415', '\u0132', '\u0401', '\u00cd', '\u00ce', '\u0418', 
+'\u0130', '\u2111', '\u00cc', '\u2111', '\u012a', '\u2148', '\u21d2', '\u222c', '\u222b', '\u22c2', '\u2063', '\u2062', '\u012e', '\U0001d540', '\u0399', '\u2110', '\u0128', '\u0406', '\u00cf', '\u0134', '\u0419', '\U0001d50d', '\U0001d541', '\U0001d4a5', '\u0408', '\u0404', '\u0425', '\u040c', '\u039a', '\u0136', '\u041a', '\U0001d50e', '\U0001d542', '\U0001d4a6', '\u0409', 
+'\u003c', '\u0139', '\u039b', '\u27ea', '\u2112', '\u219e', '\u013d', '\u013b', '\u041b', '\u27e8', '\u2190', '\u21e4', '\u21c6', '\u2308', '\u27e6', '\u2961', '\u21c3', '\u2959', '\u230a', '\u2194', '\u294e', '\u22a3', '\u21a4', 
+'\u295a', '\u22b2', '\u29cf', '\u22b4', '\u2951', '\u2960', '\u21bf', '\u2958', '\u21bc', '\u2952', '\u21d0', '\u21d4', '\u22da', '\u2266', '\u2276', '\u2aa1', '\u2a7d', '\u2272', '\U0001d50f', '\u22d8', '\u21da', 
+'\u013f', '\u27f5', '\u27f7', '\u27f6', '\u27f8', '\u27fa', '\u27f9', '\U0001d543', '\u2199', '\u2198', '\u2112', '\u21b0', '\u0141', '\u226a', '\u2905', '\u041c', '\u205f', '\u2133', '\U0001d510', '\u2213', '\U0001d544', '\u2133', '\u039c', '\u040a', '\u0143', '\u0147', '\u0145', 
+'\u041d', '\u200b', '\u200b', '\u200b', '\u200b', '\u226b', '\u226a', '\u000a', '\U0001d511', '\u2060', '\u00a0', '\u2115', '\u2aec', '\u2262', '\u226d', '\u2226', '\u2209', '\u2260', '\u2204', '\u226f', '\u2271', 
+'\u2279', '\u2275', '\u22ea', '\u22ec', '\u226e', '\u2270', '\u2278', '\u2274', '\u2280', '\u22e0', '\u220c', '\u22eb', '\u22ed', '\u22e2', '\u22e3', '\u2288', '\u2281', 
+'\u22e1', '\u2289', '\u2241', '\u2244', '\u2247', '\u2249', '\u2224', '\U0001d4a9', '\u00d1', '\u039d', '\u0152', '\u00d3', '\u00d4', '\u041e', '\u0150', '\U0001d512', '\u00d2', '\u014c', '\u03a9', '\u039f', '\U0001d546', '\u201c', '\u2018', '\u2a54', '\U0001d4aa', '\u00d8', '\u00d5', 
+'\u2a37', '\u00d6', '\u203e', '\u23de', '\u23b4', '\u23dc', '\u2202', '\u041f', '\U0001d513', '\u03a6', '\u03a0', '\u00b1', '\u210c', '\u2119', '\u2abb', '\u227a', '\u2aaf', '\u227c', '\u227e', '\u2033', '\u220f', '\u2237', '\u221d', '\U0001d4ab', '\u03a8', '\u0022', '\U0001d514', '\u211a', '\U0001d4ac', 
+'\u2910', '\u00ae', '\u0154', '\u27eb', '\u21a0', '\u2916', '\u0158', '\u0156', '\u0420', '\u211c', '\u220b', '\u21cb', '\u296f', '\u211c', '\u03a1', '\u27e9', '\u2192', '\u21e5', '\u21c4', '\u2309', '\u27e7', '\u295d', '\u21c2', '\u2955', 
+'\u230b', '\u22a2', '\u21a6', '\u295b', '\u22b3', '\u29d0', '\u22b5', '\u294f', '\u295c', '\u21be', '\u2954', '\u21c0', '\u2953', '\u21d2', '\u211d', '\u2970', '\u21db', '\u211b', '\u21b1', '\u29f4', '\u0429', 
+'\u0428', '\u042c', '\u015a', '\u2abc', '\u0160', '\u015e', '\u015c', '\u0421', '\U0001d516', '\u2193', '\u2190', '\u2192', '\u2191', '\u03a3', '\u2218', '\U0001d54a', '\u221a', '\u25a1', '\u2293', '\u228f', '\u2291', '\u2290', '\u2292', '\u2294', '\U0001d4ae', 
+'\u22c6', '\u22d0', '\u22d0', '\u2286', '\u227b', '\u2ab0', '\u227d', '\u227f', '\u220b', '\u2211', '\u22d1', '\u2283', '\u2287', '\u22d1', '\u00de', '\u2122', '\u040b', '\u0426', '\u0009', '\u03a4', '\u0164', '\u0162', '\u0422', '\U0001d517', '\u2234', '\u0398', '\u2009', '\u223c', '\u2243', '\u2245', 
+'\u2248', '\U0001d54b', '\u20db', '\U0001d4af', '\u0166', '\u00da', '\u219f', '\u2949', '\u040e', '\u016c', '\u00db', '\u0423', '\u0170', '\U0001d518', '\u00d9', '\u016a', '\u005f', '\u23df', '\u23b5', '\u23dd', '\u22c3', '\u228e', '\u0172', '\U0001d54c', '\u2191', '\u2912', '\u21c5', '\u2195', '\u296e', 
+'\u22a5', '\u21a5', '\u21d1', '\u21d5', '\u2196', '\u2197', '\u03d2', '\u03a5', '\u016e', '\U0001d4b0', '\u0168', '\u00dc', '\u22ab', '\u2aeb', '\u0412', '\u22a9', '\u2ae6', '\u22c1', '\u2016', '\u2016', '\u2223', '\u007c', '\u2758', '\u2240', '\u200a', '\U0001d519', '\U0001d54d', '\U0001d4b1', '\u22aa', 
+'\u0174', '\u22c0', '\U0001d51a', '\U0001d54e', '\U0001d4b2', '\U0001d51b', '\u039e', '\U0001d54f', '\U0001d4b3', '\u042f', '\u0407', '\u042e', '\u00dd', '\u0176', '\u042b', '\U0001d51c', '\U0001d550', '\U0001d4b4', '\u0178', '\u0416', '\u0179', '\u017d', '\u0417', '\u017b', '\u200b', '\u0396', '\u2128', '\u2124', '\U0001d4b5', '\u00e1', '\u0103', '\u223e', '\u223f', '\u00e2', '\u00b4', '\u0430', '\u00e6', '\u2061', '\U0001d51e', 
+'\u00e0', '\u2135', '\u2135', '\u03b1', '\u0101', '\u2a3f', '\u2227', '\u2a55', '\u2a5c', '\u2a58', '\u2a5a', '\u2220', '\u29a4', '\u2220', '\u2221', '\u29a8', '\u29a9', '\u29aa', '\u29ab', '\u29ac', '\u29ad', '\u29ae', '\u29af', '\u221f', '\u22be', '\u299d', '\u2222', '\u00c5', '\u237c', '\u0105', '\U0001d552', '\u2248', '\u2a70', 
+'\u2a6f', '\u224a', '\u224b', '\u2248', '\u224a', '\u00e5', '\U0001d4b6', '\u002a', '\u2248', '\u224d', '\u00e3', '\u00e4', '\u2233', '\u2a11', '\u2aed', '\u224c', '\u03f6', '\u2035', '\u223d', '\u22cd', '\u22bd', '\u2305', '\u2305', '\u23b5', '\u23b6', '\u224c', '\u0431', '\u201e', '\u2235', '\u2235', '\u29b0', '\u03f6', 
+'\u212c', '\u03b2', '\u2136', '\u226c', '\U0001d51f', '\u22c2', '\u25ef', '\u22c3', '\u2a00', '\u2a01', '\u2a02', '\u2a06', '\u2605', '\u25bd', '\u25b3', '\u2a04', '\u22c1', '\u22c0', '\u290d', '\u29eb', '\u25aa', '\u25b4', '\u25be', '\u25c2', '\u25b8', 
+'\u2423', '\u2592', '\u2591', '\u2593', '\u2588', '\u2310', '\U0001d553', '\u22a5', '\u22a5', '\u22c8', '\u2557', '\u2554', '\u2556', '\u2553', '\u2550', '\u2566', '\u2569', '\u2564', '\u2567', '\u255d', '\u255a', '\u255c', '\u2559', '\u2551', '\u256c', '\u2563', '\u2560', '\u256b', '\u2562', '\u255f', '\u29c9', '\u2555', '\u2552', '\u2510', '\u250c', '\u2500', 
+'\u2565', '\u2568', '\u252c', '\u2534', '\u229f', '\u229e', '\u22a0', '\u255b', '\u2558', '\u2518', '\u2514', '\u2502', '\u256a', '\u2561', '\u255e', '\u253c', '\u2524', '\u251c', '\u2035', '\u02d8', '\u00a6', '\U0001d4b7', '\u204f', '\u223d', '\u22cd', '\u005c', '\u29c5', '\u27c8', '\u2022', '\u2022', '\u224e', '\u2aae', '\u224f', '\u224f', '\u0107', 
+'\u2229', '\u2a44', '\u2a49', '\u2a4b', '\u2a47', '\u2a40', '\u2041', '\u02c7', '\u2a4d', '\u010d', '\u00e7', '\u0109', '\u2a4c', '\u2a50', '\u010b', '\u00b8', '\u29b2', '\u00a2', '\u00b7', '\U0001d520', '\u0447', '\u2713', '\u2713', '\u03c7', '\u25cb', '\u29c3', '\u02c6', '\u2257', '\u21ba', '\u21bb', '\u00ae', '\u24c8', 
+'\u229b', '\u229a', '\u229d', '\u2257', '\u2a10', '\u2aef', '\u29c2', '\u2663', '\u2663', '\u003a', '\u2254', '\u2254', '\u002c', '\u0040', '\u2201', '\u2218', '\u2201', '\u2102', '\u2245', '\u2a6d', '\u222e', '\U0001d554', '\u2210', '\u00a9', '\u2117', '\u21b5', '\u2717', '\U0001d4b8', '\u2acf', '\u2ad1', '\u2ad0', '\u2ad2', 
+'\u22ef', '\u2938', '\u2935', '\u22de', '\u22df', '\u21b6', '\u293d', '\u222a', '\u2a48', '\u2a46', '\u2a4a', '\u228d', '\u2a45', '\u21b7', '\u293c', '\u22de', '\u22df', '\u22ce', '\u22cf', '\u00a4', '\u21b6', '\u21b7', '\u22ce', '\u22cf', '\u2232', '\u2231', '\u232d', '\u21d3', '\u2965', '\u2020', 
+'\u2138', '\u2193', '\u2010', '\u22a3', '\u290f', '\u02dd', '\u010f', '\u0434', '\u2146', '\u2021', '\u21ca', '\u2a77', '\u00b0', '\u03b4', '\u29b1', '\u297f', '\U0001d521', '\u21c3', '\u21c2', '\u22c4', '\u22c4', '\u2666', '\u2666', '\u00a8', '\u03dd', '\u22f2', '\u00f7', '\u00f7', '\u22c7', '\u22c7', '\u0452', '\u231e', '\u230d', '\u0024', 
+'\U0001d555', '\u02d9', '\u2250', '\u2251', '\u2238', '\u2214', '\u22a1', '\u2306', '\u2193', '\u21ca', '\u21c3', '\u21c2', '\u2910', '\u231f', '\u230c', '\U0001d4b9', '\u0455', '\u29f6', '\u0111', '\u22f1', '\u25bf', '\u25be', '\u21f5', '\u296f', '\u29a6', '\u045f', '\u27ff', '\u2a77', '\u2251', '\u00e9', 
+'\u2a6e', '\u011b', '\u2256', '\u00ea', '\u2255', '\u044d', '\u0117', '\u2147', '\u2252', '\U0001d522', '\u2a9a', '\u00e8', '\u2a96', '\u2a98', '\u2a99', '\u23e7', '\u2113', '\u2a95', '\u2a97', '\u0113', '\u2205', '\u2205', '\u2205', '\u2003', '\u2004', '\u2005', '\u014b', '\u2002', '\u0119', '\U0001d556', '\u22d5', '\u29e3', '\u2a71', '\u03b5', '\u03b5', '\u03f5', '\u2256', 
+'\u2255', '\u2242', '\u2a96', '\u2a95', '\u003d', '\u225f', '\u2261', '\u2a78', '\u29e5', '\u2253', '\u2971', '\u212f', '\u2250', '\u2242', '\u03b7', '\u00f0', '\u00eb', '\u20ac', '\u0021', '\u2203', '\u2130', '\u2147', '\u2252', '\u0444', '\u2640', '\ufb03', '\ufb00', '\ufb04', '\U0001d523', '\ufb01', '\u266d', '\ufb02', '\u25b1', 
+'\u0192', '\U0001d557', '\u2200', '\u22d4', '\u2ad9', '\u2a0d', '\u00bd', '\u2153', '\u00bc', '\u2155', '\u2159', '\u215b', '\u2154', '\u2156', '\u00be', '\u2157', '\u215c', '\u2158', '\u215a', '\u215d', '\u215e', '\u2044', '\u2322', '\U0001d4bb', '\u2267', '\u2a8c', '\u01f5', '\u03b3', '\u03dd', '\u2a86', '\u011f', '\u011d', '\u0433', '\u0121', '\u2265', 
+'\u22db', '\u2265', '\u2267', '\u2a7e', '\u2a7e', '\u2aa9', '\u2a80', '\u2a82', '\u2a84', '\u2a94', '\U0001d524', '\u226b', '\u22d9', '\u2137', '\u0453', '\u2277', '\u2a92', '\u2aa5', '\u2aa4', '\u2269', '\u2a8a', '\u2a8a', '\u2a88', '\u2a88', '\u2269', '\u22e7', '\U0001d558', '\u0060', '\u210a', '\u2273', '\u2a8e', '\u2a90', '\u2aa7', '\u2a7a', '\u22d7', '\u2995', '\u2a7c', '\u2a86', 
+'\u2978', '\u22d7', '\u22db', '\u2a8c', '\u2277', '\u2273', '\u21d4', '\u200a', '\u00bd', '\u210b', '\u044a', '\u2194', '\u2948', '\u21ad', '\u210f', '\u0125', '\u2665', '\u2665', '\u2026', '\u22b9', '\U0001d525', '\u2925', '\u2926', '\u21ff', '\u223b', '\u21a9', '\u21aa', '\U0001d559', '\u2015', '\U0001d4bd', '\u210f', 
+'\u0127', '\u2043', '\u2010', '\u00ed', '\u2063', '\u00ee', '\u0438', '\u0435', '\u00a1', '\u21d4', '\U0001d526', '\u00ec', '\u2148', '\u2a0c', '\u222d', '\u29dc', '\u2129', '\u0133', '\u012b', '\u2111', '\u2110', '\u2111', '\u0131', '\u22b7', '\u01b5', '\u2208', '\u2105', '\u221e', '\u29dd', '\u0131', '\u222b', '\u22ba', '\u2124', '\u22ba', '\u2a17', 
+'\u2a3c', '\u0451', '\u012f', '\U0001d55a', '\u03b9', '\u2a3c', '\u00bf', '\U0001d4be', '\u2208', '\u22f9', '\u22f5', '\u22f4', '\u22f3', '\u2208', '\u2062', '\u0129', '\u0456', '\u00ef', '\u0135', '\u0439', '\U0001d527', '\u0237', '\U0001d55b', '\U0001d4bf', '\u0458', '\u0454', '\u03ba', '\u03f0', '\u0137', '\u043a', '\U0001d528', '\u0138', '\u0445', '\u045c', '\U0001d55c', '\U0001d4c0', '\u21da', 
+'\u21d0', '\u291b', '\u290e', '\u2266', '\u2a8b', '\u2962', '\u013a', '\u29b4', '\u2112', '\u03bb', '\u27e8', '\u2991', '\u27e8', '\u2a85', '\u00ab', '\u2190', '\u21e4', '\u291f', '\u291d', '\u21a9', '\u21ab', '\u2939', '\u2973', '\u21a2', '\u2aab', '\u2919', '\u2aad', '\u290c', '\u2772', '\u007b', '\u005b', '\u298b', '\u298f', '\u298d', '\u013e', 
+'\u013c', '\u2308', '\u007b', '\u043b', '\u2936', '\u201c', '\u201e', '\u2967', '\u294b', '\u21b2', '\u2264', '\u2190', '\u21a2', '\u21bd', '\u21bc', '\u21c7', '\u2194', '\u21c6', '\u21cb', '\u21ad', '\u22cb', '\u22da', '\u2264', '\u2266', '\u2a7d', '\u2a7d', 
+'\u2aa8', '\u2a7f', '\u2a81', '\u2a83', '\u2a93', '\u2a85', '\u22d6', '\u22da', '\u2a8b', '\u2276', '\u2272', '\u297c', '\u230a', '\U0001d529', '\u2276', '\u2a91', '\u21bd', '\u21bc', '\u296a', '\u2584', '\u0459', '\u226a', '\u21c7', '\u231e', '\u296b', '\u25fa', '\u0140', '\u23b0', '\u23b0', '\u2268', '\u2a89', '\u2a89', '\u2a87', 
+'\u2a87', '\u2268', '\u22e6', '\u27ec', '\u21fd', '\u27e6', '\u27f5', '\u27f7', '\u27fc', '\u27f6', '\u21ab', '\u21ac', '\u2985', '\U0001d55d', '\u2a2d', '\u2a34', '\u2217', '\u005f', '\u25ca', '\u25ca', '\u29eb', '\u0028', '\u2993', '\u21c6', '\u231f', '\u21cb', '\u296d', '\u200e', '\u22bf', '\u2039', 
+'\U0001d4c1', '\u21b0', '\u2272', '\u2a8d', '\u2a8f', '\u005b', '\u2018', '\u201a', '\u0142', '\u2aa6', '\u2a79', '\u22d6', '\u22cb', '\u22c9', '\u2976', '\u2a7b', '\u2996', '\u25c3', '\u22b4', '\u25c2', '\u294a', '\u2966', '\u223a', '\u00af', '\u2642', '\u2720', '\u2720', '\u21a6', '\u21a6', '\u21a7', '\u21a4', '\u21a5', '\u25ae', '\u2a29', 
+'\u043c', '\u2014', '\u2221', '\U0001d52a', '\u2127', '\u00b5', '\u2223', '\u002a', '\u2af0', '\u00b7', '\u2212', '\u229f', '\u2238', '\u2a2a', '\u2adb', '\u2026', '\u2213', '\u22a7', '\U0001d55e', '\u2213', '\U0001d4c2', '\u223e', '\u03bc', '\u22b8', '\u22b8', '\u21cd', '\u21ce', '\u21cf', '\u22af', '\u22ae', '\u2207', '\u0144', '\u2249', 
+'\u0149', '\u2249', '\u266e', '\u266e', '\u2115', '\u00a0', '\u2a43', '\u0148', '\u0146', '\u2247', '\u2a42', '\u043d', '\u2013', '\u2260', '\u21d7', '\u2924', '\u2197', '\u2197', '\u2262', '\u2928', '\u2204', '\u2204', '\U0001d52b', '\u2271', '\u2271', '\u2275', '\u226f', '\u226f', '\u21ce', '\u21ae', '\u2af2', '\u220b', '\u22fc', '\u22fa', '\u220b', '\u045a', '\u21cd', 
+'\u219a', '\u2025', '\u2270', '\u219a', '\u21ae', '\u2270', '\u226e', '\u2274', '\u226e', '\u22ea', '\u22ec', '\u2224', '\U0001d55f', '\u00ac', '\u2209', '\u2209', '\u22f7', '\u22f6', '\u220c', '\u220c', '\u22fe', '\u22fd', '\u2226', '\u2226', '\u2a14', '\u2280', '\u22e0', '\u2280', '\u21cf', '\u219b', '\u219b', '\u22eb', '\u22ed', 
+'\u2281', '\u22e1', '\U0001d4c3', '\u2224', '\u2226', '\u2241', '\u2244', '\u2244', '\u2224', '\u2226', '\u22e2', '\u22e3', '\u2284', '\u2288', '\u2288', '\u2281', '\u2285', '\u2289', '\u2289', '\u2279', '\u00f1', '\u2278', '\u22ea', '\u22ec', '\u22eb', '\u22ed', '\u03bd', '\u0023', '\u2116', '\u2007', 
+'\u22ad', '\u2904', '\u22ac', '\u29de', '\u2902', '\u2903', '\u21d6', '\u2923', '\u2196', '\u2196', '\u2927', '\u24c8', '\u00f3', '\u229b', '\u229a', '\u00f4', '\u043e', '\u229d', '\u0151', '\u2a38', '\u2299', '\u29bc', '\u0153', '\u29bf', '\U0001d52c', '\u02db', '\u00f2', '\u29c1', '\u29b5', '\u03a9', '\u222e', '\u21ba', '\u29be', '\u29bb', '\u203e', '\u29c0', 
+'\u014d', '\u03c9', '\u03bf', '\u29b6', '\u2296', '\U0001d560', '\u29b7', '\u29b9', '\u2295', '\u2228', '\u21bb', '\u2a5d', '\u2134', '\u2134', '\u00aa', '\u00ba', '\u22b6', '\u2a56', '\u2a57', '\u2a5b', '\u2134', '\u00f8', '\u2298', '\u00f5', '\u2297', '\u2a36', '\u00f6', '\u233d', '\u2225', '\u00b6', '\u2225', '\u2af3', '\u2afd', '\u2202', '\u043f', '\u0025', 
+'\u002e', '\u2030', '\u22a5', '\u2031', '\U0001d52d', '\u03c6', '\u03d5', '\u2133', '\u260e', '\u03c0', '\u22d4', '\u03d6', '\u210f', '\u210e', '\u210f', '\u002b', '\u2a23', '\u229e', '\u2a22', '\u2214', '\u2a25', '\u2a72', '\u00b1', '\u2a26', '\u2a27', '\u00b1', '\u2a15', '\U0001d561', '\u00a3', '\u227a', '\u2ab3', '\u2ab7', '\u227c', '\u2aaf', '\u227a', '\u2ab7', 
+'\u227c', '\u2aaf', '\u2ab9', '\u2ab5', '\u22e8', '\u227e', '\u2032', '\u2119', '\u2ab5', '\u2ab9', '\u22e8', '\u220f', '\u232e', '\u2312', '\u2313', '\u221d', '\u221d', '\u227e', '\u22b0', '\U0001d4c5', '\u03c8', '\u2008', '\U0001d52e', '\u2a0c', '\U0001d562', '\u2057', '\U0001d4c6', '\u210d', '\u2a16', '\u003f', '\u225f', '\u21db', 
+'\u21d2', '\u291c', '\u290f', '\u2964', '\u0155', '\u221a', '\u29b3', '\u27e9', '\u2992', '\u29a5', '\u27e9', '\u00bb', '\u2192', '\u2975', '\u21e5', '\u2920', '\u2933', '\u291e', '\u21aa', '\u21ac', '\u2945', '\u2974', '\u21a3', '\u219d', '\u291a', '\u2236', '\u211a', '\u290d', '\u2773', '\u007d', '\u005d', '\u298c', '\u298e', '\u2990', 
+'\u0159', '\u0157', '\u2309', '\u007d', '\u0440', '\u2937', '\u2969', '\u201d', '\u201d', '\u21b3', '\u211c', '\u211b', '\u211c', '\u211d', '\u25ad', '\u00ae', '\u297d', '\u230b', '\U0001d52f', '\u21c1', '\u21c0', '\u296c', '\u03c1', '\u03f1', '\u2192', '\u21a3', '\u21c1', '\u21c0', '\u21c4', '\u21cc', 
+'\u21c9', '\u219d', '\u22cc', '\u02da', '\u2253', '\u21c4', '\u21cc', '\u200f', '\u23b1', '\u23b1', '\u2aee', '\u27ed', '\u21fe', '\u27e7', '\u2986', '\U0001d563', '\u2a2e', '\u2a35', '\u0029', '\u2994', '\u2a12', '\u21c9', '\u203a', '\U0001d4c7', '\u21b1', '\u005d', '\u2019', '\u2019', '\u22cc', '\u22ca', '\u25b9', 
+'\u22b5', '\u25b8', '\u29ce', '\u2968', '\u211e', '\u015b', '\u201a', '\u227b', '\u2ab4', '\u2ab8', '\u0161', '\u227d', '\u2ab0', '\u015f', '\u015d', '\u2ab6', '\u2aba', '\u22e9', '\u2a13', '\u227f', '\u0441', '\u22c5', '\u22a1', '\u2a66', '\u21d8', '\u2925', '\u2198', '\u2198', '\u00a7', '\u003b', '\u2929', '\u2216', '\u2216', '\u2736', '\U0001d530', '\u2322', 
+'\u266f', '\u0449', '\u0448', '\u2223', '\u2225', '\u00ad', '\u03c3', '\u03c2', '\u03c2', '\u223c', '\u2a6a', '\u2243', '\u2243', '\u2a9e', '\u2aa0', '\u2a9d', '\u2a9f', '\u2246', '\u2a24', '\u2972', '\u2190', '\u2216', '\u2a33', '\u29e4', '\u2223', '\u2323', '\u2aaa', '\u2aac', '\u044c', '\u002f', '\u29c4', '\u233f', '\U0001d564', '\u2660', 
+'\u2660', '\u2225', '\u2293', '\u2294', '\u228f', '\u2291', '\u228f', '\u2291', '\u2290', '\u2292', '\u2290', '\u2292', '\u25a1', '\u25a1', '\u25aa', '\u25aa', '\u2192', '\U0001d4c8', '\u2216', '\u2323', '\u22c6', '\u2606', '\u2605', '\u03f5', '\u03d5', '\u00af', '\u2282', '\u2ac5', '\u2abd', '\u2286', '\u2ac3', '\u2ac1', 
+'\u2acb', '\u228a', '\u2abf', '\u2979', '\u2282', '\u2286', '\u2ac5', '\u228a', '\u2acb', '\u2ac7', '\u2ad5', '\u2ad3', '\u227b', '\u2ab8', '\u227d', '\u2ab0', '\u2aba', '\u2ab6', '\u22e9', '\u227f', '\u2211', '\u266a', '\u2283', '\u00b9', '\u00b2', '\u00b3', '\u2ac6', '\u2abe', '\u2ad8', '\u2287', '\u2ac4', 
+'\u27c9', '\u2ad7', '\u297b', '\u2ac2', '\u2acc', '\u228b', '\u2ac0', '\u2283', '\u2287', '\u2ac6', '\u228b', '\u2acc', '\u2ac8', '\u2ad4', '\u2ad6', '\u21d9', '\u2926', '\u2199', '\u2199', '\u292a', '\u00df', '\u2316', '\u03c4', '\u23b4', '\u0165', '\u0163', '\u0442', '\u20db', '\u2315', '\U0001d531', '\u2234', '\u2234', 
+'\u03b8', '\u03d1', '\u03d1', '\u2248', '\u223c', '\u2009', '\u2248', '\u223c', '\u00fe', '\u02dc', '\u00d7', '\u22a0', '\u2a31', '\u2a30', '\u222d', '\u2928', '\u22a4', '\u2336', '\u2af1', '\U0001d565', '\u2ada', '\u2929', '\u2034', '\u2122', '\u25b5', '\u25bf', '\u25c3', '\u22b4', '\u225c', '\u25b9', 
+'\u22b5', '\u25ec', '\u225c', '\u2a3a', '\u2a39', '\u29cd', '\u2a3b', '\u23e2', '\U0001d4c9', '\u0446', '\u045b', '\u0167', '\u226c', '\u219e', '\u21a0', '\u21d1', '\u2963', '\u00fa', '\u2191', '\u045e', '\u016d', '\u00fb', '\u0443', '\u21c5', '\u0171', '\u296e', '\u297e', '\U0001d532', '\u00f9', '\u21bf', '\u21be', '\u2580', 
+'\u231c', '\u231c', '\u230f', '\u25f8', '\u016b', '\u00a8', '\u0173', '\U0001d566', '\u2191', '\u2195', '\u21bf', '\u21be', '\u228e', '\u03c5', '\u03d2', '\u03c5', '\u21c8', '\u231d', '\u231d', '\u230e', '\u016f', '\u25f9', '\U0001d4ca', '\u22f0', '\u0169', '\u25b5', '\u25b4', '\u21c8', '\u00fc', '\u29a7', '\u21d5', '\u2ae8', 
+'\u2ae9', '\u22a8', '\u299c', '\u03f5', '\u03f0', '\u2205', '\u03d5', '\u03d6', '\u221d', '\u2195', '\u03f1', '\u03c2', '\u03d1', '\u22b2', '\u22b3', '\u0432', '\u22a2', '\u2228', '\u22bb', '\u225a', '\u22ee', '\u007c', '\u007c', '\U0001d533', '\u22b2', '\U0001d567', '\u221d', '\u22b3', '\U0001d4cb', '\u299a', '\u0175', 
+'\u2a5f', '\u2227', '\u2259', '\u2118', '\U0001d534', '\U0001d568', '\u2118', '\u2240', '\u2240', '\U0001d4cc', '\u22c2', '\u25ef', '\u22c3', '\u25bd', '\U0001d535', '\u27fa', '\u27f7', '\u03be', '\u27f8', '\u27f5', '\u27fc', '\u22fb', '\u2a00', '\U0001d569', '\u2a01', '\u2a02', '\u27f9', '\u27f6', '\U0001d4cd', '\u2a06', '\u2a04', '\u25b3', '\u22c1', '\u22c0', '\u00fd', '\u044f', '\u0177', 
+'\u044b', '\u00a5', '\U0001d536', '\u0457', '\U0001d56a', '\U0001d4ce', '\u044e', '\u00ff', '\u017a', '\u017e', '\u0437', '\u017c', '\u2128', '\u03b6', '\U0001d537', '\u0436', '\u21dd', '\U0001d56b', '\U0001d4cf', '\u200d', '\u200c', ];
 
-
+static assert(availableEntities.length == availableEntitiesValues.length);
 
 
 
@@ -7538,7 +8694,7 @@ class Event {
 
 		isBubbling = false;
 
-		foreach(e; chain.retro()) {
+		foreach(e; Retro!Element(chain)) {
 			if(eventName in e.capturingEventHandlers)
 			foreach(handler; e.capturingEventHandlers[eventName])
 				handler(e, this);
@@ -7658,28 +8814,56 @@ class Utf8Stream {
 			if(hasMore())
 				this.data ~= getMore();
 
-			stdout.flush();
+			// stdout.flush();
 		}
+
+		enum contextToKeep = 100;
+
+		void markDataDiscardable(size_t p) {
+
+			if(p < contextToKeep)
+				return;
+			p -= contextToKeep;
+
+			// pretends data[0 .. p] is gone and adjusts future things as if it was still there
+			startingLineNumber = getLineNumber(p);
+			assert(p >= virtualStartIndex);
+			data = data[p - virtualStartIndex .. $];
+			virtualStartIndex = p;
+		}
+
+		int getLineNumber(size_t p) {
+			int line = startingLineNumber;
+			assert(p >= virtualStartIndex);
+			foreach(c; data[0 .. p - virtualStartIndex])
+				if(c == '\n')
+					line++;
+			return line;
+		}
+
 
 		@property final size_t length() {
 			// the parser checks length primarily directly before accessing the next character
 			// so this is the place we'll hook to append more if possible and needed.
-			if(lastIdx + 1 >= data.length && hasMore()) {
+			if(lastIdx + 1 >= (data.length + virtualStartIndex) && hasMore()) {
 				data ~= getMore();
 			}
-			return data.length;
+			return data.length + virtualStartIndex;
 		}
 
 		final char opIndex(size_t idx) {
 			if(idx > lastIdx)
 				lastIdx = idx;
-			return data[idx];
+			return data[idx - virtualStartIndex];
 		}
 
 		final string opSlice(size_t start, size_t end) {
 			if(end > lastIdx)
 				lastIdx = end;
-			return data[start .. end];
+			// writeln(virtualStartIndex, " " , start, " ", end);
+			assert(start >= virtualStartIndex);
+			assert(end >= virtualStartIndex);
+			return data[start - virtualStartIndex .. end - virtualStartIndex];
 		}
 
 		final size_t opDollar() {
@@ -7708,6 +8892,9 @@ class Utf8Stream {
 		bool delegate() hasMoreHelper;
 		string delegate() getMoreHelper;
 
+		int startingLineNumber = 1;
+		size_t virtualStartIndex = 0;
+
 
 		/+
 		// used to maybe clear some old stuff
@@ -7722,11 +8909,67 @@ class Utf8Stream {
 		+/
 }
 
-void fillForm(T)(Form form, T obj, string name) { 
-	import arsd.database; 
-	fillData((k, v) => form.setValue(k, v), obj, name); 
-} 
+void fillForm(T)(Form form, T obj, string name) {
+	import arsd.database;
+	fillData((k, v) => form.setValue(k, v), obj, name);
+}
 
+/++
+	Normalizes the whitespace in the given text according to HTML rules.
+
+	History:
+		Added March 25, 2022 (dub v10.8)
+
+		The `stripLeadingAndTrailing` argument was added September 13, 2024 (dub v11.6).
++/
+string normalizeWhitespace(string text, bool stripLeadingAndTrailing = true) {
+	string ret;
+	ret.reserve(text.length);
+	bool lastWasWhite = stripLeadingAndTrailing;
+	foreach(char ch; text) {
+		if(ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+			if(lastWasWhite)
+				continue;
+			lastWasWhite = true;
+			ch = ' ';
+		} else {
+			lastWasWhite = false;
+		}
+
+		ret ~= ch;
+	}
+
+	if(stripLeadingAndTrailing)
+		return ret.stripRight;
+	else {
+		/+
+		if(lastWasWhite && (ret.length == 0 || ret[$-1] != ' '))
+			ret ~= ' ';
+		+/
+		return ret;
+	}
+}
+
+unittest {
+	assert(normalizeWhitespace("    foo   ") == "foo");
+	assert(normalizeWhitespace("    f\n \t oo   ") == "f oo");
+	assert(normalizeWhitespace("    foo   ", false) == " foo ");
+	assert(normalizeWhitespace(" foo ", false) == " foo ");
+	assert(normalizeWhitespace("\nfoo", false) == " foo");
+}
+
+unittest {
+	Document document;
+
+	document = new Document("<test> foo \r </test>");
+	assert(document.root.visibleText == "foo");
+
+	document = new Document("<test> foo \r <br>hi</test>");
+	assert(document.root.visibleText == "foo\nhi");
+
+	document = new Document("<test> foo \r <br>hi<pre>hi\nthere\n    indent<br />line</pre></test>");
+	assert(document.root.visibleText == "foo\nhihi\nthere\n    indent\nline", document.root.visibleText);
+}
 
 /+
 /+
@@ -7770,7 +9013,7 @@ bool allAreInlineHtml(const(Element)[] children, const string[] inlineElements) 
 		if(child.nodeType == NodeType.Text && child.nodeValue.strip.length) {
 			// cool
 		} else if(child.tagName.isInArray(inlineElements) && allAreInlineHtml(child.children, inlineElements)) {
-			// cool
+			// cool, this is an inline element and none of its children contradict that
 		} else {
 			// prolly block
 			return false;
@@ -7940,15 +9183,372 @@ unittest {
 	}
 }
 
+unittest {
+	// toPrettyString is not stable, but these are some best-effort attempts
+	// despite these being in a test, I might change these anyway!
+	assert(Element.make("a").toPrettyString == "<a></a>");
+	assert(Element.make("a", "").toPrettyString(false, 0, " ") == "<a></a>");
+	assert(Element.make("a", " ").toPrettyString(false, 0, " ") == "<a> </a>");//, Element.make("a", " ").toPrettyString(false, 0, " "));
+	assert(Element.make("a", "b").toPrettyString == "<a>b</a>");
+	assert(Element.make("a", "b").toPrettyString(false, 0, "") == "<a>b</a>");
+
+	{
+	auto document = new Document("<html><body><p>hello <a href=\"world\">world</a></p></body></html>");
+	auto pretty = document.toPrettyString(false, 0, "  ");
+	assert(pretty ==
+`<!DOCTYPE html>
+<html>
+  <body>
+    <p>hello <a href="world">world</a></p>
+  </body>
+</html>`, pretty);
+	}
+
+	{
+	auto document = new XmlDocument("<html><body><p>hello <a href=\"world\">world</a></p></body></html>");
+	assert(document.toPrettyString(false, 0, "  ") ==
+`<?xml version="1.0" encoding="UTF-8"?>
+<html>
+  <body>
+    <p>
+      hello
+      <a href="world">world</a>
+    </p>
+  </body>
+</html>`);
+	}
+
+	foreach(test; [
+		"<a att=\"http://ele\"><b><ele1>Hello</ele1>\n  <c>\n   <d>\n    <ele2>How are you?</ele2>\n   </d>\n   <e>\n    <ele3>Good &amp; you?</ele3>\n   </e>\n  </c>\n </b>\n</a>",
+		"<a att=\"http://ele\"><b><ele1>Hello</ele1><c><d><ele2>How are you?</ele2></d><e><ele3>Good &amp; you?</ele3></e></c></b></a>",
+	] )
+	{
+	auto document = new XmlDocument(test);
+	assert(document.root.toPrettyString(false, 0, " ") == "<a att=\"http://ele\">\n <b>\n  <ele1>Hello</ele1>\n  <c>\n   <d>\n    <ele2>How are you?</ele2>\n   </d>\n   <e>\n    <ele3>Good &amp; you?</ele3>\n   </e>\n  </c>\n </b>\n</a>");
+	assert(document.toPrettyString(false, 0, " ") == "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<a att=\"http://ele\">\n <b>\n  <ele1>Hello</ele1>\n  <c>\n   <d>\n    <ele2>How are you?</ele2>\n   </d>\n   <e>\n    <ele3>Good &amp; you?</ele3>\n   </e>\n  </c>\n </b>\n</a>");
+	auto omg = document.root;
+	omg.parent_ = null;
+	assert(omg.toPrettyString(false, 0, " ") == "<a att=\"http://ele\">\n <b>\n  <ele1>Hello</ele1>\n  <c>\n   <d>\n    <ele2>How are you?</ele2>\n   </d>\n   <e>\n    <ele3>Good &amp; you?</ele3>\n   </e>\n  </c>\n </b>\n</a>");
+	}
+
+	{
+	auto document = new XmlDocument(`<a><b>toto</b><c></c></a>`);
+	assert(document.root.toPrettyString(false, 0, null) == `<a><b>toto</b><c></c></a>`);
+	assert(document.root.toPrettyString(false, 0, " ") == `<a>
+ <b>toto</b>
+ <c></c>
+</a>`);
+	}
+
+	{
+auto str = `<!DOCTYPE html>
+<html>
+	<head>
+		<title>Test</title>
+	</head>
+	<body>
+		<p>Hello there</p>
+		<p>I like <a href="">Links</a></p>
+		<div>
+			this is indented since there's a block inside
+			<p>this is the block</p>
+			and this gets its own line
+		</div>
+	</body>
+</html>`;
+		auto doc = new Document(str, true, true);
+		assert(doc.toPrettyString == str);
+	}
+}
+
+unittest {
+	auto document = new Document("<foo><items><item><title>test</title><desc>desc</desc></item></items></foo>");
+	auto items = document.root.requireSelector("> items");
+	auto item = items.requireSelector("> item");
+	auto title = item.requireSelector("> title");
+
+	// this not actually implemented at this point but i might want to later. it prolly should work as an extension of the standard behavior
+	// assert(title.requireSelector("~ desc").innerText == "desc");
+
+	assert(item.requireSelector("title ~ desc").innerText == "desc");
+
+	assert(items.querySelector("item:has(title)") !is null);
+	assert(items.querySelector("item:has(nothing)") is null);
+
+	assert(title.innerText == "test");
+}
+
+unittest {
+	auto document = new Document("broken"); // just ensuring it doesn't crash
+}
+
+private long min(long a, long b) {
+	if(a < b)
+		return a;
+	return b;
+}
+
+private long max(long a, long b) {
+	if(a < b)
+		return b;
+	return a;
+}
+
+alias utf_encode = arsd.core.encodeUtf8;
+
+private struct Retro(T) {
+	T[] array;
+	size_t pos;
+
+	this(T[] array) {
+		this.array = array;
+		this.pos = array.length;
+	}
+
+	T front() {
+		return array[pos - 1];
+	}
+	void popFront() {
+		pos--;
+	}
+	bool empty() {
+		return pos > 0;
+	}
+}
+
+// import std.array; // for Appender
+
+private struct Appender(T : string) {
+	void put(string s) {
+		impl.data ~= s;
+	}
+	void put(char c) {
+		impl.data ~= c;
+	}
+	void put(dchar c) {
+		char[4] buffer;
+		impl.data ~= buffer[0 .. arsd.core.encodeUtf8(buffer, c)];
+	}
+	void reserve(size_t s) {
+		impl.data.reserve(s);
+	}
+
+	static struct Impl {
+		string data;
+	}
+
+	Impl* impl;
+
+	string data() {
+		return impl.data;
+	}
+
+	this(string start) {
+		impl = new Impl;
+		impl.data = start;
+	}
+}
+
+private Appender!string appender(T : string)() {
+	return Appender!string(null);
+}
+
+private string[] split(string s, string onWhat) {
+	string[] ret;
+
+	more:
+	auto idx = s.indexOf(onWhat);
+	if(idx == -1) {
+		ret ~= s;
+	} else {
+		ret ~= s[0 .. idx];
+		s = s[idx + onWhat.length .. $];
+		goto more;
+	}
+
+	return ret;
+}
+
+private string replace(string s, string replaceWhat, string withThis) {
+	string ret;
+
+	more:
+	auto idx = s.indexOf(replaceWhat);
+	if(idx == -1) {
+		ret ~= s;
+	} else {
+		ret ~= s[0 .. idx];
+		ret ~= withThis;
+		s = s[idx + replaceWhat.length .. $];
+		goto more;
+	}
+	return ret;
+}
+
+private @trusted string[] sortStrings(string[] obj) {
+	static extern(C) int comparator(scope const void* ra, scope const void* rb) {
+		string a = *cast(string*) ra;
+		string b = *cast(string*) rb;
+		return a < b;
+	}
+
+	import core.stdc.stdlib;
+	qsort(obj.ptr, obj.length, typeof(obj[0]).sizeof, &comparator);
+	return obj;
+}
+
+private struct LineSplitter {
+	string s;
+	size_t nextLineBreak;
+	this(string s) {
+		this.s = s;
+		popFront();
+	}
+	string front() {
+		return s[0 .. nextLineBreak];
+	}
+	void popFront() {
+		s = s[nextLineBreak .. $];
+		nextLineBreak = 0;
+		while(nextLineBreak < s.length) {
+			if(s[nextLineBreak] == '\n') {
+				nextLineBreak++;
+				return;
+			}
+			nextLineBreak++;
+		}
+	}
+	bool empty() {
+		return s.length == 0;
+	}
+}
+unittest {
+	foreach(line; LineSplitter("foo"))
+		assert(line == "foo");
+	int c;
+	foreach(line; LineSplitter("foo\nbar")) {
+		if(c == 0)
+			assert(line == "foo\n");
+		else if(c == 1)
+			assert(line == "bar");
+		c++;
+	}
+}
+
+private struct ElementStreamFilter {
+	ElementStream range;
+	bool delegate(Element e) filter;
+	this(ElementStream range, bool delegate(Element e) filter) {
+		this.range = range;
+		this.filter = filter;
+		if(!range.empty && !filter(range.front))
+			popFront();
+	}
+	void popFront() {
+		range.popFront;
+		while(!range.empty && !this.filter(range.front)) {
+			range.popFront();
+		}
+	}
+	bool empty() {
+		return range.empty;
+	}
+	Element front() {
+		return range.front;
+	}
+}
+
+private alias arsd.core.indexOf indexOf;
+private alias arsd.core.stripInternal strip;
+private alias arsd.core.stripRightInternal stripRight;
+private alias arsd.core.startsWith startsWith;
+private alias arsd.core.endsWith endsWith;
+
+// FIXME: start index can be useful but i used 0 here anyway
+private size_t indexOf(string haystack, string needle, bool caseSensitive) {
+	if(!caseSensitive) {
+		haystack = toLower(haystack);
+		needle = toLower(needle);
+	}
+	return indexOf(haystack, needle);
+}
+
+private string to(T : string, F)(F f) {
+	return arsd.core.toStringInternal(f);
+}
+private int to(T : int, F)(F f) {
+	// NOT GENERIC DO NOT USE OUTSIDE OF THIS MODULE'S CONTEXT
+	int accumulator;
+	foreach(ch; f) {
+		accumulator *= 10;
+		accumulator += ch - '0';
+	}
+	return accumulator;
+}
+private char[] to(T : char[], F : dchar[])(F f) {
+	char[] s;
+	foreach(dc; f) {
+		char[4] buffer;
+		s ~= buffer[0 .. arsd.core.encodeUtf8(buffer, dc)];
+	}
+	return s;
+}
+private string to(T : string, F : const(dchar)[])(F f) {
+	return cast(string) to!(char[], dchar[])(cast(dchar[]) f);
+}
+
+private string toLower(string s) {
+	foreach(ch; s) {
+		if(ch >= 'A' && ch <= 'Z')
+			goto needed;
+	}
+	return s; // shortcut, no changes
+
+	needed:
+	char[] ret;
+	ret.length = s.length;
+	foreach(idx, ch; s) {
+		if(ch >= 'A' && ch <= 'Z')
+			ret[idx] = ch | 32;
+		else
+			ret[idx] = ch;
+	}
+	return cast(string) ret;
+}
+unittest {
+	assert("".toLower == "");
+	assert("foo".toLower == "foo");
+	assert("FaZ".toLower == "faz");
+	assert("423".toLower == "423");
+}
+
+private string toUpper(string s) {
+	foreach(ch; s) {
+		if(ch >= 'a' && ch <= 'z')
+			goto needed;
+	}
+	return s; // shortcut, no changes
+
+	needed:
+	char[] ret;
+	ret.length = s.length;
+	foreach(idx, ch; s) {
+		if(ch >= 'a' && ch <= 'z')
+			ret[idx] = ch & ~32;
+		else
+			ret[idx] = ch;
+	}
+	return cast(string) ret;
+}
+unittest {
+	assert("".toUpper == "");
+	assert("foo".toUpper == "FOO");
+	assert("FaZ".toUpper == "FAZ");
+	assert("423".toUpper == "423");
+}
+
 /*
-Copyright: Adam D. Ruppe, 2010 - 2021
+Copyright: Adam D. Ruppe, 2010 - 2023
 License:   <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
 Authors: Adam D. Ruppe, with contributions by Nick Sabalausky, Trass3r, and ketmar among others
-
-        Copyright Adam D. Ruppe 2010-2021.
-Distributed under the Boost Software License, Version 1.0.
-   (See accompanying file LICENSE_1_0.txt or copy at
-        http://www.boost.org/LICENSE_1_0.txt)
 */
-
-
