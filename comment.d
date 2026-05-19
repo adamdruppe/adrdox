@@ -1496,7 +1496,10 @@ Element formatDocumentationComment2(string comment, Decl decl, string tagName = 
 					// possible markdown link
 					auto parens = extractBalanceOnSingleLine(remaining[txt.length .. $]);
 					if(parens.length) {
-						auto a = Element.make("a", txt[1 .. $-1], parens[1 .. $-1]);
+						auto link = parens[1 .. $-1];
+						if(link.length > 2 && link[0] == '<' && link[$-1] == '>')
+							link = link[1 .. $-1];
+						auto a = Element.make("a", txt[1 .. $-1], link);
 						put(a.toString());
 
 						idx += parens.length;
@@ -2156,6 +2159,15 @@ Element expandDdocMacros2(string txt, Decl decl) {
 			holder.innerHTML = stuff;
 			return holder;
 		}
+
+		if(name == "MATH") {
+			// magic: user-defined mathml
+			auto holder = Element.make("math", "", "user-mathml");
+			// FIXME: ensure stuff is reasonable too
+			holder.innerHTML = stuff;
+			return holder;
+		}
+
 
 		if(name == "ID")
 			return Element.make("magic-command").setAttribute("id", stuff);
