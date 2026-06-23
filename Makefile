@@ -15,8 +15,7 @@ locate:
 vps_locate:
 	ldc2i -oflocate_vps -oq -O3 -m64 locate.d  stemmer.d -J. -d-version=scgi -d-version=vps -g -L-L/usr/local/pgsql/lib -L-lpq
 ldc:
-	echo "use make pq instead ldc is broken"
-	echo ldc2 -oq -O3 --d-debug -m64 doc2.d latex.d jstex.d syntaxhighlighter.d comment.d archive.d stemmer.d core.d dom.d color.d -J. $(LIBDPARSE) --d-version=with_postgres database.d postgres.d -L-L/usr/local/pgsql/lib -L-lpq -g # -version=std_parser_verbose 
+	ldc2 -oq -O3 --d-debug -m64 doc2.d latex.d jstex.d syntaxhighlighter.d comment.d archive.d stemmer.d core.d dom.d color.d -J. $(LIBDPARSE) --d-version=with_postgres database.d postgres.d -L-L/usr/local/pgsql/lib -L-lpq -g # -version=std_parser_verbose 
 
 http:
 	$(DMD) -debug -ofserver -version=embedded_httpd -version=with_http_server -m64 doc2.d latex.d archive.d jstex.d cgi.d syntaxhighlighter.d comment.d stemmer.d core.d dom.d script.d jsvar.d color.d -J. $(LIBDPARSE) -g # -version=std_parser_verbose 

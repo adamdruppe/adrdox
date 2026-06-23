@@ -7,11 +7,6 @@ import std.algorithm;
 import std.range;
 import std.experimental.lexer;
 import core.cpuid : sse42;
-version (D_InlineAsm_X86_64)
-{
-    version (Windows) {}
-    else version = iasm64NotWindows;
-}
 
 /// Operators
 private enum operators = [
