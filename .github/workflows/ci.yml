@@ -34,11 +34,6 @@ jobs:
             dc: dmd-latest
           - os: macos-latest
             dc: dmd-beta
-        include:
-          - os: macos-26-intel
-            dc: dmd-latest
-          - os: macos-26-intel
-            dc: dmd-beta
     runs-on: ${{ matrix.os }}
     steps:
       - name: Setup D compiler
